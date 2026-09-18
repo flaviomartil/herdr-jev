@@ -1,0 +1,24 @@
+{
+  "name": "herdr-jev",
+  "version": "0.1.0",
+  "description": "Jev-driven multi-model triage and triad orchestration plugin for Herdr and AI-Harness",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "herdr-jev": "./bin/herdr-jev.js"
+  },
+  "scripts": {
+    "start": "bun run src/cli.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "lint": "bunx biome check src test || true"
+  },
+  "dependencies": {
+    "commander": "^13.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/node": "^22.13.1",
+    "typescript": "^5.7.3"
+  }
+}

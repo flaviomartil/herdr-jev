@@ -1,0 +1,64 @@
+# Herdr plugin manifest for Herdr-Jev.
+#
+# Install:  herdr plugin link .
+# List:     herdr plugin action list --plugin herdr-jev
+
+id = "herdr-jev"
+name = "Herdr Jev"
+version = "0.1.0"
+min_herdr_version = "0.9.0"
+description = "Jev-driven multi-model triage and triad orchestration (Advisor -> Implementer -> Reviewer)"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "route"
+title = "Route a task (Jev)"
+placement = "overlay"
+command = ["bash", "herdr-plugin/route.sh"]
+
+[[panes]]
+id = "triad"
+title = "Run Triad pipeline (Jev)"
+placement = "overlay"
+command = ["bash", "herdr-plugin/triad.sh"]
+
+[[panes]]
+id = "status"
+title = "Herdr-Jev status"
+placement = "overlay"
+command = ["bash", "herdr-plugin/status.sh"]
+
+[[panes]]
+id = "models"
+title = "Models and Cascades (/models)"
+placement = "overlay"
+command = ["bash", "herdr-plugin/models.sh"]
+
+[[actions]]
+id = "route"
+title = "Jev: Route a task"
+description = "Prompt for a task, triage with Jev, and launch chosen agent in a new pane"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "route"]
+
+[[actions]]
+id = "triad"
+title = "Jev: Full Triad pipeline"
+description = "Launch complete Triad pipeline (Advisor -> Implementer -> Reviewer)"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "triad"]
+
+[[actions]]
+id = "status"
+title = "Jev: Status"
+description = "Show TypeSafe Jev API, Herdr and AI-Harness connection status"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "status"]
+
+[[actions]]
+id = "models"
+title = "Jev: Models (/models)"
+description = "Inspect models, check fallback chains, and auto-classify new models via Jev"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "models"]
+
