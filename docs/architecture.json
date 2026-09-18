@@ -1,0 +1,272 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Herdr-Jev Architecture",
+    "output": "architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "full-flow",
+        "label": "Full Orchestration Flow",
+        "focus": ["user", "herdr", "aliases", "triage", "advisor", "implementer", "reviewer", "catalog", "detector", "harness"],
+        "note": "End-to-end task journey from operator prompt to verified outcome."
+      },
+      {
+        "id": "triage-plane",
+        "label": "Triage and Quota Plane",
+        "focus": ["triage", "vault", "catalog", "detector"],
+        "note": "TypeSafe System One classifier, dynamic quota cascade circuit breaker, and harness discovery."
+      },
+      {
+        "id": "triad-pipeline",
+        "label": "Multi-Model Triad",
+        "focus": ["advisor", "implementer", "reviewer", "catalog"],
+        "note": "Staged pipeline (Advisor -> Implementer -> Reviewer) executed inside Herdr panes."
+      },
+      {
+        "id": "cross-harness",
+        "label": "Cross-Harness Delegation",
+        "focus": ["herdr", "aliases", "triage", "advisor", "implementer", "catalog", "detector"],
+        "note": "Subagents, split direction, client aliases gate, and cross-harness peering matrix."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "Herdr Keybinds / CLI",
+      "pos": [40, 270],
+      "size": [120, 60]
+    },
+    {
+      "id": "aliases",
+      "type": "security",
+      "label": "Aliases Gate",
+      "sublabel": "HERDR_JEV_ALLOW_ALIASES",
+      "pos": [240, 90],
+      "size": [140, 60],
+      "tag": "security-gate"
+    },
+    {
+      "id": "herdr",
+      "type": "frontend",
+      "label": "Herdr Runtime",
+      "sublabel": "Overlay Panes & Socket",
+      "pos": [240, 270],
+      "size": [140, 60]
+    },
+    {
+      "id": "detector",
+      "type": "backend",
+      "label": "Harness Detector",
+      "sublabel": "Probing & Auto-Config",
+      "pos": [240, 450],
+      "size": [140, 60]
+    },
+    {
+      "id": "vault",
+      "type": "security",
+      "label": "KeePassXC Vault",
+      "sublabel": "TypeSafe API Key",
+      "pos": [470, 90],
+      "size": [140, 60],
+      "tag": "zero-secret-leak"
+    },
+    {
+      "id": "triage",
+      "type": "backend",
+      "label": "TypeSafe Jev",
+      "sublabel": "System One (~260ms)",
+      "pos": [470, 270],
+      "size": [140, 60]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Models & Quotas",
+      "sublabel": "Circuit Breaker",
+      "pos": [470, 450],
+      "size": [140, 60]
+    },
+    {
+      "id": "advisor",
+      "type": "backend",
+      "label": "Advisor Stage",
+      "sublabel": "Fable 5 / Astra / Opus",
+      "pos": [720, 90],
+      "size": [150, 60]
+    },
+    {
+      "id": "implementer",
+      "type": "backend",
+      "label": "Implementer Stage",
+      "sublabel": "Sonnet 5 / Luna / Flash",
+      "pos": [720, 270],
+      "size": [150, 60]
+    },
+    {
+      "id": "reviewer",
+      "type": "backend",
+      "label": "Reviewer Stage",
+      "sublabel": "Opus 5 / Sol / Opus",
+      "pos": [720, 450],
+      "size": [150, 60]
+    },
+    {
+      "id": "harness",
+      "type": "cloud",
+      "label": "AI-Harness Core",
+      "sublabel": "Outcome & Memory",
+      "pos": [970, 270],
+      "size": [140, 60]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Herdr Multiplexer Environment (HERDR_ENV=1)",
+      "wraps": ["herdr", "aliases", "detector", "advisor", "implementer", "reviewer"]
+    },
+    {
+      "kind": "security-group",
+      "label": "Semantic Triage and Quota Plane",
+      "wraps": ["triage", "vault", "catalog"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-herdr",
+      "from": "user",
+      "to": "herdr",
+      "label": "task",
+      "labelDy": -15
+    },
+    {
+      "id": "aliases-to-herdr",
+      "from": "aliases",
+      "to": "herdr",
+      "label": "binary sanitizer",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "detector-to-catalog",
+      "from": "detector",
+      "to": "catalog",
+      "label": "probe quotas",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "herdr-to-triage",
+      "from": "herdr",
+      "to": "triage",
+      "label": "route",
+      "labelDy": -15
+    },
+    {
+      "id": "vault-to-triage",
+      "from": "vault",
+      "to": "triage",
+      "label": "secret",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "triage-to-advisor",
+      "from": "triage",
+      "to": "advisor",
+      "label": "triad plan",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "advisor-to-implementer",
+      "from": "advisor",
+      "to": "implementer",
+      "label": "handoff",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "implementer-to-reviewer",
+      "from": "implementer",
+      "to": "reviewer",
+      "label": "review",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "catalog-to-implementer",
+      "from": "catalog",
+      "to": "implementer",
+      "label": "quota cascade",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "reviewer-to-harness",
+      "from": "reviewer",
+      "to": "harness",
+      "label": "learnings",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Semantic Triage",
+      "items": [
+        "TypeSafe Jev System One responds in ~260ms",
+        "Classifies complexity, research need, and reasoning effort",
+        "Deterministic fallback with 0ms latency overhead"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Triad Pipeline",
+      "items": [
+        "Advisor: Fable 5, Astra, or Opus 4.6",
+        "Implementer: Sonnet 5 (1M tokens), Luna, or Flash",
+        "Reviewer: Opus 5, Sol XHIGH, or Opus 4.6"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Two-Level Quota Resilience",
+      "items": [
+        "Level 1: Intra-client fallback cascade per model tier",
+        "Level 2: Cross-harness safe return to host harness on exhaustion",
+        "Local circuit breaker preventing 429 rate limits"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Subagents & Cross-Harness",
+      "items": [
+        "Herdr split pane with role-based automatic direction",
+        "Native harness execution mode with live progress visibility",
+        "Cross-harness delegation matrix (disabled, auto, or peer map)"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Aliases & Auto-Discovery",
+      "items": [
+        "Strict binary safety gate via HERDR_JEV_ALLOW_ALIASES",
+        "Automated harness and quota probing via herdr-jev detect",
+        "One-click zero-overhead environment auto-configuration"
+      ]
+    }
+  ]
+}

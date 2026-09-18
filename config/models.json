@@ -1,0 +1,185 @@
+{
+  "updatedAt": "2026-09-18T19:15:00.000Z",
+  "clients": {
+    "claude": {
+      "advisor": {
+        "model": "fable-5",
+        "fallbackChain": ["fable-5", "claude-sonnet-5", "opus-5"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Claude Fable 5: Architectural planning and design advisor"
+      },
+      "implementer": {
+        "model": "sonnet-5",
+        "fallbackChain": ["sonnet-5", "fable-5"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Claude Sonnet 5: Code implementer with 1M tokens context window"
+      },
+      "reviewer": {
+        "model": "opus-5",
+        "fallbackChain": ["opus-5", "sonnet-5"],
+        "defaultEffort": "xhigh",
+        "extraFlags": [],
+        "description": "Claude Opus 5: Deep code reviewer and verification specialist"
+      },
+      "researcher": {
+        "model": "sonnet-5",
+        "fallbackChain": ["sonnet-5"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Claude Sonnet 5: Codebase search and documentation research subagent"
+      }
+    },
+    "codex": {
+      "advisor": {
+        "model": "astra",
+        "fallbackChain": ["astra", "gpt-5.6-luna", "gpt-5.6-sol"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Codex Astra: High-level architectural advisor and reasoning guide"
+      },
+      "implementer": {
+        "model": "gpt-5.6-luna",
+        "fallbackChain": ["gpt-5.6-luna", "gpt-5.6-terra"],
+        "defaultEffort": "xhigh",
+        "extraFlags": ["-c", "model_reasoning_effort=\"xhigh\""],
+        "description": "Codex GPT-5.6 Luna: High-velocity implementer at XHIGH reasoning effort"
+      },
+      "reviewer": {
+        "model": "gpt-5.6-sol",
+        "fallbackChain": ["gpt-5.6-sol", "gpt-5.6-luna"],
+        "defaultEffort": "xhigh",
+        "extraFlags": ["-c", "model_reasoning_effort=\"xhigh\""],
+        "description": "Codex GPT-5.6 Sol: Strict verification and review at XHIGH reasoning effort"
+      },
+      "researcher": {
+        "model": "gpt-5.6-terra",
+        "fallbackChain": ["gpt-5.6-terra", "gpt-5.6-luna"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Codex GPT-5.6 Terra: Background research and codebase analyst"
+      }
+    },
+    "antigravity": {
+      "advisor": {
+        "model": "claude-opus-4-6",
+        "fallbackChain": ["claude-opus-4-6", "gemini-3-8-pro", "gemini-3-8-flash"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "AntiGravity Claude Opus 4.6: Senior pair programming and architecture planner (quota cascade to Gemini)"
+      },
+      "implementer": {
+        "model": "gemini-3-8-flash",
+        "fallbackChain": ["gemini-3-8-flash", "gemini-3-8-pro", "claude-sonnet-4-6"],
+        "defaultEffort": "high",
+        "extraFlags": ["--effort", "high"],
+        "description": "AntiGravity Gemini 3.8 Flash High: Fast high-throughput implementer"
+      },
+      "reviewer": {
+        "model": "claude-opus-4-6",
+        "fallbackChain": ["claude-opus-4-6", "gemini-3-8-pro", "gemini-3-8-flash"],
+        "defaultEffort": "xhigh",
+        "extraFlags": [],
+        "description": "AntiGravity Claude Opus 4.6: Comprehensive reviewer and test verifier (quota cascade)"
+      },
+      "researcher": {
+        "model": "gemini-3-8-flash",
+        "fallbackChain": ["gemini-3-8-flash", "gemini-3-8-flash-lite"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "AntiGravity Gemini 3.8 Flash: Lightweight read-only research subagent"
+      }
+    },
+    "cursor": {
+      "advisor": {
+        "model": "cursor-smart",
+        "fallbackChain": ["cursor-smart", "cursor-fast"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Cursor Smart: Strategic planning and code guidance"
+      },
+      "implementer": {
+        "model": "cursor-fast",
+        "fallbackChain": ["cursor-fast", "cursor-smart"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Cursor Fast: Rapid code execution and refactoring"
+      },
+      "reviewer": {
+        "model": "cursor-smart",
+        "fallbackChain": ["cursor-smart", "cursor-fast"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Cursor Smart: Consistency and regression review"
+      },
+      "researcher": {
+        "model": "cursor-fast",
+        "fallbackChain": ["cursor-fast"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Cursor Fast: Rapid codebase exploration"
+      }
+    },
+    "opencode": {
+      "advisor": {
+        "model": "opencode-primary",
+        "fallbackChain": ["opencode-primary"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "OpenCode Primary: Open-weights strategic planning advisor"
+      },
+      "implementer": {
+        "model": "opencode-primary",
+        "fallbackChain": ["opencode-primary"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "OpenCode Primary: Open-weights implementation engine"
+      },
+      "reviewer": {
+        "model": "opencode-primary",
+        "fallbackChain": ["opencode-primary"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "OpenCode Primary: Open-weights code verification"
+      },
+      "researcher": {
+        "model": "opencode-primary",
+        "fallbackChain": ["opencode-primary"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "OpenCode Primary: Read-only codebase explorer"
+      }
+    },
+    "kimi": {
+      "advisor": {
+        "model": "kimi-code/k3",
+        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Kimi K3: Deep reasoning architectural planner and context advisor"
+      },
+      "implementer": {
+        "model": "kimi-code/k3",
+        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Kimi K3: High-capacity code implementer with extended context"
+      },
+      "reviewer": {
+        "model": "kimi-code/k3",
+        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Kimi K3: Comprehensive code and security reviewer"
+      },
+      "researcher": {
+        "model": "kimi-code/k3",
+        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "defaultEffort": "high",
+        "extraFlags": [],
+        "description": "Kimi K3: Long-context research and codebase search"
+      }
+    }
+  }
+}
