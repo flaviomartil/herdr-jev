@@ -2,7 +2,9 @@
 import { Command } from "commander";
 import { triageTaskWithJev, resolveTypeSafeApiKey } from "./triage/client.js";
 import { planExecution } from "./pipelines/planner.js";
+import { startMcpServer } from "./mcp/server.js";
 import {
+
   launchStageInHerdr,
   buildAgentCommand,
   shouldSplitSubagents,
@@ -481,4 +483,12 @@ quotaCommand
     console.log(`Quota circuit breaker reset for: ${client || "ALL clients"}.`);
   });
 
+program
+  .command("mcp")
+  .description("Start the Herdr-Jev MCP stdio server for in-prompt subagent spawning and clink tool execution")
+  .action(() => {
+    startMcpServer();
+  });
+
 program.parse(process.argv);
+
