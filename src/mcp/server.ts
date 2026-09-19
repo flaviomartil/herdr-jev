@@ -2,10 +2,12 @@ import { createInterface } from "node:readline";
 import { triageTaskWithJev } from "../triage/client.js";
 import { resolveStageSpec } from "../pipelines/matrix.js";
 import { resolveDelegatedClient } from "../delegation/cross-harness.js";
-
 import { runAgentCaptured, launchStageInHerdr } from "../herdr/launcher.js";
 import { createHerdrClient } from "../herdr/client.js";
-import type { ClientKind, RoleKind } from "../types/index.js";
+import type { ClientKind, RoleKind, TaskComplexity } from "../types/index.js";
+
+import { evaluateQuestions, evaluateConfidenceGate, type JevQuestion } from "../triage/evaluator.js";
+import { checkExecutionGuard, verifyContractAdvisory, checkSignalSufficiency } from "../orchestration/execution-guard.js";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -102,12 +104,164 @@ const TOOLS = [
       required: ["task"],
     },
   },
+  {
+    name: "herdr_decide",
+    description: "Evaluate arbitrary typed questions (noul/choice/score) against a state text via TypeSafe Jev System One, returning typed answers without open-ended text generation (inspired by Jevbridge).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        state: {
+          type: "string",
+          description: "Unstructured state, document, diff, or error message to evaluate",
+        },
+        questions: {
+          type: "object",
+          description: "Map of question definitions (type: noul | choice | score)",
+        },
+      },
+      required: ["state", "questions"],
+    },
+  },
+  {
+    name: "herdr_gate",
+    description: "Confidence-gate a proposed action or tool call against destructive risk and execution safety (execute | confirm | escalate | abort) (inspired by Jevbridge).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        state: {
+          type: "string",
+          description: "Current environment context or state",
+        },
+        proposedAction: {
+          type: "string",
+          description: "The action, command, or modification to evaluate",
+        },
+        executeThreshold: {
+          type: "number",
+          description: "Confidence threshold to allow automatic execution (default 0.75)",
+        },
+        confirmThreshold: {
+          type: "number",
+          description: "Threshold below which confirmation or escalation is forced (default 0.45)",
+        },
+      },
+      required: ["state", "proposedAction"],
+    },
+  },
+  {
+    name: "herdr_execution_guard",
+    description: "Checks whether the current agent is permitted to write code directly or if the Execution Guard forces delegation to an autonomous subagent for moderate/architectural tasks (inspired by jev-gate V5).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        complexity: {
+          type: "string",
+          enum: ["trivial", "routine", "moderate", "architectural"],
+          description: "Task complexity level",
+        },
+        agentRole: {
+          type: "string",
+          enum: ["coordinator", "subagent", "standalone"],
+          description: "Role of the executing agent",
+        },
+        isCodeMutation: {
+          type: "boolean",
+          description: "Whether the proposed step involves creating or modifying code files",
+        },
+      },
+      required: ["complexity", "agentRole", "isCodeMutation"],
+    },
+  },
+  {
+    name: "herdr_verify_contract",
+    description: "Performs advisory contract verification applying the 'Code owns acceptance' doctrine. Deterministic tests and linters govern state, while Jev provides advisory compliance analysis.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        contractSpec: {
+          type: "string",
+          description: "Specification or requirements checklist",
+        },
+        testPassed: {
+          type: "boolean",
+          description: "Whether automated test suite passed",
+        },
+        deliverableSummary: {
+          type: "string",
+          description: "Summary of files, features, or diffs delivered",
+        },
+        linterClean: {
+          type: "boolean",
+          description: "Whether linters and typecheck passed cleanly",
+        },
+      },
+      required: ["contractSpec", "testPassed", "deliverableSummary"],
+    },
+  },
+  {
+    name: "herdr_fit_check",
+    description: "Assesses whether a task qualifies for Jev System One evaluation according to the Law of Signal Self-Sufficiency (inspired by jev-capability-atlas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        state: {
+          type: "string",
+          description: "Context text provided to evaluate",
+        },
+        question: {
+          type: "string",
+          description: "Question or determination requested",
+        },
+      },
+      required: ["state", "question"],
+    },
+  },
 ];
 
 async function handleToolCall(name: string, args: any): Promise<string> {
   if (name === "herdr_triage") {
     const decision = await triageTaskWithJev(args.task || "");
     return JSON.stringify(decision, null, 2);
+  }
+
+  if (name === "herdr_decide") {
+    const questions = (args.questions || {}) as Record<string, JevQuestion>;
+    const res = await evaluateQuestions(args.state || "", questions);
+    return JSON.stringify(res, null, 2);
+  }
+
+  if (name === "herdr_gate") {
+    const res = await evaluateConfidenceGate({
+      state: args.state || "",
+      proposedAction: args.proposedAction || "",
+      executeThreshold: args.executeThreshold,
+      confirmThreshold: args.confirmThreshold,
+    });
+    return JSON.stringify(res, null, 2);
+  }
+
+  if (name === "herdr_execution_guard") {
+    const res = checkExecutionGuard({
+      complexity: (args.complexity || "routine") as TaskComplexity,
+      agentRole: args.agentRole || "coordinator",
+      isCodeMutation: Boolean(args.isCodeMutation),
+    });
+    return JSON.stringify(res, null, 2);
+  }
+
+  if (name === "herdr_verify_contract") {
+    const res = verifyContractAdvisory({
+      contractSpec: args.contractSpec || "",
+      testPassed: Boolean(args.testPassed),
+      deliverableSummary: args.deliverableSummary || "",
+      linterClean: args.linterClean !== false,
+    });
+    return JSON.stringify(res, null, 2);
+  }
+
+  if (name === "herdr_fit_check") {
+    const res = checkSignalSufficiency(args.state || "", args.question || "");
+    return JSON.stringify(res, null, 2);
   }
 
   if (name === "herdr_clink") {
@@ -215,7 +369,7 @@ export function startMcpServer() {
           result: {
             protocolVersion: "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: "herdr-jev-mcp", version: "1.0.0" },
+            serverInfo: { name: "herdr-jev-mcp", version: "1.1.0" },
           },
         });
         return;
@@ -271,7 +425,7 @@ export function startMcpServer() {
     } catch (err) {
       send({
         jsonrpc: "2.0",
-        id: null,
+        id,
         error: { code: -32700, message: "Parse error" },
       });
     }
