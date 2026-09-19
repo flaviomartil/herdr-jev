@@ -310,3 +310,52 @@ export function runAgentInline(input: {
   }
 }
 
+export interface CapturedRunResult {
+  ok: boolean;
+  output: string;
+  exitCode: number | null;
+  error?: string;
+  commandText: string;
+}
+
+/**
+ * Executes an agent non-interactively in the background and captures its output (stdout + stderr).
+ * Perfect for in-prompt subagent delegation and MCP tool execution.
+ */
+export function runAgentCaptured(input: {
+  client: ClientKind;
+  stage: StageSpec;
+  promptText: string;
+  cwd?: string;
+  timeoutMs?: number;
+}): CapturedRunResult {
+  const effectiveClient = input.stage.client ?? input.client;
+  const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, true);
+  const commandText = args.join(" ");
+
+  try {
+    const result = spawnSync(args[0], args.slice(1), {
+      stdio: ["ignore", "pipe", "pipe"],
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      timeout: input.timeoutMs ?? 120000,
+      cwd: input.cwd ?? process.cwd(),
+      env: process.env,
+    });
+
+    const exitCode = result.status;
+    const stdout = (result.stdout || "").trim();
+    const stderr = (result.stderr || "").trim();
+    const output = stdout || stderr || (exitCode === 0 ? "(no output returned)" : "(command exited with error and no output)");
+
+    if (result.error) {
+      return { ok: false, output, exitCode, error: result.error.message, commandText };
+    }
+    return { ok: exitCode === 0, output, exitCode, commandText };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    return { ok: false, output: "", exitCode: 1, error: errorMsg, commandText };
+  }
+}
+
+
