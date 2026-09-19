@@ -33,5 +33,11 @@ describe("Herdr-Jev MCP Server", () => {
     expect(toolNames).toContain("herdr_spawn_subagent");
     expect(toolNames).toContain("herdr_consensus");
     expect(toolNames).toContain("herdr_triage");
+    expect(toolNames).toContain("herdr_decide");
+    expect(toolNames).toContain("herdr_gate");
+    expect(toolNames).toContain("herdr_execution_guard");
+    expect(toolNames).toContain("herdr_verify_contract");
+    expect(toolNames).toContain("herdr_fit_check");
+    expect(toolNames.length).toBe(9);
   });
 });
