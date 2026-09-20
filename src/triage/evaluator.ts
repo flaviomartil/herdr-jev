@@ -1,6 +1,6 @@
 import { resolveTypeSafeApiKey } from "./client.js";
-
-const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+import { ResilientJevClient, getGlobalJevClient } from "./jev-client.js";
+import { scoreQuantile } from "./quantile.js";
 
 export type QuestionType = "noul" | "choice" | "score";
 
@@ -18,7 +18,8 @@ export interface ChoiceQuestion {
 export interface ScoreQuestion {
   type: "score";
   instructions: string;
-  levels: string[];
+  levels?: string[];
+  criteria?: string[] | Record<string, string>;
 }
 
 export type JevQuestion = NoulQuestion | ChoiceQuestion | ScoreQuestion;
@@ -31,8 +32,14 @@ export function choice(instructions: string, criteria: Record<string, string>): 
   return { type: "choice", instructions, criteria };
 }
 
-export function score(instructions: string, levels: string[]): ScoreQuestion {
-  return { type: "score", instructions, levels };
+export function score(instructions: string, levelsOrCriteria: string[] | Record<string, string>): ScoreQuestion {
+  const criteria = Array.isArray(levelsOrCriteria) ? levelsOrCriteria : levelsOrCriteria;
+  return {
+    type: "score",
+    instructions,
+    levels: Array.isArray(levelsOrCriteria) ? levelsOrCriteria : Object.values(levelsOrCriteria),
+    criteria,
+  };
 }
 
 export interface EvaluateResult {
@@ -63,11 +70,12 @@ export interface ConfidenceGateResult {
 /**
  * Evaluates arbitrary typed questions against a state text via TypeSafe Jev System One
  * (or deterministic heuristics when no API key is available).
+ * Uses ResilientJevClient with connection pooling, deadline racing, and LRU caching.
  */
 export async function evaluateQuestions(
   state: string,
   questions: Record<string, JevQuestion>,
-  apiKey?: string | null
+  apiKey?: string | null,
 ): Promise<EvaluateResult> {
   const resolvedKey = apiKey === null ? null : (apiKey ?? resolveTypeSafeApiKey());
   const startTime = Date.now();
@@ -76,44 +84,33 @@ export async function evaluateQuestions(
     return evaluateFallback(state, questions, Date.now() - startTime);
   }
 
-  const payloadQuestions: Record<string, unknown> = {};
+  const payloadQuestions: Record<string, any> = {};
   for (const [key, q] of Object.entries(questions)) {
     if (q.type === "noul") {
       payloadQuestions[key] = { type: "noul", instructions: q.instructions };
     } else if (q.type === "choice") {
       payloadQuestions[key] = { type: "choice", instructions: q.instructions, criteria: q.criteria };
     } else if (q.type === "score") {
-      payloadQuestions[key] = { type: "score", instructions: q.instructions, levels: q.levels };
+      payloadQuestions[key] = {
+        type: "score",
+        instructions: q.instructions,
+        criteria: q.criteria ?? q.levels ?? [],
+      };
     }
   }
 
   try {
-    const response = await fetch(TYPESAFE_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${resolvedKey}`,
-      },
-      body: JSON.stringify({
-        state,
-        model: "jev-latest",
-        questions: payloadQuestions,
-      }),
-    });
+    const client = apiKey ? new ResilientJevClient({ apiKey }) : getGlobalJevClient();
+    const outcome = await client.ask(state, payloadQuestions);
+    const answersData = outcome.answers as Record<string, any> | undefined;
 
-    const latencyMs = Date.now() - startTime;
-    if (!response.ok) {
-      return evaluateFallback(state, questions, latencyMs);
-    }
-
-    const data = (await response.json()) as { answers?: Record<string, any> };
-    if (!data.answers) {
-      return evaluateFallback(state, questions, latencyMs);
+    if (!answersData) {
+      return evaluateFallback(state, questions, outcome.jevMs);
     }
 
     const parsedAnswers: EvaluateResult["answers"] = {};
     for (const [key, q] of Object.entries(questions)) {
-      const rawAns = data.answers[key];
+      const rawAns = answersData[key];
       if (!rawAns) continue;
 
       if (q.type === "noul") {
@@ -132,7 +129,11 @@ export async function evaluateQuestions(
           raw: rawAns,
         };
       } else if (q.type === "score") {
-        const scoreVal = typeof rawAns.score === "number" ? rawAns.score : 0.5;
+        // Read 0.60 quantile if probability distribution is provided, else raw score
+        let scoreVal = typeof rawAns.score === "number" ? rawAns.score : 0.5;
+        if (rawAns.probabilities) {
+          scoreVal = scoreQuantile(rawAns.probabilities, 0.60);
+        }
         parsedAnswers[key] = {
           type: "score",
           value: scoreVal,
@@ -145,7 +146,7 @@ export async function evaluateQuestions(
     return {
       answers: parsedAnswers,
       fallback: false,
-      latencyMs,
+      latencyMs: Math.round(outcome.jevMs),
     };
   } catch {
     return evaluateFallback(state, questions, Date.now() - startTime);
@@ -155,7 +156,7 @@ export async function evaluateQuestions(
 function evaluateFallback(
   state: string,
   questions: Record<string, JevQuestion>,
-  latencyMs: number
+  latencyMs: number,
 ): EvaluateResult {
   const lower = state.toLowerCase();
   const answers: EvaluateResult["answers"] = {};
@@ -221,11 +222,6 @@ function evaluateFallback(
 
 /**
  * Evaluates an action or tool call against safety, destructive risk, and confidence thresholds.
- * Returns:
- * - 'execute': High confidence that the action is safe and appropriate.
- * - 'confirm': Moderate confidence or non-trivial impact; requires user verification.
- * - 'escalate': High uncertainty or cross-cutting impact; escalate to stronger model or human.
- * - 'abort': Destructive without authorization or direct safety violation.
  */
 export async function evaluateConfidenceGate(params: {
   state: string;
@@ -256,7 +252,7 @@ export async function evaluateConfidenceGate(params: {
   const evalRes = await evaluateQuestions(
     `Current State:\n${state}\n\nProposed Action:\n${proposedAction}`,
     questions,
-    apiKey
+    apiKey,
   );
 
   const isDestructive = evalRes.answers.is_destructive?.value === true;

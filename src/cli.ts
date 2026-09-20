@@ -37,7 +37,10 @@ import {
   writeAutoConfigEnv,
 } from "./discovery/harness-detector.js";
 import type { ClientKind, RoleKind } from "./types/index.js";
-
+import { calibrateJevLatency } from "./triage/calibrator.js";
+import { getGlobalJevClient } from "./triage/jev-client.js";
+import { TurnRouter } from "./routing/router.js";
+import { systemPromptParts } from "./routing/prompt.js";
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -490,5 +493,116 @@ program
     startMcpServer();
   });
 
+program
+  .command("prewarm")
+  .description("Prewarm TypeSafe Jev TLS connection and socket pool before real turns")
+  .action(async () => {
+    console.log("\n[herdr-jev] Prewarming connection pool to api.typesafe.ai (2 warmup queries)...");
+    const client = getGlobalJevClient();
+    const success = await client.prewarm();
+    if (success) {
+      console.log("[herdr-jev] Connection prewarmed successfully. TLS socket pool active.\n");
+    } else {
+      console.log("[herdr-jev] Prewarm skipped or offline (safe fallback mode active).\n");
+    }
+  });
+
+program
+  .command("calibrate")
+  .description("Measure network latency to api.typesafe.ai and calibrate deadline for this machine")
+  .option("-s, --samples <samples>", "Number of latency probe samples", "25")
+  .option("--spacing <ms>", "Spacing between samples in milliseconds", "150")
+  .option("--margin <margin>", "Safety multiplier margin on p98", "1.25")
+  .option("--ceiling <ms>", "Maximum allowable deadline in ms", "1500")
+  .option("-w, --write-env [path]", "Write HERDR_JEV_DEADLINE_MS to .env")
+  .action(async (options: { samples: string; spacing: string; margin: string; ceiling: string; writeEnv?: boolean | string }) => {
+    const samples = parseInt(options.samples, 10) || 25;
+    const spacingMs = parseInt(options.spacing, 10) || 150;
+    const margin = parseFloat(options.margin) || 1.25;
+    const ceilingMs = parseInt(options.ceiling, 10) || 1500;
+    const shouldWrite = Boolean(options.writeEnv);
+    const envPath = typeof options.writeEnv === "string" ? options.writeEnv : ".env";
+
+    console.log(`\n=== Calibrating TypeSafe Jev Latency (${samples} samples, spacing: ${spacingMs}ms, margin: ${margin}x) ===`);
+    process.stdout.write("Probing: ");
+
+    try {
+      const result = await calibrateJevLatency(
+        { samples, spacingMs, margin, ceilingMs, writeEnv: shouldWrite, envPath },
+        (step, total, ms) => {
+          process.stdout.write(`.`);
+        },
+      );
+      process.stdout.write("\n\n");
+
+      console.log("=== Calibration Results ===");
+      console.log(`Samples: ${result.samplesCount}`);
+      console.log(`Min    : ${result.minMs}ms`);
+      console.log(`p50    : ${result.p50Ms}ms`);
+      console.log(`p90    : ${result.p90Ms}ms`);
+      console.log(`p95    : ${result.p95Ms}ms`);
+      console.log(`p98    : ${result.p98Ms}ms`);
+      console.log(`Max    : ${result.maxMs}ms`);
+      console.log(`Mean   : ${result.meanMs}ms`);
+      console.log(`\nRecommended Deadline: ${result.recommendedDeadlineMs}ms (margin: ${margin}x on p98)`);
+
+      if (result.ceilingExceeded) {
+        console.warn(`WARNING: Raw recommended deadline exceeded ceiling of ${ceilingMs}ms; capped at ceiling.`);
+      }
+
+      if (shouldWrite) {
+        console.log(`Updated ${envPath} with HERDR_JEV_DEADLINE_MS="${result.recommendedDeadlineMs}".`);
+      } else {
+        console.log(`Tip: Run with -w to automatically record HERDR_JEV_DEADLINE_MS in .env`);
+      }
+      console.log();
+    } catch (err) {
+      console.error(`\nCalibration failed: ${String(err)}`);
+    }
+  });
+
+program
+  .command("route-turn <turn>")
+  .description("Route turn in ~350ms: pick model tier, effort, safe tools, and gated skill preserving prefix cache")
+  .option("-j, --json", "Output raw JSON")
+  .option("--prompt", "Show generated system prompt suffix (<skill_relevance>)")
+  .option("--cold", "Skip connection prewarming (fresh TLS handshake)")
+  .option("--deadline <ms>", "Override deadline in milliseconds")
+  .action(async (turn: string, options: { json?: boolean; prompt?: boolean; cold?: boolean; deadline?: string }) => {
+    const deadlineMs = options.deadline ? parseInt(options.deadline, 10) : undefined;
+    const router = new TurnRouter({
+      jevOptions: deadlineMs ? { deadlineMs } : undefined,
+    });
+
+    if (!options.cold) {
+      await router.prewarm();
+    }
+
+    const result = await router.route({ message: turn });
+
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+
+    console.log("\n=== Jev Turn Route Decision ===");
+    console.log(`Turn   : "${turn}"`);
+    console.log(`Source : ${result.telemetry.source.toUpperCase()} (${result.telemetry.totalMs.toFixed(1)}ms total, ${result.telemetry.jevMs.toFixed(1)}ms Jev)`);
+    console.log(`Tier   : ${result.decision.tier.toUpperCase()} -> Model: ${result.decision.model}`);
+    console.log(`Effort : ${result.decision.effort.toUpperCase()}`);
+    console.log(`Tools  : [${result.decision.tools.join(", ") || "none"}]`);
+    console.log(`Skill  : ${result.decision.skill ?? "none"} (gate: ${result.decision.gateScore.toFixed(2)})`);
+    console.log(`Why    :`);
+    result.decision.why.forEach((w) => console.log(`  - ${w}`));
+
+    if (options.prompt) {
+      const parts = systemPromptParts("SYSTEM_PROMPT_PREFIX_ROSTER", result.decision.skill);
+      console.log(`\n=== Prompt Cache-Friendly Suffix ===`);
+      console.log(parts.suffix);
+    }
+    console.log();
+  });
+
 program.parse(process.argv);
+
 
