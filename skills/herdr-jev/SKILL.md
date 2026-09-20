@@ -102,7 +102,24 @@ herdr-jev quota status
 herdr-jev quota reset antigravity
 ```
 
-### 8. Health and Environment Status
+### 8. Pre-flight Turn Routing (~330ms)
+Evaluate a turn before running, picking model tier, effort, safe tools, and gated skill while preserving prompt cache:
+```bash
+herdr-jev route-turn "escreva o ADR de migracao para Kafka" --prompt
+herdr-jev route-turn "fix typo on line 42" --json
+```
+
+### 9. Latency Calibration and Prewarm
+Calibrate network deadline or prewarm TLS connection pool:
+```bash
+# Prewarm TLS socket pool to api.typesafe.ai (double-handshake)
+herdr-jev prewarm
+
+# Measure local round-trips and update HERDR_JEV_DEADLINE_MS in .env
+herdr-jev calibrate -s 15 -w
+```
+
+### 10. Health and Environment Status
 Check TypeSafe Jev connectivity, Herdr runtime, and AI-Harness bridge:
 ```bash
 herdr-jev status
