@@ -14,6 +14,7 @@
     "lint": "bunx biome check src test || true"
   },
   "dependencies": {
+    "@typesafe-ai/sdk": "^0.6.0",
     "commander": "^13.1.0"
   },
   "devDependencies": {
