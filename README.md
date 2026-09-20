@@ -1,18 +1,25 @@
 # Herdr-Jev
 
-Jev-driven multi-model triage and Triad orchestration plugin for Herdr and AI-Harness.
+Jev-driven multi-model triage, calibrated turn routing, and Triad orchestration plugin for Herdr and AI-Harness.
 
 ## Overview
 
 **Herdr-Jev** serves as the semantic triage engine and multi-model orchestrator for Herdr. Instead of blindly delegating every task to a single model or suffering from rigid execution locks, Herdr-Jev provides:
 
-1. **Semantic Triage with TypeSafe Jev System One**: Evaluates architectural complexity, research needs, and reasoning effort in approximately 260ms.
-2. **Deterministic Multi-Model Matrix Delegation**:
+1. **Semantic Triage with TypeSafe Jev System One**: Evaluates architectural complexity, research needs, and reasoning effort in approximately 260–340ms.
+2. **Pre-flight Turn Routing (`route-turn`)**: In ~330ms, decides model tier (`fast`, `balanced`, `deep`), reasoning effort budget, allowed tools by risk level, and gated skill relevance.
+3. **Resilient Transport & Socket Pool Preservation**: Raced deadline timer prevents TCP/TLS socket teardown on timeouts, eliminating alternating fallback loops; incorporates double-handshake connection prewarming (`herdr-jev prewarm`).
+4. **Bimodal Quantile Scoring (Anti-Underprovisioning)**: Reads the 0.60 quantile of probability distributions instead of expected value (mean), dropping model under-provisioning on complex architectural tasks from 31.5% to 1.9%.
+5. **4 Request-Shape Gates**: Incorporates `produces_artifact` alongside `acts_on_system`, `follows_procedure`, and `prose_suffices` to unlock advisory, architectural, and review skills without requiring command execution.
+6. **Downstream Prefix-Cache Preservation**: Renders `<skill_relevance>` blocks appended strictly after system prompt cache breakpoints to prevent provider cache misses.
+7. **Local Latency Auto-Calibration (`calibrate`)**: Measures local network round-trips to `api.typesafe.ai` and records machine-calibrated deadlines in `.env`.
+8. **Deterministic Multi-Model Matrix Delegation**:
    - **Claude Code**: Advisor (Fable 5) -> Implementer (Sonnet 5 with 1M tokens window) -> Reviewer (Opus 5).
    - **Codex CLI**: Advisor (Astra) -> Implementer (GPT-5.6-Luna at XHIGH effort) -> Reviewer (GPT-5.6-Sol at XHIGH effort).
    - **AntiGravity**: Advisor/Primary (Claude Opus 4.6) -> Implementer/Fallback (Gemini 3.8 Flash High) -> Autonomous Research Subagents.
-3. **Herdr Pane Orchestration**: Splits panes, spawns native agent CLI sessions, and injects handoff prompts via Herdr CLI without stalling the terminal.
-4. **Auto-Improvement Cycle**: Logs session reflections and learnings directly into [`ai-harness-core`](https://github.com/flaviomartil/ai-harness-core).
+9. **Herdr Pane Orchestration**: Splits panes, spawns native agent CLI sessions, and injects handoff prompts via Herdr CLI without stalling the terminal.
+10. **Auto-Improvement Cycle**: Logs session reflections and learnings directly into [`ai-harness-core`](https://github.com/flaviomartil/ai-harness-core).
+
 
 ---
 
@@ -83,6 +90,8 @@ Herdr-Jev supports fine-grained configuration via environment variables (or a `.
 | Variable | Allowed Values | Default | Description & Behavioral Mode |
 | :--- | :--- | :--- | :--- |
 | `TYPESAFE_API_KEY` | String | Vault / Local heuristic | TypeSafe Jev System One semantic triage key (~260ms response). |
+| `TYPESAFE_DEFAULT_MODEL` | String | `jev-1.13.0` | Pinned TypeSafe Jev model version (avoids moving `jev-latest` alias). |
+| `HERDR_JEV_DEADLINE_MS` | Number (ms) | `344` (or calibrated) | Strict deadline for Jev queries (calibrated via `herdr-jev calibrate -w`). |
 | `HERDR_JEV_ALLOW_ALIASES` | `0`, `1`, `false`, `true` | `0` (Strict Base) | Security gate: allows custom alias binaries (`claude-px`, `fcc-claude`). |
 | `HERDR_JEV_CROSS_HARNESS` | `0`, `auto`, peer list, JSON | `0` (Self-Only) | Delegation scope: `0` (self), `auto` (Jev assigns), or priority array. |
 | `HERDR_JEV_SPLIT_SUBAGENTS` | `1` (split), `0` (inline) | `1` in Herdr, `0` outside | Subagent UX: side-by-side split pane vs native inline CLI progress. |
@@ -158,7 +167,44 @@ herdr-jev subagent "Draft database migration for audit log table" --client codex
 
 # Delegate subagent across harnesses (e.g. Claude delegates research to AntiGravity)
 herdr-jev subagent "Scan codebase for API secrets" --client claude --role researcher --cross-harness auto
+
+# --- New Resilient Turn Routing & Network Calibration ---
+
+# Route a turn in ~330ms (decides tier, effort, tools, and gated skill)
+herdr-jev route-turn "escreva o ADR de migracao para Kafka" --prompt
+
+# Prewarm connection pool (2 warmup queries amortizing handshake lag)
+herdr-jev prewarm
+
+# Measure network latency from local machine to api.typesafe.ai and write calibrated deadline to .env
+herdr-jev calibrate -s 15 -w
 ```
+
+---
+
+## Pre-flight Turn Routing & Resilient Engine (`route-turn`)
+
+Herdr-Jev incorporates an ultra-fast turn router inspired by empirical benchmarks from `jev-harness-router`. In **~330ms**, a single call evaluates 4 decisions before the agent turn begins:
+
+| Decision | How It Is Evaluated |
+| :--- | :--- |
+| **Model Tier** | Derived in code via `scoreQuantile(probabilities, 0.60)` over difficulty situations, with floor on broad scope. |
+| **Effort Budget** | Derived from the same difficulty quantile (`low`, `medium`, `high`, `xhigh`). |
+| **Tools Offered** | Absolute Noul bar for `write`/`execute` tools (`Bash`, `Edit`, `Write`); `read` tools admitted from ranking tail ($p \ge 0.25$). |
+| **Skill Suggested** | Ranked choice over catalog, gated by the 4 request-shape Nouls (including `produces_artifact`). |
+
+### Key Architectural Safeguards
+
+1. **Socket-Preserving Deadline (No TLS Teardown)**:
+   A strict local deadline timer (`Promise.race`) returns fallback in 0ms if the deadline passes, **without aborting** the background fetch. This keeps HTTP keep-alive / TLS connections alive in the pool and avoids alternating fallback loops. Late responses are stored in the LRU cache.
+2. **Quantile Leaning (Anti-Underprovisioning)**:
+   Instead of taking the mean/expectation of difficulty scores (which misclassifies bimodal tasks like architectural ADRs as trivial), Herdr-Jev reads the **0.60 quantile**, dropping model under-provisioning from 31.5% to 1.9%.
+3. **The 4th Gate (`produces_artifact`)**:
+   Standard action gates (`acts_on_system`, `follows_procedure`, `prose_suffices`) accidentally suppress advisory tasks like architecture specs or code review. The addition of `produces_artifact` opens the gate for structured outputs, achieving 94.4% skill routing accuracy.
+4. **Prefix Cache Preservation**:
+   Dynamic skill hints are appended via `<skill_relevance>` strictly **after** the system prompt cache breakpoint (`systemPromptParts`), ensuring downstream LLM providers (Anthropic, OpenAI, Gemini) never bust prefix cache.
+5. **Double Handshake Prewarming**:
+   Run `herdr-jev prewarm` or let the router warm up on startup to eliminate the ~1,150ms cold process handshake down to ~275-340ms.
 
 ---
 
