@@ -33,6 +33,8 @@ export interface PipelinePlan {
   stages: StageSpec[];
   spawnResearchSubagent: boolean;
   autoImprovement: boolean;
+  delegation?: import("../harness/bridge.js").HarnessDecision;
+  executionStages?: StageSpec[];
 }
 
 export interface HerdrCommandResult {

@@ -1,4 +1,5 @@
 import type { TaskComplexity, ReasoningEffort, RoleKind } from "../types/index.js";
+import { resolveHarnessDelegation, type DelegationInput } from "../harness/bridge.js";
 
 export type ModelTier = "fast" | "standard" | "deep" | "frontier";
 
@@ -53,6 +54,8 @@ export function checkExecutionGuard(params: {
   complexity: TaskComplexity;
   agentRole: "coordinator" | "subagent" | "standalone";
   isCodeMutation: boolean;
+  client?: string;
+  delegation?: DelegationInput;
 }): ExecutionGuardDecision {
   const { complexity, agentRole, isCodeMutation } = params;
 
@@ -80,13 +83,14 @@ export function checkExecutionGuard(params: {
   if (isCodeMutation && (complexity === "architectural" || complexity === "moderate")) {
     const tier: ModelTier = complexity === "architectural" ? "deep" : "standard";
     const role: RoleKind = complexity === "architectural" ? "advisor" : "implementer";
+    const decision = resolveHarnessDelegation(params.client ?? "codex", true, params.delegation);
 
     return {
-      allowed: false,
-      requiresDelegation: true,
+      allowed: true,
+      requiresDelegation: decision.mode === "delegate",
       recommendedTier: tier,
       suggestedRole: role,
-      reason: `[EXECUTION GUARD ACTIVE] Task complexity is ${complexity.toUpperCase()}. The coordinator must not modify files directly. Decompose the task and spawn an autonomous subagent (${role}, tier: ${tier}) via herdr_spawn_subagent or herdr_clink.`,
+      reason: `Complexity is advisory. Delegate only with an exact available AI Harness profile; direct execution remains allowed. ${decision.mode === "direct" ? decision.reason : decision.profile.id}`,
     };
   }
 

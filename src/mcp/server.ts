@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline";
 import { triageTaskWithJev } from "../triage/client.js";
 import { resolveStageSpec } from "../pipelines/matrix.js";
+import { planExecution } from "../pipelines/planner.js";
 import { resolveDelegatedClient } from "../delegation/cross-harness.js";
 import { runAgentCaptured, launchStageInHerdr } from "../herdr/launcher.js";
 import { createHerdrClient } from "../herdr/client.js";
@@ -24,6 +25,19 @@ interface JsonRpcResponse {
 }
 
 const TOOLS = [
+  {
+    name: "herdr_plan",
+    description: "Classify work with Jev and return the canonical AI Harness delegation decision separately from advisory model suggestions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string" }, client: { type: "string" }, model: { type: "string" },
+        availableModels: { type: "array", items: { type: "string" } },
+        role: { type: "string", enum: ["advisor", "executor", "reviewer"] },
+      },
+      required: ["task", "client"],
+    },
+  },
   {
     name: "herdr_clink",
     description: "Execute a prompt in an isolated peer AI CLI (codex, claude, antigravity, kimi) and return the output directly into this conversation without polluting the context window. Ideal for quick code reviews, secondary opinions, and isolated lookups (inspired by PAL MCP but powered by Herdr-Jev).",
@@ -150,7 +164,7 @@ const TOOLS = [
   },
   {
     name: "herdr_execution_guard",
-    description: "Checks whether the current agent is permitted to write code directly or if the Execution Guard forces delegation to an autonomous subagent for moderate/architectural tasks (inspired by jev-gate V5).",
+    description: "Advisory complexity and canonical Harness delegation decision. Does not block native execution.",
     inputSchema: {
       type: "object",
       properties: {
@@ -168,6 +182,9 @@ const TOOLS = [
           type: "boolean",
           description: "Whether the proposed step involves creating or modifying code files",
         },
+        client: { type: "string", description: "Actual client ID" },
+        model: { type: "string", description: "Exact current model ID" },
+        availableModels: { type: "array", items: { type: "string" }, description: "Verified available model IDs" },
       },
       required: ["complexity", "agentRole", "isCodeMutation"],
     },
@@ -219,6 +236,12 @@ const TOOLS = [
 ];
 
 async function handleToolCall(name: string, args: any): Promise<string> {
+  if (name === "herdr_plan") {
+    const triage = await triageTaskWithJev(args.task || "");
+    return JSON.stringify(planExecution(args.task || "", args.client, triage, {
+      delegation: { model: args.model, availableModels: args.availableModels, role: args.role },
+    }), null, 2);
+  }
   if (name === "herdr_triage") {
     const decision = await triageTaskWithJev(args.task || "");
     return JSON.stringify(decision, null, 2);
@@ -245,6 +268,8 @@ async function handleToolCall(name: string, args: any): Promise<string> {
       complexity: (args.complexity || "routine") as TaskComplexity,
       agentRole: args.agentRole || "coordinator",
       isCodeMutation: Boolean(args.isCodeMutation),
+      client: args.client,
+      delegation: { model: args.model, availableModels: args.availableModels },
     });
     return JSON.stringify(res, null, 2);
   }
@@ -358,9 +383,10 @@ export function startMcpServer() {
     const trimmed = line.trim();
     if (!trimmed) return;
 
+    let id: JsonRpcRequest["id"] = null;
     try {
       const req = JSON.parse(trimmed) as JsonRpcRequest;
-      const id = req.id ?? null;
+      id = req.id ?? null;
 
       if (req.method === "initialize") {
         send({

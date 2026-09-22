@@ -138,7 +138,7 @@ export class ResilientJevClient {
     const key = hashKey("jev", { state, questions });
     const cached = this.cache.get(key);
     if (cached) {
-      return { ...cached, fromCache: true };
+      return { ...cached, fromCache: true } as JevOutcome<Q>;
     }
 
     const client = this.getClient();
