@@ -2,6 +2,27 @@
 
 Jev-driven multi-model triage, calibrated turn routing, and Triad orchestration plugin for Herdr and AI-Harness.
 
+## Canonical execution through AI Harness
+
+`plan` and MCP `herdr_plan` expose both advisory `stages` and canonical `executionStages`. Only the latter can be launched automatically by `route`. Supply the actual advisor model and verified available model IDs; an unknown model, unavailable Harness, or missing exact profile means direct execution in the current session. `--triad` and local quota cascades do not override this decision.
+
+```sh
+herdr-jev plan "Implement the change" --client codex --model gpt-6-astra --available-models gpt-5.6-luna,gpt-5.6-sol --triad --json
+herdr-jev route "Implement the change" --client codex --model gpt-6-astra --available-models gpt-5.6-luna,gpt-5.6-sol --triad --wait --verify-command-json /absolute/path/checks.json
+herdr-jev run-status <run-id>
+herdr-jev run-resume <run-id> --verify-command-json /absolute/path/checks.json
+```
+
+The check file contains a JSON argv array, for example `["bun","test"]`. Run from the target repository. The current advisor keeps coordination; only the implementer is launched in a new Herdr pane. The independent reviewer runs through Harness `review-judge`, using the exact profile and read-only Codex or Claude adapter. No real model is launched outside Herdr.
+
+The Harness records an attempt before dispatch, with a stable agent name, a bounded deadline and an immutable receipt. The implementer writes a handoff of at most 16 KiB. Pane `done` means reported, not verified. Deterministic checks must pass before review; review must cover the same Git snapshot before verified completion. Without `--wait`, return after launch; without a check command, stop at reported. Resume observes the existing agent and never repeats an uncertain launch. Expired or uncertain attempts stay unresolved; automatic retries are deliberately absent.
+
+State belongs to the existing Harness task database. Private objective/handoff artifacts and the atomic, sanitized Dagr projection live under `~/.local/state/herdr-jev/<run-id>/`; `run-status` refreshes `run.json`. The projection contains roles, model IDs, attempt state and live locators, excluding task text, transcripts, repository paths and receipt tokens. Validate it with `dagr check <run.json> --strict`.
+
+`quota status` consumes the installed Herdr Agent Usage Codex snapshot through the Harness normalizer. Scope, age and reset are explicit; data older than two minutes is stale. Missing observations are unknown. These observations do not authorize model substitution. Usage telemetry goes through `ai-harness usage-record`; task text and learning prose are no longer appended to `auto-improvements.jsonl`. Existing historical files are not migrated or deleted.
+
+Next requested investigation: [Jev video ideas](docs/next-jev-video-analysis.md).
+
 ## Overview
 
 **Herdr-Jev** serves as the semantic triage engine and multi-model orchestrator for Herdr. Instead of blindly delegating every task to a single model or suffering from rigid execution locks, Herdr-Jev provides:
@@ -13,12 +34,12 @@ Jev-driven multi-model triage, calibrated turn routing, and Triad orchestration 
 5. **4 Request-Shape Gates**: Incorporates `produces_artifact` alongside `acts_on_system`, `follows_procedure`, and `prose_suffices` to unlock advisory, architectural, and review skills without requiring command execution.
 6. **Downstream Prefix-Cache Preservation**: Renders `<skill_relevance>` blocks appended strictly after system prompt cache breakpoints to prevent provider cache misses.
 7. **Local Latency Auto-Calibration (`calibrate`)**: Measures local network round-trips to `api.typesafe.ai` and records machine-calibrated deadlines in `.env`.
-8. **Deterministic Multi-Model Matrix Delegation**:
+8. **Advisory Multi-Model Matrix** (automatic execution uses the canonical profile above):
    - **Claude Code**: Advisor (Fable 5) -> Implementer (Sonnet 5 with 1M tokens window) -> Reviewer (Opus 5).
    - **Codex CLI**: Advisor (Astra) -> Implementer (GPT-5.6-Luna at XHIGH effort) -> Reviewer (GPT-5.6-Sol at XHIGH effort).
    - **AntiGravity**: Advisor/Primary (Claude Opus 4.6) -> Implementer/Fallback (Gemini 3.8 Flash High) -> Autonomous Research Subagents.
 9. **Herdr Pane Orchestration**: Splits panes, spawns native agent CLI sessions, and injects handoff prompts via Herdr CLI without stalling the terminal.
-10. **Auto-Improvement Cycle**: Logs session reflections and learnings directly into [`ai-harness-core`](https://github.com/flaviomartil/ai-harness-core).
+10. **Structural Usage**: Sends only routing metadata to [`ai-harness-core`](https://github.com/flaviomartil/ai-harness-core); semantic learning remains in the shared learning workflow.
 
 
 ---
@@ -155,6 +176,9 @@ herdr-jev plan "Fix schema documentation" --client claude --triad
 
 # Route and launch agent stages in Herdr panes (spawns research subagent if needed)
 herdr-jev route "Investigate transaction timeout in payment service" --client claude
+
+# Wait for protocol terminal states (done/blocked/unknown); this does not verify work evidence
+herdr-jev route "Investigate transaction timeout in payment service" --client claude --wait
 
 # Spawn subagent in a split pane (Jev decides direction automatically)
 herdr-jev subagent "Research OAuth2 PKCE flow in authentication service" --client claude --role researcher --split

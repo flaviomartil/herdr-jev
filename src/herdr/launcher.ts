@@ -1,10 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision } from "../types/index.js";
-import { createHerdrClient, type HerdrClient } from "./client.js";
+import { classifyHerdrCommandFailure, createHerdrClient, readHerdrObservedState, type HerdrClient, type HerdrObservedState } from "./client.js";
 
 export interface LaunchResult {
   ok: boolean;
+  ackStatus?: "acknowledged" | "rejected" | "unknown" | "not_attempted";
+  completionState?: HerdrObservedState | "not_requested";
+  completionObserved?: boolean;
+  workEvidence?: "not_checked";
   error?: string;
   paneCreated?: boolean;
   agentName?: string;
@@ -139,6 +143,9 @@ export async function launchStageInHerdr(input: {
   herdr?: HerdrClient;
   direction?: SplitDirectionOption;
   triage?: TriageDecision;
+  waitForCompletion?: boolean;
+  completionTimeoutMs?: number;
+  agentName?: string;
 }): Promise<LaunchResult> {
   const herdr = input.herdr ?? createHerdrClient();
   const effectiveClient = input.stage.client ?? input.client;
@@ -148,24 +155,28 @@ export async function launchStageInHerdr(input: {
   if (process.env.HERDR_ENV !== "1") {
     return {
       ok: true,
+      ackStatus: "not_attempted",
+      completionState: "not_requested",
+      completionObserved: false,
+      workEvidence: "not_checked",
       paneCreated: false,
       commandText,
       error: "Not in Herdr environment (HERDR_ENV != 1). Run manually or launch from Herdr pane.",
     };
   }
 
-  const agentName = formatHerdrAgentName(effectiveClient, input.stage.role, input.stage.model);
+  const agentName = input.agentName ?? formatHerdrAgentName(effectiveClient, input.stage.role, input.stage.model);
   const splitDirection = resolveSplitDirection(input.stage.role, input.triage, input.direction);
 
   // 1. Split current pane with resolved direction
   const split = await herdr.splitCurrent({ direction: splitDirection });
   if (!split.ok) {
-    return { ok: false, error: `Pane split failed: ${split.stderr || split.stdout}`, commandText, direction: splitDirection };
+    return { ok: false, ackStatus: classifyHerdrCommandFailure(split), completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Pane split failed: ${split.stderr || split.stdout}`, commandText, direction: splitDirection };
   }
 
   const paneId = parseHerdrPaneId(split.stdout);
   if (!paneId) {
-    return { ok: false, error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
+    return { ok: false, ackStatus: "unknown", completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
   }
 
   // 2. Start agent inside pane
@@ -178,21 +189,58 @@ export async function launchStageInHerdr(input: {
   });
 
   if (!started.ok) {
-    await herdr.closePane(paneId);
-    return { ok: false, error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
+    const ackStatus = classifyHerdrCommandFailure(started);
+    if (ackStatus === "rejected") await herdr.closePane(paneId);
+    return { ok: false, ackStatus, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
   }
 
   // 3. Send initial prompt/handoff immediately into the split pane
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
-    await herdr.prompt({
+    const prompted = await herdr.prompt({
       target: agentName,
       text: input.handoffPrompt,
       wait: false,
     });
+    if (!prompted.ok) {
+      return {
+        ok: false,
+        ackStatus: classifyHerdrCommandFailure(prompted),
+        completionState: "not_requested",
+        completionObserved: false,
+        workEvidence: "not_checked",
+        error: `Prompt dispatch failed: ${prompted.stderr || prompted.stdout || "no acknowledgement"}`,
+        paneCreated: true,
+        agentName,
+        paneId,
+        commandText,
+        direction: splitDirection,
+      };
+    }
+  }
+
+  if (input.waitForCompletion) {
+    const waited = await herdr.waitFor({ target: agentName, timeoutMs: input.completionTimeoutMs });
+    const completionState = readHerdrObservedState(waited) ?? (waited.ok ? "unknown" : "pending");
+    return {
+      ok: true,
+      ackStatus: "acknowledged",
+      completionState,
+      completionObserved: completionState === "done" || completionState === "blocked" || completionState === "unknown",
+      workEvidence: "not_checked",
+      paneCreated: true,
+      agentName,
+      paneId,
+      commandText,
+      direction: splitDirection,
+    };
   }
 
   return {
     ok: true,
+    ackStatus: "acknowledged",
+    completionState: "not_requested",
+    completionObserved: false,
+    workEvidence: "not_checked",
     paneCreated: true,
     agentName,
     paneId,
@@ -357,5 +405,3 @@ export function runAgentCaptured(input: {
     return { ok: false, output: "", exitCode: 1, error: errorMsg, commandText };
   }
 }
-
-

@@ -63,29 +63,29 @@ describe("Jevbridge & Jev-Gate Adaptations", () => {
   });
 
   describe("Execution Guard (Jev-Gate V5)", () => {
-    it("blocks coordinator from direct code mutation on architectural tasks", () => {
+    it("keeps architectural complexity advisory without an exact delegation profile", () => {
       const decision = checkExecutionGuard({
         complexity: "architectural",
         agentRole: "coordinator",
         isCodeMutation: true,
       });
 
-      expect(decision.allowed).toBe(false);
-      expect(decision.requiresDelegation).toBe(true);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresDelegation).toBe(false);
       expect(decision.recommendedTier).toBe("deep");
       expect(decision.suggestedRole).toBe("advisor");
-      expect(decision.reason).toContain("EXECUTION GUARD ACTIVE");
+      expect(decision.reason).toContain("exact available AI Harness profile");
     });
 
-    it("blocks coordinator from direct code mutation on moderate tasks", () => {
+    it("permits direct implementation of moderate tasks when the current model is unknown", () => {
       const decision = checkExecutionGuard({
         complexity: "moderate",
         agentRole: "coordinator",
         isCodeMutation: true,
       });
 
-      expect(decision.allowed).toBe(false);
-      expect(decision.requiresDelegation).toBe(true);
+      expect(decision.allowed).toBe(true);
+      expect(decision.requiresDelegation).toBe(false);
       expect(decision.recommendedTier).toBe("standard");
       expect(decision.suggestedRole).toBe("implementer");
     });
