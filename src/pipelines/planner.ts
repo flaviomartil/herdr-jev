@@ -10,6 +10,7 @@ export function planExecution(
   options?: {
     forceTriad?: boolean;
     forceDirect?: boolean;
+    requestDelegation?: boolean;
     crossHarness?: CrossHarnessConfig;
     delegation?: DelegationInput;
   },
@@ -36,7 +37,7 @@ export function planExecution(
     ? [resolveStage("advisor"), resolveStage("implementer"), resolveStage("reviewer")]
     : [resolveStage("implementer")];
 
-  const delegation = resolveHarnessDelegation(client, !options?.forceDirect && (isTriad || triage.complexity === "moderate"), options?.delegation);
+  const delegation = resolveHarnessDelegation(client, !options?.forceDirect && (options?.requestDelegation === true || isTriad || triage.complexity === "moderate"), options?.delegation);
   const executionStages: StageSpec[] = delegation.mode === "delegate"
     ? (["implementer", "reviewer"] as const).map((role) => {
       const target = role === "implementer" ? delegation.profile.executor : delegation.profile.reviewer;

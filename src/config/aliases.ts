@@ -7,6 +7,7 @@ export const BASE_CLIENTS: BaseClientKind[] = [
   "cursor",
   "opencode",
   "kimi",
+  "kiro",
 ];
 
 const DEFAULT_BINARIES: Record<BaseClientKind, string> = {
@@ -16,6 +17,7 @@ const DEFAULT_BINARIES: Record<BaseClientKind, string> = {
   cursor: "agent",
   opencode: "opencode",
   kimi: "kimi",
+  kiro: "kiro-cli",
 };
 
 /**
@@ -96,6 +98,7 @@ export function resolveBaseClientKind(client: ClientKind | string): BaseClientKi
   if (lower.includes("cursor")) return "cursor";
   if (lower.includes("opencode")) return "opencode";
   if (lower.includes("kimi")) return "kimi";
+  if (lower === "kiro-cli") return "kiro";
 
   return "claude";
 }

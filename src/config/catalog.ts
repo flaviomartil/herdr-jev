@@ -147,7 +147,8 @@ export function resolveActiveModel(
   const entry =
     (catalog.clients as Record<string, Record<RoleKind, ModelCatalogEntry>>)[client]?.[role] ??
     catalog.clients[base]?.[role] ??
-    catalog.clients.claude[role];
+    (base === "kiro" ? undefined : catalog.clients.claude[role]);
+  if (!entry) throw new Error(`No configured model for ${client}/${role}; use an explicit verified peer model`);
 
   // 1. Check environment variable override: HERDR_JEV_<CLIENT>_<ROLE>, then HERDR_JEV_<BASE>_<ROLE>
   const clientKey = client.toUpperCase().replace(/[^A-Z0-9]/g, "_");
@@ -194,6 +195,7 @@ export function resolveActiveModel(
 }
 
 export function isClientExhausted(client: ClientKind, role: RoleKind): boolean {
+  if (resolveBaseClientKind(client) === "kiro" && !loadBaseCatalog().clients.kiro?.[role]) return true;
   return resolveActiveModel(client, role).allExhausted;
 }
 
@@ -245,4 +247,3 @@ export function integrateDiscoveredModel(input: {
     chain,
   };
 }
-

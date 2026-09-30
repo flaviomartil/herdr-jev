@@ -39,6 +39,9 @@ describe("Herdr-Jev MCP Server", () => {
     expect(toolNames).toContain("herdr_verify_contract");
     expect(toolNames).toContain("herdr_fit_check");
     expect(toolNames).toContain("herdr_plan");
-    expect(toolNames.length).toBe(10);
+    expect(toolNames).toContain("herdr_peer_message");
+    expect(toolNames).toContain("herdr_peer_read");
+    expect(toolNames.length).toBe(12);
+    expect(tools.find((tool: any) => tool.name === "herdr_plan").inputSchema.required).toEqual(["task"]);
   });
 });

@@ -1,7 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import type { ClientKind, RoleKind, StageSpec, TriageDecision } from "../types/index.js";
-import { classifyHerdrCommandFailure, createHerdrClient, readHerdrObservedState, type HerdrClient, type HerdrObservedState } from "./client.js";
+import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
+import { classifyHerdrCommandFailure, createHerdrClient, readHerdrObservedState, requiresTrustConfirmation, type HerdrClient, type HerdrObservedState } from "./client.js";
+import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
 
 export interface LaunchResult {
   ok: boolean;
@@ -11,6 +12,7 @@ export interface LaunchResult {
   workEvidence?: "not_checked";
   error?: string;
   paneCreated?: boolean;
+  promptPending?: boolean;
   agentName?: string;
   paneId?: string;
   commandText?: string;
@@ -57,20 +59,41 @@ export function parseHerdrPaneId(stdout: string): string | undefined {
   if (!trimmed) return undefined;
   try {
     const data = JSON.parse(trimmed) as {
-      result?: { pane?: { pane_id?: unknown } };
+      result?: { pane?: { pane_id?: unknown }; root_pane?: { pane_id?: unknown } };
       pane?: { pane_id?: unknown };
     };
-    const id = data.result?.pane?.pane_id ?? data.pane?.pane_id;
+    const id = data.result?.pane?.pane_id ?? data.result?.root_pane?.pane_id ?? data.pane?.pane_id;
     if (typeof id === "string" && id.length > 0) return id;
+    return undefined;
   } catch {
     // Non-JSON plain text fallback
   }
-  return trimmed.split(/\s+/)[0];
+  return /^[a-zA-Z0-9:_-]+$/.test(trimmed) ? trimmed : undefined;
 }
 
 import { resolveBaseClientKind, resolveClientExecutable } from "../config/aliases.js";
 
+export function nativeStageEffort(client: ClientKind, effort: ReasoningEffort): string | undefined {
+  const base = resolveBaseClientKind(client);
+  if (!["codex", "claude", "antigravity"].includes(base)) return undefined;
+  return effort === "standard" ? "medium" : base === "antigravity" && effort === "xhigh" ? "max" : effort;
+}
+
+function stageFlags(client: ClientKind, stage: StageSpec): string[] {
+  const base = resolveBaseClientKind(client);
+  if (base !== "codex" && base !== "claude" && base !== "antigravity") return stage.extraFlags;
+  const flags: string[] = [];
+  for (let i = 0; i < stage.extraFlags.length; i++) {
+    if (base === "codex" && stage.extraFlags[i] === "-c" && stage.extraFlags[i + 1]?.startsWith("model_reasoning_effort=")) { i++; continue; }
+    if ((base === "claude" || base === "antigravity") && stage.extraFlags[i] === "--effort") { i++; continue; }
+    flags.push(stage.extraFlags[i]);
+  }
+  const effort = nativeStageEffort(client, stage.effort)!;
+  return [...flags, ...(base === "codex" ? ["-c", `model_reasoning_effort="${effort}"`] : ["--effort", effort])];
+}
+
 export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[] {
+  stage = { ...stage, extraFlags: stageFlags(client, stage) };
   const base = resolveBaseClientKind(client);
   const bin = resolveClientExecutable(client);
   switch (base) {
@@ -95,7 +118,7 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
       return [bin, "--model", stage.model];
     }
     case "antigravity": {
-      return [bin];
+      return [bin, "--model", stage.model, ...stage.extraFlags];
     }
     case "kimi": {
       const args = [bin, "-m", stage.model, "--yolo"];
@@ -104,16 +127,20 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
       }
       return args;
     }
+    case "kiro": {
+      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...stage.extraFlags];
+    }
   }
 }
 
-export function mapClientToHerdrKind(client: ClientKind): "claude" | "codex" | "cursor" | "opencode" | "agy" | "kimi" {
+export function mapClientToHerdrKind(client: ClientKind): "claude" | "codex" | "cursor" | "opencode" | "agy" | "kimi" | "kiro" {
   const base = resolveBaseClientKind(client);
   if (base === "claude") return "claude";
   if (base === "codex") return "codex";
   if (base === "cursor") return "cursor";
   if (base === "antigravity") return "agy";
   if (base === "kimi") return "kimi";
+  if (base === "kiro") return "kiro";
   return "opencode";
 }
 
@@ -130,13 +157,13 @@ export function formatHerdrAgentName(
     .replace(/[^a-z0-9]/g, "");
 
   const roleTag = role === "implementer" ? "impl" : role;
-  const token = suffix ?? randomBytes(2).toString("hex");
+  const token = (suffix ?? randomBytes(4).toString("hex")).toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(-12);
 
-  const candidate = `jev-${roleTag}-${cleanModel}-${token}`.toLowerCase().replace(/[^a-z0-9_-]/g, "");
-  return candidate.slice(0, 32);
+  const candidate = `jev-${roleTag}-${cleanModel}`.toLowerCase().replace(/[^a-z0-9_-]/g, "");
+  return `${candidate.slice(0, 31 - token.length)}-${token}`;
 }
 
-export async function launchStageInHerdr(input: {
+async function launchStageInHerdrAttempt(input: {
   client: ClientKind;
   stage: StageSpec;
   handoffPrompt: string;
@@ -146,6 +173,11 @@ export async function launchStageInHerdr(input: {
   waitForCompletion?: boolean;
   completionTimeoutMs?: number;
   agentName?: string;
+  layout?: "split" | "tab";
+  reuseExisting?: boolean;
+  sourcePaneId?: string;
+  workspaceId?: string;
+  cwd?: string;
 }): Promise<LaunchResult> {
   const herdr = input.herdr ?? createHerdrClient();
   const effectiveClient = input.stage.client ?? input.client;
@@ -166,10 +198,30 @@ export async function launchStageInHerdr(input: {
   }
 
   const agentName = input.agentName ?? formatHerdrAgentName(effectiveClient, input.stage.role, input.stage.model);
+  if (input.reuseExisting) {
+    if (!input.agentName || !herdr.getAgent) return { ok: false, ackStatus: "rejected", error: "A stable agent name and native lookup are required for retry recovery", commandText };
+    const existing = await herdr.getAgent(agentName);
+    if (existing.ok) {
+      let existingPane: string | undefined;
+      try { existingPane = JSON.parse(existing.stdout).result?.agent?.pane_id; } catch {}
+      return { ok: false, ackStatus: "unknown", paneCreated: true, agentName, paneId: existingPane, commandText,
+        error: "Existing peer retained. Use peer-read and peer-message on this handle; spawn recovery never resends a prompt or opens another tab." };
+    }
+    let code: string | undefined;
+    try { code = JSON.parse(existing.stdout || existing.stderr).error?.code; } catch {}
+    if (code !== "agent_not_found" && code !== "not_found") return { ok: false, ackStatus: "unknown", agentName, commandText,
+      error: "Peer existence cannot be determined; inspect the existing attempt before retrying." };
+  }
+  try { claimHerdrSpawn(`spawn:${agentName}`); }
+  catch (error) { return { ok: false, ackStatus: "unknown", agentName, commandText,
+    error: `Named spawn already attempted or cannot be fenced. Inspect existing tabs/panes before choosing a fresh handle: ${String(error)}` }; }
   const splitDirection = resolveSplitDirection(input.stage.role, input.triage, input.direction);
 
   // 1. Split current pane with resolved direction
-  const split = await herdr.splitCurrent({ direction: splitDirection });
+  const split = input.layout === "tab"
+    ? await herdr.createTab?.({ label: agentName, cwd: input.cwd ?? process.cwd(), workspaceId: input.workspaceId })
+    : await herdr.splitCurrent({ direction: splitDirection, paneId: input.sourcePaneId, cwd: input.cwd });
+  if (!split) return { ok: false, ackStatus: "rejected", error: "Tab creation unavailable", commandText };
   if (!split.ok) {
     return { ok: false, ackStatus: classifyHerdrCommandFailure(split), completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Pane split failed: ${split.stderr || split.stdout}`, commandText, direction: splitDirection };
   }
@@ -178,6 +230,11 @@ export async function launchStageInHerdr(input: {
   if (!paneId) {
     return { ok: false, ackStatus: "unknown", completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
   }
+
+  let releasePane: (() => Promise<void>) | undefined;
+  try { releasePane = await reserveHerdrHandle(`pane:${paneId}`); }
+  catch (error) { return { ok: false, ackStatus: "unknown", paneCreated: true, agentName, paneId, error: String(error), commandText }; }
+  try {
 
   // 2. Start agent inside pane
   const herdrKind = mapClientToHerdrKind(effectiveClient);
@@ -191,15 +248,23 @@ export async function launchStageInHerdr(input: {
   if (!started.ok) {
     const ackStatus = classifyHerdrCommandFailure(started);
     if (ackStatus === "rejected") await herdr.closePane(paneId);
-    return { ok: false, ackStatus, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
+    return { ok: false, ackStatus, paneCreated: ackStatus === "unknown", promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
   }
 
   // 3. Send initial prompt/handoff immediately into the split pane
+  if (herdr.readAgent) {
+    const screen = await herdr.readAgent(agentName);
+    if (!screen.ok || requiresTrustConfirmation(screen)) {
+      return { ok: false, ackStatus: screen.ok ? "rejected" : "unknown", completionState: screen.ok ? "blocked" : "unknown", paneCreated: true, promptPending: true, agentName, paneId, commandText,
+        error: screen.ok ? "Agent requires repository trust confirmation; resolve it in the pane before dispatching work." : "Agent readiness could not be inspected" };
+    }
+  }
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
     const prompted = await herdr.prompt({
       target: agentName,
       text: input.handoffPrompt,
-      wait: false,
+      wait: true,
+      waitForStart: true,
     });
     if (!prompted.ok) {
       return {
@@ -247,6 +312,18 @@ export async function launchStageInHerdr(input: {
     commandText,
     direction: splitDirection,
   };
+  } finally { await releasePane(); }
+}
+
+export async function launchStageInHerdr(input: Parameters<typeof launchStageInHerdrAttempt>[0]): Promise<LaunchResult> {
+  if (!input.reuseExisting || !input.agentName || process.env.HERDR_ENV !== "1") return launchStageInHerdrAttempt(input);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await reserveHerdrHandle(`spawn:${input.agentName}`);
+    return await launchStageInHerdrAttempt(input);
+  } catch (error) {
+    return { ok: false, ackStatus: "unknown", agentName: input.agentName, error: String(error) };
+  } finally { await release?.(); }
 }
 
 /**
@@ -282,6 +359,7 @@ export function buildInlineCommand(
   promptText: string,
   nonInteractive = false,
 ): string[] {
+  stage = { ...stage, extraFlags: stageFlags(client, stage) };
   const base = resolveBaseClientKind(client);
   const bin = resolveClientExecutable(client);
   switch (base) {
@@ -309,9 +387,9 @@ export function buildInlineCommand(
     }
     case "antigravity": {
       if (nonInteractive) {
-        return [bin, "-p", promptText];
+        return [bin, "-p", promptText, "--model", stage.model, ...stage.extraFlags];
       }
-      return [bin, "-i", promptText];
+      return [bin, "-i", promptText, "--model", stage.model, ...stage.extraFlags];
     }
     case "cursor": {
       return [bin, "--model", stage.model, promptText];
@@ -324,6 +402,9 @@ export function buildInlineCommand(
         return [bin, "-m", stage.model, "-p", promptText];
       }
       return [bin, "-m", stage.model, "--yolo", promptText];
+    }
+    case "kiro": {
+      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...stage.extraFlags, ...(nonInteractive ? ["--no-interactive"] : []), promptText];
     }
   }
 }

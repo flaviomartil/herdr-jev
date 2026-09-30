@@ -16,11 +16,22 @@ if [ -z "${task// /}" ]; then
 fi
 
 echo
-read -r -p "client (claude/codex/antigravity) [claude]: " client || client=""
-client="${client:-claude}"
+read -r -p "client (empty = source agent): " client || client=""
+args=()
+if [ -n "$client" ]; then args+=(--client "$client"); fi
+read -r -p "exact advisor model (empty = detected): " model || model=""
+if [ -n "$model" ]; then args+=(--model "$model"); fi
+read -r -p "layout (split/tab) [split]: " layout || layout=""
+if [ "${layout:-split}" = "tab" ]; then args+=(--tab); fi
+read -r -p "checks JSON argv file (required for independent review): " checks || checks=""
+if [ -z "$checks" ]; then
+  echo "A checks JSON argv file is required to finish implementation and review."
+  hold
+  exit 1
+fi
 
 echo
-if jev_cli route "$task" --client "$client" --triad; then
+if jev_cli route "$task" "${args[@]}" --triad --wait --verify-command-json "$checks"; then
   notify "Herdr-Jev" "Launched Triad pipeline for: ${task:0:60}" done
 else
   notify "Herdr-Jev" "Triad launch failed" request

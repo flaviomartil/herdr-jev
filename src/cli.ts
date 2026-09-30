@@ -10,6 +10,7 @@ import {
   shouldSplitSubagents,
   runAgentInline,
   resolveSplitDirection,
+  nativeStageEffort,
   type SplitDirectionOption,
 } from "./herdr/launcher.js";
 import {
@@ -21,6 +22,8 @@ import { resolveStageSpec } from "./pipelines/matrix.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
 import { checkHarnessStatus, externalRun, readUsageQuota } from "./harness/bridge.js";
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
+import { resolveHerdrContext } from "./herdr/context.js";
+import { resolvePeerStage, converseWithPeer } from "./herdr/peer.js";
 import {
   loadBaseCatalog,
   loadUserOverrides,
@@ -161,18 +164,21 @@ program
 program
   .command("plan <task>")
   .description("Generate multi-model execution plan for target client")
-  .option("-c, --client <client>", "Target client: claude, codex, antigravity, cursor, opencode", "claude")
+  .option("-c, --client <client>", "Target client; defaults to the source pane's agent")
+  .option("--source-pane <id>", "Advisor pane supplying exact session context")
   .option("-t, --triad", "Force full triad pipeline")
   .option("--model <id>", "Exact current advisor model ID")
   .option("--available-models <ids>", "Verified available exact model IDs, comma-separated")
   .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
   .option("-j, --json", "Output raw JSON")
-  .action(async (task: string, options: { client: string; triad?: boolean; crossHarness?: string; json?: boolean; model?: string; availableModels?: string }) => {
-    const client = (options.client || "claude") as ClientKind;
+  .action(async (task: string, options: { client?: string; sourcePane?: string; triad?: boolean; crossHarness?: string; json?: boolean; model?: string; availableModels?: string }) => {
+    const context = await resolveHerdrContext({ client: options.client, model: options.model,
+      availableModels: options.availableModels?.split(",").filter(Boolean), sourcePaneId: options.sourcePane });
+    const client = context.client as ClientKind;
     const triage = await triageTaskWithJev(task);
     const crossConfig = options.crossHarness ? parseCrossHarnessConfig(options.crossHarness) : undefined;
     const plan = planExecution(task, client, triage, { forceTriad: options.triad, crossHarness: crossConfig,
-      delegation: { model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) } });
+      delegation: context.delegation, requestDelegation: true });
 
     if (options.json) {
       console.log(JSON.stringify(plan, null, 2));
@@ -196,7 +202,10 @@ program
 program
   .command("route <task>")
   .description("Triage task and launch the routed agent or triad in Herdr panes")
-  .option("-c, --client <client>", "Target client: claude, codex, antigravity, cursor, opencode", "claude")
+  .option("-c, --client <client>", "Target client; defaults to the source pane's agent")
+  .option("--source-pane <id>", "Advisor pane supplying exact session context")
+  .option("--tab", "Launch the implementer in a new tab instead of splitting")
+  .option("--cwd <path>", "Repository for the launched worker; defaults to caller context")
   .option("-t, --triad", "Force full triad pipeline")
   .option("--model <id>", "Exact current advisor model ID")
   .option("--available-models <ids>", "Verified available exact model IDs, comma-separated")
@@ -207,8 +216,12 @@ program
   .option("--wait", "Supervise launched panes until a terminal protocol state")
   .option("-d, --direction <direction>", "Split direction: auto (Jev decides), right, or down", "auto")
   .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
-  .action(async (task: string, options: { client: string; triad?: boolean; split?: boolean; wait?: boolean; direction?: string; crossHarness?: string; model?: string; availableModels?: string; timeoutMs: string; verifyCommandJson?: string }) => {
-    const client = (options.client || "claude") as ClientKind;
+  .action(async (task: string, options: { client?: string; triad?: boolean; split?: boolean; tab?: boolean; sourcePane?: string; cwd?: string; wait?: boolean; direction?: string; crossHarness?: string; model?: string; availableModels?: string; timeoutMs: string; verifyCommandJson?: string }) => {
+    const context = await resolveHerdrContext({ client: options.client, model: options.model,
+      availableModels: options.availableModels?.split(",").filter(Boolean), sourcePaneId: options.sourcePane });
+    const client = context.client as ClientKind;
+    if (options.split === false) throw new Error("Use --tab or --split for supervised routing; subagent --no-split supports inline execution.");
+    if (options.tab && options.split) throw new Error("Choose --tab or --split, not both.");
     console.log(`\n[herdr-jev] Triaging task: "${task}"...`);
 
     const triage = await triageTaskWithJev(task);
@@ -216,15 +229,23 @@ program
 
     const crossConfig = options.crossHarness ? parseCrossHarnessConfig(options.crossHarness) : undefined;
     const plan = planExecution(task, client, triage, { forceTriad: options.triad, crossHarness: crossConfig,
-      delegation: { model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) } });
+      delegation: context.delegation, requestDelegation: true });
     const result = await runPipeline(plan, {
-      delegation: { model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) },
+      delegation: context.delegation,
+      layout: options.tab ? "tab" : "split", sourcePaneId: context.sourcePaneId, workspaceId: context.workspaceId, cwd: options.cwd ?? context.cwd,
       wait: options.wait, timeoutMs: Number(options.timeoutMs), direction: options.direction as SplitDirectionOption,
       verifyCommandJson: options.verifyCommandJson,
     });
     console.log(JSON.stringify(result, null, 2));
-    if ("error" in result) process.exitCode = 1;
+    if ("error" in result || ("mode" in result && result.mode === "direct") ||
+      ("run" in result && result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state)))) process.exitCode = 1;
   });
+
+program
+  .command("context")
+  .description("Resolve the source pane and repository without launching agents")
+  .option("--json", "Output JSON context")
+  .action(async () => console.log(JSON.stringify(await resolveHerdrContext({}))));
 
 program
   .command("run-status <id>")
@@ -236,37 +257,43 @@ program
   .description("Observe the existing attempt and continue verified dependencies without redispatching uncertain work")
   .option("--timeout-ms <ms>", "Deadline for a newly claimed stage", "900000")
   .option("--verify-command-json <path>", "Deterministic check argv file")
-  .action(async (id: string, options: { timeoutMs: string; verifyCommandJson?: string }) => {
+  .option("--cwd <path>", "Original worker repository")
+  .action(async (id: string, options: { timeoutMs: string; verifyCommandJson?: string; cwd?: string }) => {
+    const cwd = options.cwd ?? (await resolveHerdrContext({})).cwd;
     const result = await resumePipeline(id, { delegation: {}, wait: true,
-      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson });
+      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd });
     console.log(JSON.stringify(result, null, 2));
-    if ("error" in result) process.exitCode = 1;
+    if ("error" in result || result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state))) process.exitCode = 1;
   });
 
 program
   .command("subagent <prompt>")
   .description("Spawn an autonomous subagent in a split pane or inline native harness")
-  .option("-c, --client <client>", "Source host harness (claude, codex, antigravity, cursor, opencode)", "claude")
+  .option("-c, --client <client>", "Source harness; defaults to the caller agent")
   .option("-t, --target <target>", "Explicit target peer client to delegate to")
   .option("-r, --role <role>", "Subagent role (researcher, implementer, reviewer, advisor)", "researcher")
   .option("--split", "Force execution in a split pane side-by-side")
+  .option("--tab", "Open a persistent peer conversation in a new tab")
+  .option("--name <handle>", "Stable peer name; retries retain an existing peer without respawning")
+  .option("--model <id>", "Exact peer model ID")
+  .option("--effort <effort>", "Peer effort: standard, high, xhigh; defaults to Jev triage")
+  .option("--source-pane <id>", "Caller pane")
+  .option("--cwd <path>", "Peer repository")
   .option("--no-split", "Execute subagent inline in current terminal without splitting pane")
   .option("-d, --direction <direction>", "Split direction: auto (Jev decides), right, or down", "auto")
   .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
   .option("-p, --print", "Run non-interactively in inline mode (print output directly)")
-  .action(async (promptText: string, options: { client: string; target?: string; role: string; split?: boolean; direction?: string; crossHarness?: string; print?: boolean }) => {
-    const sourceClient = (options.client || "claude") as ClientKind;
+  .action(async (promptText: string, options: { client?: string; target?: string; role: string; split?: boolean; tab?: boolean; name?: string; model?: string; effort?: string; sourcePane?: string; cwd?: string; direction?: string; crossHarness?: string; print?: boolean }) => {
+    const context = await resolveHerdrContext({ client: options.client, sourcePaneId: options.sourcePane });
+    const sourceClient = context.client as ClientKind;
     const role = (options.role || "researcher") as RoleKind;
-    const crossConfig = options.crossHarness ? parseCrossHarnessConfig(options.crossHarness) : undefined;
-    const delegated = resolveDelegatedClient(sourceClient, role, {
-      explicitTarget: options.target ? (options.target.toLowerCase() as ClientKind) : undefined,
-      config: crossConfig,
-    });
-    const effectiveClient = delegated.client;
+    const { client: effectiveClient, stage, triage } = await resolvePeerStage({ prompt: promptText, source: sourceClient,
+      target: options.target, role, model: options.model, effort: options.effort, crossHarness: options.crossHarness });
     const isHerdr = process.env.HERDR_ENV === "1";
-    const stage = resolveStageSpec(effectiveClient, role, "standard");
-    stage.client = effectiveClient;
-    const splitMode = shouldSplitSubagents(options.split);
+    if (options.tab && options.split !== undefined) throw new Error("Choose --tab or --split/--no-split");
+    if (options.tab && !isHerdr) throw new Error("A peer tab requires Herdr");
+    const splitMode = options.tab || shouldSplitSubagents(options.split);
+    if (options.name && (!isHerdr || !splitMode)) throw new Error("Stable peer names require a Herdr tab or split");
 
     if (splitMode) {
       if (!isHerdr) {
@@ -287,21 +314,28 @@ program
 
       const herdr = createHerdrClient();
       const dir = resolveSplitDirection(role, undefined, options.direction);
-      console.log(`\n[herdr-jev] Splitting pane (${dir}) and spawning ${role} subagent (${effectiveClient}/${stage.model})...`);
+      console.log(`\n[herdr-jev] Opening ${options.tab ? "tab" : `split (${dir})`} for ${role} peer (${effectiveClient}/${stage.model}, Jev effort: ${stage.effort})...`);
       const result = await launchStageInHerdr({
         client: effectiveClient,
         stage,
         handoffPrompt: promptText,
         direction: (options.direction as SplitDirectionOption) || "auto",
         herdr,
+        triage, layout: options.tab ? "tab" : "split", sourcePaneId: context.sourcePaneId,
+        agentName: options.name, reuseExisting: !!options.name,
+        workspaceId: context.workspaceId, cwd: options.cwd ?? context.cwd,
       });
 
       if (!result.ok) {
         console.error(`[herdr-jev] Failed to spawn subagent: ${result.error}`);
+        console.log(JSON.stringify(result));
+        process.exitCode = 1;
         return;
       }
 
       console.log(`[herdr-jev] Subagent active in pane ${result.paneId} (${result.agentName})`);
+      console.log(JSON.stringify({ ...result, client: effectiveClient, model: stage.model, effort: nativeStageEffort(effectiveClient, stage.effort) ?? null,
+        recommendedEffort: stage.effort, effortApplied: nativeStageEffort(effectiveClient, stage.effort) !== undefined }));
       await herdr.notify("Herdr-Jev", `Subagent spawned in pane ${result.paneId}`, "done");
       return;
     }
@@ -320,6 +354,20 @@ program
       process.exit(inlineResult.exitCode || 1);
     }
   });
+
+program.command("peer-message <agent> <text>")
+  .description("Send the next turn to an existing peer without spawning another agent")
+  .option("--wait", "Wait for the peer response")
+  .option("--lines <n>", "Terminal snapshot line limit", "2000")
+  .option("--timeout-ms <ms>", "Peer wait deadline", "900000")
+  .action(async (agent: string, text: string, options: { wait?: boolean; lines: string; timeoutMs: string }) => console.log(await converseWithPeer({ target: agent, text, wait: options.wait, lines: Number(options.lines), timeoutMs: Number(options.timeoutMs) })));
+
+program.command("peer-read <agent>")
+  .description("Read the existing peer conversation")
+  .option("--wait", "Wait for completion before reading")
+  .option("--lines <n>", "Terminal snapshot line limit", "2000")
+  .option("--timeout-ms <ms>", "Peer wait deadline", "900000")
+  .action(async (agent: string, options: { wait?: boolean; lines: string; timeoutMs: string }) => console.log(await converseWithPeer({ target: agent, wait: options.wait, lines: Number(options.lines), timeoutMs: Number(options.timeoutMs) })));
 
 // Models Subcommand
 const modelsCommand = program.command("models").description("Manage client models and fallback cascades");

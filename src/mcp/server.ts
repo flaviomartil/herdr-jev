@@ -3,8 +3,10 @@ import { triageTaskWithJev } from "../triage/client.js";
 import { resolveStageSpec } from "../pipelines/matrix.js";
 import { planExecution } from "../pipelines/planner.js";
 import { resolveDelegatedClient } from "../delegation/cross-harness.js";
-import { runAgentCaptured, launchStageInHerdr } from "../herdr/launcher.js";
+import { runAgentCaptured, launchStageInHerdr, nativeStageEffort } from "../herdr/launcher.js";
 import { createHerdrClient } from "../herdr/client.js";
+import { resolveHerdrContext } from "../herdr/context.js";
+import { resolvePeerStage, converseWithPeer } from "../herdr/peer.js";
 import type { ClientKind, RoleKind, TaskComplexity } from "../types/index.js";
 
 import { evaluateQuestions, evaluateConfidenceGate, type JevQuestion } from "../triage/evaluator.js";
@@ -33,9 +35,10 @@ const TOOLS = [
       properties: {
         task: { type: "string" }, client: { type: "string" }, model: { type: "string" },
         availableModels: { type: "array", items: { type: "string" } },
+        sourcePaneId: { type: "string" },
         role: { type: "string", enum: ["advisor", "executor", "reviewer"] },
       },
-      required: ["task", "client"],
+      required: ["task"],
     },
   },
   {
@@ -59,10 +62,17 @@ const TOOLS = [
   },
   {
     name: "herdr_spawn_subagent",
-    description: "Spawn an autonomous subagent (researcher, implementer, reviewer, advisor) with full triage and quota protection. If running inside Herdr with split: true, opens a side-by-side pane; otherwise executes in background and returns the clean final output.",
+    description: "Spawn a persistent peer agent in the selected native harness. Defaults to Jev peer selection and a new Herdr tab, subject to configured cross-harness constraints; returns its handle for subsequent agent-to-agent messages. Effort defaults to Jev triage.",
     inputSchema: {
       type: "object",
       properties: {
+        client: { type: "string", description: "Caller harness; defaults to source pane" },
+        model: { type: "string", description: "Exact peer model ID" },
+        effort: { type: "string", enum: ["standard", "high", "xhigh"] },
+        layout: { type: "string", enum: ["tab", "split", "captured"] },
+        sourcePaneId: { type: "string" },
+        cwd: { type: "string" },
+        agentName: { type: "string", description: "Stable peer name for retry recovery. Existing handles are retained without respawning or resubmitting prompts." },
         prompt: {
           type: "string",
           description: "The task or prompt for the subagent",
@@ -79,11 +89,21 @@ const TOOLS = [
         },
         split: {
           type: "boolean",
-          description: "Whether to split Herdr pane (true) or execute captured inline (false, default)",
+          description: "Legacy override: true requests a split, false requests captured output. Omit for the default persistent tab; layout takes precedence.",
         },
       },
       required: ["prompt"],
     },
+  },
+  {
+    name: "herdr_peer_message",
+    description: "Send a follow-up turn to the same peer agent and optionally wait for its response; never spawns a new process.",
+    inputSchema: { type: "object", properties: { target: { type: "string" }, text: { type: "string" }, wait: { type: "boolean" }, lines: { type: "integer", minimum: 1, maximum: 100000 }, timeoutMs: { type: "integer", minimum: 1, maximum: 3600000 } }, required: ["target", "text"] },
+  },
+  {
+    name: "herdr_peer_read",
+    description: "Read the existing peer conversation, optionally waiting for completion.",
+    inputSchema: { type: "object", properties: { target: { type: "string" }, wait: { type: "boolean" }, lines: { type: "integer", minimum: 1, maximum: 100000 }, timeoutMs: { type: "integer", minimum: 1, maximum: 3600000 } }, required: ["target"] },
   },
   {
     name: "herdr_consensus",
@@ -237,9 +257,11 @@ const TOOLS = [
 
 async function handleToolCall(name: string, args: any): Promise<string> {
   if (name === "herdr_plan") {
+    const context = await resolveHerdrContext({ client: args.client, model: args.model,
+      availableModels: args.availableModels, sourcePaneId: args.sourcePaneId });
     const triage = await triageTaskWithJev(args.task || "");
-    return JSON.stringify(planExecution(args.task || "", args.client, triage, {
-      delegation: { model: args.model, availableModels: args.availableModels, role: args.role },
+    return JSON.stringify(planExecution(args.task || "", context.client, triage, {
+      requestDelegation: true, delegation: { ...context.delegation, role: args.role },
     }), null, 2);
   }
   if (name === "herdr_triage") {
@@ -306,23 +328,30 @@ async function handleToolCall(name: string, args: any): Promise<string> {
   if (name === "herdr_spawn_subagent") {
     const role = (args.role || "researcher") as RoleKind;
     const explicitTarget = args.target && args.target !== "auto" ? (args.target as ClientKind) : undefined;
-    const delegated = resolveDelegatedClient("claude", role, { explicitTarget });
-    const targetClient = delegated.client;
-    const stage = resolveStageSpec(targetClient, role, "standard");
+    const context = await resolveHerdrContext({ client: args.client, sourcePaneId: args.sourcePaneId });
+    const { client: targetClient, stage, triage } = await resolvePeerStage({ prompt: args.prompt, source: context.client,
+      target: explicitTarget, role, model: args.model, effort: args.effort });
 
     const isHerdr = process.env.HERDR_ENV === "1";
-    if (args.split && isHerdr) {
+    const layout = args.layout ?? (args.split === true ? "split" : args.split === false ? "captured" : "tab");
+    if (!["tab", "split", "captured"].includes(layout)) throw new Error("Invalid peer layout");
+    if (args.agentName && layout === "captured") throw new Error("Stable peer names require a Herdr tab or split");
+    if (layout !== "captured" && !isHerdr) throw new Error("Peer tabs and splits require Herdr; use layout captured explicitly");
+    if (layout !== "captured") {
       const herdr = createHerdrClient();
       const res = await launchStageInHerdr({
         client: targetClient,
         stage,
         handoffPrompt: args.prompt || "",
         herdr,
+        layout, triage, sourcePaneId: context.sourcePaneId, workspaceId: context.workspaceId, cwd: args.cwd ?? context.cwd,
+        agentName: args.agentName, reuseExisting: !!args.agentName,
       });
       if (!res.ok) {
-        return `[herdr_spawn_subagent split error]: ${res.error}`;
+        throw new Error(JSON.stringify(res));
       }
-      return `Subagent spawned successfully in Herdr pane ${res.paneId} (${res.agentName}) running ${targetClient}/${stage.model}`;
+      return JSON.stringify({ ...res, client: targetClient, model: stage.model, effort: nativeStageEffort(targetClient, stage.effort) ?? null,
+        recommendedEffort: stage.effort, effortApplied: nativeStageEffort(targetClient, stage.effort) !== undefined });
     }
 
     // Default inline / captured execution
@@ -330,11 +359,17 @@ async function handleToolCall(name: string, args: any): Promise<string> {
       client: targetClient,
       stage,
       promptText: args.prompt || "",
+      cwd: args.cwd ?? context.cwd,
     });
     if (!res.ok) {
       return `[herdr_subagent error: exit code ${res.exitCode}]\n${res.error || ""}\n${res.output}`;
     }
     return res.output;
+  }
+
+  if (name === "herdr_peer_message" || name === "herdr_peer_read") {
+    if (name === "herdr_peer_message" && typeof args.text !== "string") throw new Error("Message text required");
+    return converseWithPeer({ target: args.target, text: name === "herdr_peer_message" ? args.text : undefined, wait: args.wait, lines: args.lines, timeoutMs: args.timeoutMs });
   }
 
   if (name === "herdr_consensus") {

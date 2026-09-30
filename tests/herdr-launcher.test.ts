@@ -5,7 +5,8 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHerdrClient, readHerdrObservedState, type HerdrClient } from "../src/herdr/client.js";
-import { launchStageInHerdr } from "../src/herdr/launcher.js";
+import { buildAgentCommand, buildInlineCommand, launchStageInHerdr, parseHerdrPaneId } from "../src/herdr/launcher.js";
+import { converseWithPeer } from "../src/herdr/peer.js";
 import type { HerdrCommandResult, StageSpec } from "../src/types/index.js";
 
 const originalHerdrEnv = process.env.HERDR_ENV;
@@ -53,11 +54,103 @@ afterEach(() => {
 });
 
 describe("Herdr launch acknowledgement", () => {
+  it("preserves the stage effort in interactive and captured commands", () => {
+    expect(buildAgentCommand("codex", stage)).toContain('model_reasoning_effort="xhigh"');
+    expect(buildInlineCommand("codex", stage, "task", true)).toContain('model_reasoning_effort="xhigh"');
+    expect(buildAgentCommand("claude", { ...stage, effort: "high" })).toEqual(["claude", "--model", stage.model, "--effort", "high"]);
+  });
+
+  it("reads tab root panes and rejects unrelated JSON instead of using it as a pane ID", () => {
+    expect(parseHerdrPaneId(JSON.stringify({ result: { root_pane: { pane_id: "w1:p4" } } }))).toBe("w1:p4");
+    expect(parseHerdrPaneId('{"result":{"type":"error"}}')).toBeUndefined();
+  });
+
+  it("creates a tab before starting an agent when requested", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    let tabs = 0;
+    herdr.createTab = async () => { tabs++; return commandResult(true, JSON.stringify({ result: { root_pane: { pane_id: "w1:p5" } } })); };
+    herdr.prompt = async (input) => {
+      expect(input.wait).toBe(true);
+      expect(input.waitForStart).toBe(true);
+      return commandResult(true);
+    };
+    const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "task", herdr, layout: "tab" });
+    expect(tabs).toBe(1);
+    expect(result.paneId).toBe("w1:p5");
+  });
+
+  it("retains a named peer on retry and never resends its prompt", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.getAgent = async () => commandResult(true, JSON.stringify({ result: { agent: { pane_id: "existing-peer" } } }));
+    herdr.createTab = async () => { throw new Error("Retry must not create a tab"); };
+    const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "task", herdr,
+      layout: "tab", agentName: "stable-retry-peer", reuseExisting: true });
+    expect(result.ok).toBe(false);
+    expect(result.paneId).toBe("existing-peer");
+    expect(result.error).toContain("Existing peer retained");
+    expect(herdr.promptCalls).toBe(0);
+  });
+
+  it("serializes concurrent spawn requests sharing a stable name", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    let finish!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    let tabs = 0;
+    herdr.getAgent = async () => commandResult(false, JSON.stringify({ error: { code: "agent_not_found" } }));
+    herdr.createTab = async () => { tabs++; started(); await pending; return commandResult(true, JSON.stringify({ result: { root_pane: { pane_id: "first-peer" } } })); };
+    const input = { client: "codex", stage, handoffPrompt: "task", herdr, layout: "tab" as const, agentName: `named-${Date.now().toString(36)}`, reuseExisting: true };
+    const first = launchStageInHerdr(input);
+    await ready;
+    try {
+      const second = await launchStageInHerdr(input);
+      expect(second.ok).toBe(false);
+      expect(second.error).toContain("reserved");
+      expect(tabs).toBe(1);
+    } finally { finish(); await first; }
+  });
+
+  it("never repeats named pane creation when its first acknowledgement is uncertain", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    let tabs = 0;
+    herdr.getAgent = async () => commandResult(false, JSON.stringify({ error: { code: "agent_not_found" } }));
+    herdr.createTab = async () => { tabs++; return commandResult(true, JSON.stringify({ result: {} })); };
+    const input = { client: "codex", stage, handoffPrompt: "task", herdr, layout: "tab" as const,
+      agentName: `uncertain-${Date.now().toString(36)}`, reuseExisting: true };
+    expect((await launchStageInHerdr(input)).ackStatus).toBe("unknown");
+    const retry = await launchStageInHerdr(input);
+    expect(retry.ok).toBe(false);
+    expect(retry.error).toContain("Named spawn already attempted");
+    expect(tabs).toBe(1);
+  });
+
+  it("reserves the peer pane before startup so messages cannot precede its initial task", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    let finish!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const pending = new Promise<void>(resolve => { finish = resolve; });
+    herdr.startAgent = async () => { started(); await pending; return commandResult(true); };
+    herdr.getAgent = async () => commandResult(true, JSON.stringify({ result: { agent: { pane_id: "pane-42", agent_status: "idle" } } }));
+    const first = launchStageInHerdr({ client: "codex", stage, handoffPrompt: "initial task", herdr });
+    await ready;
+    try {
+      await expect(converseWithPeer({ target: "new-peer", text: "premature turn" }, herdr)).rejects.toThrow("reserved");
+      expect(herdr.promptCalls).toBe(0);
+    } finally { finish(); await first; }
+    expect(herdr.promptCalls).toBe(1);
+  });
   it("returns launch failure when prompt acknowledgement fails without relaunching or closing the pane", async () => {
     process.env.HERDR_ENV = "1";
     const herdr = fakeHerdr(commandResult(false, "", "prompt transport failed"));
     const result = await launchStageInHerdr({
-      client: "codex",
+      client: "cursor",
       stage,
       handoffPrompt: "synthetic handoff",
       herdr,
@@ -74,7 +167,7 @@ describe("Herdr launch acknowledgement", () => {
     process.env.HERDR_ENV = "1";
     const herdr = fakeHerdr(commandResult(true));
     const result = await launchStageInHerdr({
-      client: "codex",
+      client: "cursor",
       stage,
       handoffPrompt: "synthetic handoff",
       herdr,
@@ -82,6 +175,26 @@ describe("Herdr launch acknowledgement", () => {
     expect(result.ok).toBe(true);
     expect(result.paneCreated).toBe(true);
     expect(result.paneId).toBe("pane-42");
+  });
+
+  it("never sends work into a repository trust dialog", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.readAgent = async () => commandResult(true, "1. Trust and continue");
+    const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "bounded task", herdr });
+    expect(herdr.promptCalls).toBe(0);
+    expect(result.ackStatus).toBe("rejected");
+    expect(result.error).toContain("trust confirmation");
+  });
+
+  it("keeps a detected agent when startup readiness is uncertain", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.startAgent = async () => commandResult(false, "", "agent_not_ready");
+    const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "task", herdr });
+    expect(result.ackStatus).toBe("unknown");
+    expect(herdr.closeCalls).toBe(0);
+    expect(herdr.promptCalls).toBe(0);
   });
 
   it("supervises the launched pane through done without converting it into work verification", async () => {
@@ -188,9 +301,9 @@ describe("canonical route execution", () => {
     const root = mkdtempSync(join(tmpdir(), "herdr-route-direct-"));
     try {
       const result = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "route", "investigar a documentação", "--client", "codex", "--wait"], {
-        encoding: "utf8", env: { ...process.env, AI_HARNESS_ROOT: root, HERDR_ENV: "1", HOME: root, TYPESAFE_API_KEY: "" }, timeout: 60_000,
+        encoding: "utf8", env: { ...process.env, AI_HARNESS_ROOT: root, HERDR_ENV: "0", HOME: root, TYPESAFE_API_KEY: "" }, timeout: 60_000,
       });
-      expect(result.status).toBe(0);
+      expect(result.status).toBe(1);
       expect(result.stdout).toContain('"mode": "direct"');
       expect(existsSync(join(root, "state", "auto-improvements.jsonl"))).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
@@ -233,7 +346,9 @@ const action=option("--action");
 let result;
 if(action==="create") result=runs.createExternalRun(control,input,input.cwd,input.objectiveDigest);
 if(action==="claim") result=runs.claimExternalStage(control,input.id,input.stage,input.timeoutMs);
-if(action==="ack") result=runs.acknowledgeExternalStage(control,input.id,input.stage,input.token,input.pane);
+if(action==="observe") result=runs.observeExternalStage(control,input.id,input.stage,input.token,input.pane,input.timeoutMs);
+if(action==="ack") result=runs.acknowledgeExternalStage(control,input.id,input.stage,input.token,input.pane,input.promptPending,input.promptAcknowledged);
+if(action==="prompt-claim") result=runs.claimExternalPrompt(control,input.id,input.stage,input.token);
 if(action==="settle") result=runs.settleExternalStage(control,input.id,input.stage,input.token,input.state,input.handoff);
 if(action==="status") result=runs.inspectExternalRun(control,input.id);
 if(action==="verify") result=runs.verifyExternalStage(control,input.id,input.stage);
@@ -246,27 +361,32 @@ import {appendFileSync,writeFileSync} from "node:fs";
 const args=process.argv.slice(2);
 appendFileSync(${JSON.stringify(log)},JSON.stringify(args.slice(0,2))+"\\n");
 if(args[0]==="pane") console.log(JSON.stringify({result:{pane:{pane_id:"pane-1"}}}));
-if(args[1]==="prompt") {
+if(args[1]==="prompt" || args[1]==="start") {
 const text=args.join(" ");
 const match=text.match(/to (\\/[^:]+\\/implementer\\.md):/);
 if(match) writeFileSync(match[1],"Changed fixture. Checks pending.");
 }
 if(args[1]==="wait") console.log(JSON.stringify({state:"done"}));
+if(args[1]==="get") console.log(JSON.stringify({result:{agent:{name:args[2],agent:"codex",pane_id:"pane-1",agent_status:"done"}}}));
+if(args[1]==="read") console.log(process.env.TRUST_BLOCKED==="1"?"1. Trust and continue":"Ask Codex to do anything");
 `, { mode: 0o700 });
     const env = { ...process.env, PATH: bin + ":" + process.env.PATH, AI_HARNESS_ROOT: root,
-      HERDR_BIN_PATH: herdr, HERDR_ENV: "1", HOME: root, TYPESAFE_API_KEY: "",
-      HERDR_JEV_ALLOW_ALIASES: "1", HERDR_JEV_BIN_CODEX: reviewer };
+      HERDR_BIN_PATH: herdr, HERDR_ENV: "1", HERDR_JEV_SOURCE_PANE_ID: "pane-1", HOME: root, TYPESAFE_API_KEY: "",
+      HERDR_JEV_ALLOW_ALIASES: "1", HERDR_JEV_BIN_CODEX: reviewer, TRUST_BLOCKED: "1" };
     try {
       const result = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "route", "architecture fixture", "--client", "codex", "--triad", "--model", "advisor", "--available-models", "executor,reviewer", "--wait"], {
         encoding: "utf8", env, cwd: repo, timeout: 60_000,
       });
-      expect(result.status).toBe(0);
+      expect(result.status).toBe(1);
       const parsed = JSON.parse(result.stdout.slice(result.stdout.indexOf('{\n')));
-      expect(parsed.error).toBeUndefined();
-      expect(parsed.run.stages.map((stage: any) => stage.state)).toEqual(["reported", "queued"]);
-      const resumed = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "run-resume", parsed.run.id], { encoding: "utf8", env, cwd: repo, timeout: 60_000 });
+      expect(parsed.error).toContain("trust confirmation");
+      expect(parsed.run.stages.map((stage: any) => stage.state)).toEqual(["blocked", "queued"]);
+      env.TRUST_BLOCKED = "0";
+      env.HERDR_JEV_SOURCE_PANE_ID = "closed-caller";
+      const resumed = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "run-resume", parsed.run.id, "--cwd", repo], { encoding: "utf8", env, cwd: root, timeout: 60_000 });
       expect(resumed.status).toBe(0);
       expect(JSON.parse(resumed.stdout).run.stages[0].state).toBe("reported");
+      env.HERDR_JEV_SOURCE_PANE_ID = "pane-1";
       const verified = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "run-resume", parsed.run.id, "--verify-command-json", verify], { encoding: "utf8", env, cwd: repo, timeout: 60_000 });
       expect(verified.status).toBe(0);
       expect(JSON.parse(verified.stdout).error).toBeUndefined();
@@ -274,6 +394,7 @@ if(args[1]==="wait") console.log(JSON.stringify({state:"done"}));
       const calls = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
       expect(calls.filter((args) => args[1] === "start")).toHaveLength(1);
       expect(calls.filter((args) => args[1] === "wait")).toHaveLength(1);
+      expect(calls.filter((args) => args[1] === "prompt")).toHaveLength(1);
       expect(existsSync(join(root, "state", "auto-improvements.jsonl"))).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   }, 60_000);
