@@ -59,6 +59,7 @@ export async function calibrateJevLatency(
   const latencies: number[] = [];
 
   for (let i = 0; i < samples; i++) {
+    client.clearCache();
     const res = await client.ask(testPayload.state, testPayload.questions);
     latencies.push(res.jevMs);
     onProgress?.(i + 1, samples, res.jevMs);
