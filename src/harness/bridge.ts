@@ -139,3 +139,8 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
     })]));
   } catch { return []; }
 }
+
+export function hasExhaustedUsageQuota(client: string, observations = readUsageQuota()): boolean {
+  return observations.some((value: any) => value?.provider === client && value.scope === "account"
+    && value.freshness === "fresh" && value.status === "exhausted");
+}

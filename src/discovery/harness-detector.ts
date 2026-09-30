@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import type { BaseClientKind } from "../types/index.js";
 import { BASE_CLIENTS, resolveClientExecutable } from "../config/aliases.js";
 import { loadBaseCatalog, loadQuotaRecords } from "../config/catalog.js";
+import { hasExhaustedUsageQuota } from "../harness/bridge.js";
 
 export interface DetectedHarness {
   client: BaseClientKind;
@@ -98,7 +99,8 @@ export async function detectInstalledHarnesses(): Promise<DetectedHarness[]> {
     let quotaStatus: "healthy" | "degraded" | "exhausted" | "unconfigured" = "healthy";
     let healthy = false;
 
-    const envExhausted = process.env[`HERDR_JEV_${client.toUpperCase()}_EXHAUSTED`] === "1";
+    const envExhausted = process.env[`HERDR_JEV_${client.toUpperCase()}_EXHAUSTED`] === "1"
+      || (client === "codex" && hasExhaustedUsageQuota("codex"));
     const isOpencode = client === "opencode";
     const isOpencodeEnabled = process.env.HERDR_JEV_ENABLE_OPENCODE === "1";
 
@@ -131,7 +133,7 @@ export async function detectInstalledHarnesses(): Promise<DetectedHarness[]> {
       version,
       quotaStatus,
       healthy,
-      availableModels: available,
+      availableModels: quotaStatus === "exhausted" ? [] : available,
       exhaustedModels: clientExhausted,
     });
   }

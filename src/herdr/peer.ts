@@ -5,6 +5,7 @@ import { resolveBaseClientKind, BASE_CLIENTS, loadClientAliases } from "../confi
 import { createHerdrClient, requiresTrustConfirmation, readHerdrObservedState, type HerdrClient } from "./client.js";
 import type { ClientKind, RoleKind, ReasoningEffort } from "../types/index.js";
 import { reserveHerdrHandle } from "./reservation.js";
+import { hasExhaustedUsageQuota } from "../harness/bridge.js";
 
 export async function resolvePeerStage(input: { prompt: string; source: ClientKind; target?: ClientKind; role?: RoleKind; model?: string; effort?: string; crossHarness?: string }) {
   if (!input.prompt?.trim()) throw new Error("A nonempty peer prompt is required");
@@ -21,6 +22,7 @@ export async function resolvePeerStage(input: { prompt: string; source: ClientKi
   const client = input.target ?? resolveDelegatedClient(input.source, role, { triage,
     config }).client;
   if (!BASE_CLIENTS.includes(client as any) && !loadClientAliases()[client]) throw new Error(`Unknown peer harness: ${client}`);
+  if (resolveBaseClientKind(client) === "codex" && hasExhaustedUsageQuota("codex")) throw new Error("Codex account quota is exhausted in a fresh usage observation; select another permitted peer");
   if (client === "kiro" && !input.model?.trim()) throw new Error("Kiro peer requires a verified model from kiro-cli chat --list-models --format json");
   const stage = client === "kiro"
     ? { role, model: input.model!.trim(), effort: (input.effort ?? triage.effort) as ReasoningEffort, extraFlags: [] as string[], description: "Kiro peer with explicit model; native scalar effort unavailable" }

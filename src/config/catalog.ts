@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { hasExhaustedUsageQuota } from "../harness/bridge.js";
 import type { ClientKind, RoleKind, ReasoningEffort } from "../types/index.js";
 
 export interface ModelCatalogEntry {
@@ -195,6 +196,7 @@ export function resolveActiveModel(
 }
 
 export function isClientExhausted(client: ClientKind, role: RoleKind): boolean {
+  if (resolveBaseClientKind(client) === "codex" && hasExhaustedUsageQuota("codex")) return true;
   if (resolveBaseClientKind(client) === "kiro" && !loadBaseCatalog().clients.kiro?.[role]) return true;
   return resolveActiveModel(client, role).allExhausted;
 }
