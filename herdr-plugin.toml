@@ -11,6 +11,32 @@ description = "Jev-driven multi-model triage and triad orchestration (Advisor ->
 platforms = ["linux", "macos"]
 
 [[panes]]
+id = "assistant"
+title = "Jev Lantern"
+placement = "tab"
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/assistant.sh\""]
+
+[[panes]]
+id = "overview"
+title = "Jev Radar"
+placement = "overlay"
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/overview.sh\""]
+
+[[actions]]
+id = "assistant"
+title = "Jev: Lantern assistant"
+description = "Control existing work through chat and Jev routing"
+contexts = ["global"]
+command = ["env", "HERDR_JEV_PLACEMENT=tab", "bash", "herdr-plugin/open-pane.sh", "assistant"]
+
+[[actions]]
+id = "overview"
+title = "Jev: Radar overview"
+description = "Project, worktree branch, status and weekly quota without model calls"
+contexts = ["global"]
+command = ["env", "HERDR_JEV_PLACEMENT=tab", "bash", "herdr-plugin/open-pane.sh", "overview"]
+
+[[panes]]
 id = "route"
 title = "Route a task (Jev)"
 placement = "overlay"
@@ -62,3 +88,32 @@ description = "Inspect models, check fallback chains, and auto-classify new mode
 contexts = ["global"]
 command = ["bash", "herdr-plugin/open-pane.sh", "models"]
 
+[[actions]]
+id = "routines-status"
+title = "Jev: Routines status"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "herdr-routines.status"]
+
+[[actions]]
+id = "routines-list"
+title = "Jev: Routines list"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "herdr-routines.list"]
+
+[[actions]]
+id = "routines-validate"
+title = "Jev: Routines validate"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "herdr-routines.validate"]
+
+[[actions]]
+id = "routines-start"
+title = "Jev: Routines start"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "herdr-routines.start"]
+
+[[actions]]
+id = "routines-stop"
+title = "Jev: Routines stop"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "herdr-routines.stop"]

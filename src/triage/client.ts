@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { choice, noul } from "@typesafe-ai/sdk";
-import { ResilientJevClient, getGlobalJevClient } from "./jev-client.js";
+import { JevError, ResilientJevClient, getGlobalJevClient } from "./jev-client.js";
 import { scoreQuantile, probabilityMargin } from "./quantile.js";
 import type { TaskComplexity, ReasoningEffort, TriageDecision } from "../types/index.js";
 
@@ -108,7 +108,8 @@ export async function triageTaskWithJev(
     };
   } catch (err) {
     const latencyMs = Date.now() - startTime;
-    return createDeterministicFallback(taskDescription, `network-exception: ${String(err)}`, latencyMs);
+    const failure = err instanceof JevError ? err.failure : "network";
+    return createDeterministicFallback(taskDescription, `${failure}-exception: ${String(err)}`, latencyMs);
   }
 }
 
