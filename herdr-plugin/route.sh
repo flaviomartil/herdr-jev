@@ -16,11 +16,16 @@ if [ -z "${task// /}" ]; then
 fi
 
 echo
-read -r -p "client (claude/codex/antigravity) [claude]: " client || client=""
-client="${client:-claude}"
+read -r -p "client (empty = source agent): " client || client=""
+args=()
+if [ -n "$client" ]; then args+=(--client "$client"); fi
+read -r -p "exact advisor model (empty = detected): " model || model=""
+if [ -n "$model" ]; then args+=(--model "$model"); fi
+read -r -p "layout (split/tab) [split]: " layout || layout=""
+if [ "${layout:-split}" = "tab" ]; then args+=(--tab); fi
 
 echo
-if jev_cli route "$task" --client "$client"; then
+if jev_cli route "$task" "${args[@]}"; then
   notify "Herdr-Jev" "Launched agent for: ${task:0:60}" done
 else
   notify "Herdr-Jev" "Routing failed (see pane for details)" request

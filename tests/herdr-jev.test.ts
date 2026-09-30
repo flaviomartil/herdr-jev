@@ -115,7 +115,7 @@ describe("Agent Command Builder", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["claude", "--model", "sonnet-5"]);
+    expect(cmd).toEqual(["claude", "--model", "sonnet-5", "--effort", "high"]);
   });
 
   it("builds codex command with reasoning effort config flag", () => {
@@ -137,7 +137,7 @@ describe("Agent Command Builder", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["agy"]);
+    expect(cmd).toEqual(["agy", "--model", "gemini-3-8-flash", "--effort", "high"]);
     expect(mapClientToHerdrKind("antigravity")).toBe("agy");
   });
 });
@@ -282,10 +282,10 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
     };
 
     const interactiveCmd = buildInlineCommand("claude", stage, "Analyze authentication flow");
-    expect(interactiveCmd).toEqual(["claude", "--model", "sonnet-5", "Analyze authentication flow"]);
+    expect(interactiveCmd).toEqual(["claude", "--model", "sonnet-5", "--effort", "medium", "Analyze authentication flow"]);
 
     const nonInteractiveCmd = buildInlineCommand("claude", stage, "Analyze authentication flow", true);
-    expect(nonInteractiveCmd).toEqual(["claude", "-p", "Analyze authentication flow", "--model", "sonnet-5"]);
+    expect(nonInteractiveCmd).toEqual(["claude", "-p", "Analyze authentication flow", "--model", "sonnet-5", "--effort", "medium"]);
   });
 
   it("builds inline commands for codex with extra flags in both modes", () => {
@@ -329,10 +329,10 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
     };
 
     const interactiveCmd = buildInlineCommand("antigravity", stage, "Scan repository structure");
-    expect(interactiveCmd).toEqual(["agy", "-i", "Scan repository structure"]);
+    expect(interactiveCmd).toEqual(["agy", "-i", "Scan repository structure", "--model", stage.model, "--effort", "high"]);
 
     const nonInteractiveCmd = buildInlineCommand("antigravity", stage, "Scan repository structure", true);
-    expect(nonInteractiveCmd).toEqual(["agy", "-p", "Scan repository structure"]);
+    expect(nonInteractiveCmd).toEqual(["agy", "-p", "Scan repository structure", "--model", stage.model, "--effort", "high"]);
   });
 });
 
@@ -568,7 +568,7 @@ describe("Client Aliases & Executable Resolution", () => {
       description: "implementer",
     };
     const cmd = buildAgentCommand("claude-px", stage);
-    expect(cmd).toEqual(["claude-px", "--model", "sonnet-5"]);
+    expect(cmd).toEqual(["claude-px", "--model", "sonnet-5", "--effort", "high"]);
 
     delete process.env.HERDR_JEV_ALLOW_ALIASES;
   });
@@ -659,7 +659,8 @@ describe("Harness & Quota Detection & Auto-Config", () => {
   it("detects installed harnesses and probes available models", async () => {
     const harnesses = await detectInstalledHarnesses();
     expect(Array.isArray(harnesses)).toBe(true);
-    expect(harnesses.length).toBe(6);
+    expect(harnesses.map(h => h.client)).toContain("kiro");
+    expect(harnesses.length).toBe(7);
 
     const claudeHarness = harnesses.find((h) => h.client === "claude");
     expect(claudeHarness).toBeDefined();
@@ -784,9 +785,5 @@ describe("Harness & Quota Detection & Auto-Config", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 });
-
-
-
-
 
 

@@ -1,4 +1,4 @@
-export type BaseClientKind = "claude" | "codex" | "antigravity" | "cursor" | "opencode" | "kimi";
+export type BaseClientKind = "claude" | "codex" | "antigravity" | "cursor" | "opencode" | "kimi" | "kiro";
 export type ClientKind = BaseClientKind | (string & {});
 
 export type TaskComplexity = "trivial" | "routine" | "moderate" | "architectural";

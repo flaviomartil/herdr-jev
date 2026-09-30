@@ -9,10 +9,11 @@ export type HerdrObservedState = HerdrAgentState | "pending" | "timeout";
 const HERDR_COMPLETION_STATES: readonly HerdrCompletionState[] = ["done", "blocked", "unknown"];
 
 export interface HerdrClient {
-  splitCurrent(options?: { direction?: "right" | "down" }): Promise<HerdrCommandResult>;
+  splitCurrent(options?: { direction?: "right" | "down"; paneId?: string; cwd?: string }): Promise<HerdrCommandResult>;
+  createTab?(options: { label: string; cwd: string; workspaceId?: string }): Promise<HerdrCommandResult>;
   startAgent(input: {
     name: string;
-    kind: "claude" | "codex" | "cursor" | "opencode" | "agy" | "kimi";
+    kind: "claude" | "codex" | "cursor" | "opencode" | "agy" | "kimi" | "kiro";
     paneId: string;
     agentArgs: string[];
   }): Promise<HerdrCommandResult>;
@@ -20,6 +21,8 @@ export interface HerdrClient {
     target: string;
     text: string;
     wait?: boolean;
+    waitForStart?: boolean;
+    waitForReply?: boolean;
     until?: HerdrAgentState[];
     timeoutMs?: number;
   }): Promise<HerdrCommandResult>;
@@ -27,8 +30,11 @@ export interface HerdrClient {
     target: string;
     until?: HerdrCompletionState[];
     timeoutMs?: number;
+    waitForReply?: boolean;
   }): Promise<HerdrCommandResult>;
   closePane(paneId: string): Promise<HerdrCommandResult>;
+  readAgent?(target: string, lines?: number, source?: "visible" | "recent"): Promise<HerdrCommandResult>;
+  getAgent?(target: string): Promise<HerdrCommandResult>;
   notify(title: string, body: string, sound?: string): Promise<HerdrCommandResult>;
 }
 
@@ -46,9 +52,14 @@ export function createProcessCommandAdapter(
       const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
       let stdout = "";
       let stderr = "";
+      let timedOut = false;
+      const nativeTimeout = Number(args[args.indexOf("--timeout") + 1]);
+      const deadline = args.includes("--timeout") && Number.isSafeInteger(nativeTimeout) && nativeTimeout > 0
+        ? Math.max(timeoutMs, nativeTimeout + 2000) : timeoutMs;
       const timer = setTimeout(() => {
+        timedOut = true;
         child.kill("SIGKILL");
-      }, timeoutMs);
+      }, deadline);
 
       child.stdout?.on("data", (chunk: Buffer) => {
         stdout += chunk.toString("utf8");
@@ -63,7 +74,7 @@ export function createProcessCommandAdapter(
       child.on("close", (code) => {
         clearTimeout(timer);
         const exit = code ?? 1;
-        resolve({ ok: exit === 0, code: exit, stdout, stderr });
+        resolve({ ok: exit === 0, code: exit, stdout, stderr: timedOut ? `${stderr}\ncommand timed out; acknowledgement unknown` : stderr });
       });
     });
 }
@@ -82,8 +93,6 @@ function completionStateArgs(until?: readonly HerdrAgentState[], timeoutMs?: num
 
 export function readHerdrObservedState(result: HerdrCommandResult): HerdrObservedState | null {
   const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  if (/\b(?:timeout|timed[ -]?out)\b/.test(output)) return "timeout";
-  if (/\bpending\b/.test(output)) return "pending";
   try {
     const parsed = JSON.parse(result.stdout) as {
       state?: unknown;
@@ -110,6 +119,8 @@ export function readHerdrObservedState(result: HerdrCommandResult): HerdrObserve
     if (state === "idle" || state === "working" || state === "blocked" || state === "done" || state === "unknown") return state;
   } catch {
   }
+  if (/\b(?:timeout|timed[ -]?out)\b/.test(output)) return "timeout";
+  if (/\bpending\b/.test(output)) return "pending";
   for (const state of ["blocked", "done", "unknown", "working", "idle"] as const) {
     if (new RegExp(`\\b${state}\\b`).test(output)) return state;
   }
@@ -118,7 +129,13 @@ export function readHerdrObservedState(result: HerdrCommandResult): HerdrObserve
 
 export function classifyHerdrCommandFailure(result: HerdrCommandResult): "rejected" | "unknown" {
   const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  return /(?:transport|timeout|timed[ -]?out|econn|eof|socket|spawn|enoent|closed)/.test(output) ? "unknown" : "rejected";
+  return /(?:transport|timeout|timed[ -]?out|econn|eof|socket|spawn|enoent|closed|agent_not_ready|agent_blocked|agent_prompt_stalled)/.test(output) ? "unknown" : "rejected";
+}
+
+export function requiresTrustConfirmation(result: HerdrCommandResult): boolean {
+  return /^\s*(?:[❯>]\s*)?\d+[.)]\s*Trust and continue\s*$/im.test(result.stdout)
+    || (/^\s*(?:[❯>]\s*)?(?:\d+[.)]\s*)?Yes, I trust (?:this|the) (?:folder|directory|files)\s*$/im.test(result.stdout)
+      && /Enter to confirm|Press enter/i.test(result.stdout));
 }
 
 function waitResult(result: HerdrCommandResult): HerdrCommandResult {
@@ -141,11 +158,17 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
         herdrBin,
         "pane",
         "split",
-        "--current",
+        ...(options?.paneId ? ["--pane", options.paneId] : ["--current"]),
         "--direction",
         options?.direction ?? "right",
+        "--cwd",
+        options?.cwd ?? process.cwd(),
         "--no-focus",
       ]);
+    },
+    createTab(options) {
+      return runCommand([herdrBin, "tab", "create", "--label", options.label, "--cwd", options.cwd,
+        ...(options.workspaceId ? ["--workspace", options.workspaceId] : []), "--no-focus"]);
     },
     startAgent(input) {
       return runCommand([
@@ -164,12 +187,25 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
     prompt(input) {
       const argv = [herdrBin, "agent", "prompt", input.target, input.text];
       if (input.wait === true) {
+        if (input.waitForStart) {
+          argv.push("--wait", ...buildStateArgs(["working", "blocked", "unknown"], input.timeoutMs ?? 10000));
+          return runCommand(argv).then(result => {
+            if (!result.ok || readHerdrObservedState(result) === "working") return result;
+            return { ...result, ok: false, stderr: `${result.stderr}\nagent_not_ready_after_submission:${readHerdrObservedState(result) ?? "unknown"}` };
+          });
+        }
+        if (input.waitForReply) {
+          argv.push("--wait", ...buildStateArgs(["idle", "done", "blocked", "unknown"], input.timeoutMs));
+          return runCommand(argv);
+        }
         argv.push("--wait", ...completionStateArgs(input.until, input.timeoutMs));
         return runCommand(argv).then(waitResult);
       }
       return runCommand(argv);
     },
     waitFor(input) {
+      if (input.waitForReply) return runCommand([herdrBin, "agent", "wait", input.target,
+        ...buildStateArgs(["idle", "done", "blocked", "unknown"], input.timeoutMs)]);
       return runCommand([
         herdrBin,
         "agent",
@@ -180,6 +216,13 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
     },
     closePane(paneId) {
       return runCommand([herdrBin, "pane", "close", paneId]);
+    },
+    readAgent(target, lines = 40, source = "visible") {
+      if (!Number.isInteger(lines) || lines < 1 || lines > 100000) throw new Error("Invalid terminal line limit");
+      return runCommand([herdrBin, "agent", "read", target, "--source", source, "--lines", String(lines)]);
+    },
+    getAgent(target) {
+      return runCommand([herdrBin, "agent", "get", target]);
     },
     notify(title, body, sound = "none") {
       return runCommand([herdrBin, "notification", "show", title, "--body", body, "--sound", sound]);

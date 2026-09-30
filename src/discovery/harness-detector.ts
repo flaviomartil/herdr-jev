@@ -32,6 +32,7 @@ const CLIENT_BINARY_CANDIDATES: Record<BaseClientKind, string[]> = {
   cursor: ["agent", "cursor"],
   opencode: ["opencode"],
   kimi: ["kimi", "kimi-cli"],
+  kiro: ["kiro-cli"],
 };
 
 /**
@@ -102,7 +103,7 @@ export async function detectInstalledHarnesses(): Promise<DetectedHarness[]> {
     const isOpencodeEnabled = process.env.HERDR_JEV_ENABLE_OPENCODE === "1";
 
     if (foundPath) {
-      if (isOpencode && !isOpencodeEnabled) {
+      if ((isOpencode && !isOpencodeEnabled) || (client === "kiro" && clientModels.length === 0)) {
         quotaStatus = "unconfigured";
         healthy = false;
       } else if (envExhausted || (clientModels.length > 0 && available.length === 0)) {

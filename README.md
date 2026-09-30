@@ -1,5 +1,13 @@
 # Herdr-Jev
 
+Kiro peers use native Herdr kind `kiro` and executable `kiro-cli chat --trust-all-tools`. Authenticate with `kiro-cli login`, discover native model IDs, then supply `subagent --target kiro --model <verified-id> --tab` under an allowed peer mapping. Kiro remains unconfigured for automatic model selection until a verified role catalog exists; it never inherits a Claude model or scalar effort flag. The shared AI Harness installs the `ai-harness` Kiro agent and its MCP/skill context.
+
+Inside Herdr, `plan` and `route` read the source pane's exact model and fresh Codex worker availability. Delegation still requires a matching AI Harness profile. Explicit `--model` overrides advisor discovery; `--available-models` overrides worker availability and may omit the observed advisor. A route without an executable profile exits unsuccessfully instead of reporting an agent launch.
+
+`herdr-jev route "task" --tab` creates a tab; the default creates a sibling split without changing focus. `--source-pane <id>` preserves the advisor pane when routing from an overlay, and `--cwd <repository>` selects the worker repository. Stage effort is passed to both interactive and captured Codex/Claude commands.
+
+For implementation followed by independent review, use `--wait --verify-command-json <checks.json>`, where the file contains a JSON command array such as `["bun", "test"]`. `run-resume <id> --cwd <repository> --verify-command-json <checks.json>` reconciles the existing attempt without launching uncertain work again. Resume renews observation of the same bound agent; a task withheld by a trust dialog is submitted once after the dialog is resolved. A prompt with uncertain acknowledgement is never submitted again automatically.
+
 Jev-driven multi-model triage, calibrated turn routing, and Triad orchestration plugin for Herdr and AI-Harness.
 
 ## Canonical execution through AI Harness
@@ -407,3 +415,22 @@ If the TypeSafe Jev API becomes expensive or unavailable:
    ```bash
    herdr plugin unlink herdr-jev
    ```
+# Persistent agent-to-agent conversations
+
+`herdr-jev subagent "Review this design" --target claude --model sonnet --effort high --tab` opens another harness in a new tab and returns its `agentName`. Continue with `herdr-jev peer-message <agentName> "Compare the alternatives" --wait`, then `herdr-jev peer-read <agentName>`. Both turns use the same native agent session. Use `--split` for a sibling pane. Effort defaults to Jev task triage; explicit target/model/effort are preserved.
+
+MCP agents use `herdr_spawn_subagent` with `target`, `model`, `effort`, and `layout` (`tab` by default), then `herdr_peer_message` and `herdr_peer_read` with the returned handle. Source harness and repository come from the caller pane. `layout: "captured"` explicitly requests a one-shot result. Resolve startup repository trust in the peer pane before sending work; uncertain submission must be inspected rather than automatically retried. A busy peer rejects another turn to avoid confusing responses.
+
+Peer output is a bounded terminal snapshot with a reported `lineLimit` (default 2000), rather than a complete session transcript. Increase CLI `--lines` or MCP `lines` to inspect longer responses. Spawn and nonblocking messages acknowledge an observed working turn before returning; synchronous messages use `--wait`.
+
+Explicit peer operations default to Jev harness selection unless `HERDR_JEV_CROSS_HARNESS` constrains it. `--target` preserves a selected harness. Peer waits default to 15 minutes; configure `--timeout-ms` or MCP `timeoutMs` up to one hour. The process adapter honors that native deadline. Jev `standard` maps to native `medium`; AntiGravity maps `xhigh` to its native `max` effort.
+
+An explicit target that is forbidden by the selected cross-harness configuration fails before launch rather than substituting another client. CLI `--cross-harness` selects the configuration for that invocation.
+
+Use `subagent --name <stable-handle>` or MCP `agentName` when a spawn may be retried. A retry retains an existing native handle and asks for inspection; it never resends a task or creates another tab for that handle. Unnamed spawn requests intentionally create independent peers. After an uncertain result, inspect its returned handle rather than issuing another unnamed spawn.
+
+Named handles are single-dispatch keys. A zero-byte atomic dispatch marker is claimed before pane creation, so an uncertain create without a registered agent also prevents redispatch. Inspect the earlier tabs/panes before choosing a fresh handle; closing an agent does not automatically replay its named request. Runtime fences live beside the native OS reservation files.
+
+Message reservations serialize Herdr-Jev callers. The native Herdr prompt API has no revision condition and accepts messages to working agents; direct native callers or manual terminal input can race the observed status check. Use Herdr-Jev for cooperating agent messages. Output is a terminal snapshot and observed peer status, rather than a turn receipt or verified work result.
+
+Spawn metadata separates `recommendedEffort` from applied native `effort` and `effortApplied`. Codex, Claude, and AntiGravity support scalar effort flags; the recommendation remains advisory for Kimi, Cursor, and OpenCode. An explicit unsupported effort fails rather than pretending to apply it.
