@@ -6,6 +6,7 @@ import { externalRun, harnessCommand, recordAutoImprovement, type DelegationInpu
 import { buildInlineCommand, launchStageInHerdr, type SplitDirectionOption } from "../herdr/launcher.js";
 import { createHerdrClient, readHerdrObservedState, requiresTrustConfirmation } from "../herdr/client.js";
 import type { PipelinePlan, StageSpec } from "../types/index.js";
+import { assertRunId, retryableStages } from "./run-history.js";
 
 interface RunOptions {
   delegation: DelegationInput;
@@ -17,6 +18,7 @@ interface RunOptions {
   sourcePaneId?: string;
   workspaceId?: string;
   cwd?: string;
+  fromFailed?: boolean;
 }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -57,10 +59,10 @@ export async function runPipeline(plan: PipelinePlan, options: RunOptions) {
 }
 
 export async function resumePipeline(id: string, options: RunOptions) {
-  if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("invalid_run_id");
+  assertRunId(id);
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000 || options.timeoutMs > 3_600_000) throw new Error("invalid_timeout");
   const run = externalRun("status", { id });
-  if (realpathSync(resolve(options.cwd ?? process.cwd())) !== run.cwd) throw new Error("resume_repository_mismatch");
+  if (realpathSync(resolve(options.cwd ?? run.cwd)) !== realpathSync(resolve(run.cwd))) throw new Error("resume_repository_mismatch");
   const task = readFileSync(join(homedir(), ".local/state/herdr-jev", id, "objective.md"), "utf8");
   if (Buffer.byteLength(task) > 16_384 || digest(task) !== run.objectiveDigest) throw new Error("resume_objective_changed");
   if (process.env.HERDR_ENV !== "1") return { mode: "preview", run, projection: projectRun(id) };
@@ -73,15 +75,16 @@ async function continueRun(run: any, task: string, options: RunOptions) {
   let outcome: "success" | "partial" | "failed" = "partial";
   let launchError: string | undefined;
   try {
-    for (const entry of run.stages) {
+    const entries = options.fromFailed ? retryableStages(run.stages) : run.stages;
+    for (const entry of entries) {
       if (entry.state === "verified") continue;
-      if (entry.state === "failed") break;
+      if (entry.state === "failed" && !options.fromFailed) break;
       const stage: StageSpec = { role: entry.role, client: run.client, model: entry.model, effort: entry.effort ?? "standard",
         extraFlags: entry.effort ? run.client === "codex" ? ["-c", `model_reasoning_effort="${entry.effort}"`]
           : run.client === "claude" ? ["--effort", entry.effort] : [] : [], description: "AI Harness canonical stage" };
       if (stage.role === "reviewer" && entry.state === "queued" && !options.verifyCommandJson) break;
       let claim = entry.state === "queued" ? externalRun("claim", { id: run.id, stage: stage.role, timeoutMs: options.timeoutMs }) : entry;
-      if (["unknown", "blocked"].includes(entry.state)) {
+      if (["unknown", "blocked"].includes(entry.state) || options.fromFailed && entry.state === "failed") {
         if (!options.wait) break;
         if (stage.role === "implementer") {
           if (!entry.agent || !entry.pane) break;

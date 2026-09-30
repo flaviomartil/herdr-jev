@@ -1,5 +1,8 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
 import { classifyHerdrCommandFailure, createHerdrClient, readHerdrObservedState, requiresTrustConfirmation, type HerdrClient, type HerdrObservedState } from "./client.js";
 import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
@@ -26,7 +29,110 @@ export interface InlineRunResult {
   commandText: string;
 }
 
-export type SplitDirectionOption = "right" | "down" | "auto";
+export type SplitDirectionOption = "right" | "down" | "grid" | "auto";
+
+export type SplitLayoutMode = "right" | "down" | "grid";
+
+type PaneLayoutInput = {
+  result?: { layout?: PaneLayout };
+  layout?: PaneLayout;
+  panes?: PaneLayoutPane[];
+};
+
+type GridSplitPlan = { targetPaneId: string; direction: "right" | "down"; ratio: number };
+type PaneRect = { x: number; y: number; width: number; height: number };
+type PaneLayoutPane = {
+  pane_id?: string;
+  id?: string;
+  rect?: Partial<PaneRect>;
+  owner?: unknown;
+  owned_by?: unknown;
+  plugin?: unknown;
+  plugin_id?: unknown;
+  metadata?: { owner?: unknown; owned_by?: unknown; plugin?: unknown; plugin_id?: unknown };
+};
+type PaneLayout = { area?: Partial<PaneRect>; panes?: PaneLayoutPane[] };
+
+function layoutPanes(input: PaneLayoutInput): Array<{ id: string; rect: PaneRect; owner?: string }> {
+  const layout = input.result?.layout ?? input.layout ?? input;
+  return (layout.panes ?? []).flatMap((pane) => {
+    const id = pane.pane_id ?? pane.id;
+    const rect = pane.rect;
+    return id && rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number"
+      ? [{ id, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, owner: paneOwner(pane) }] : [];
+  });
+}
+
+function paneOwner(pane: PaneLayoutPane): string | undefined {
+  const values = [pane.owner, pane.owned_by, pane.plugin, pane.plugin_id,
+    pane.metadata?.owner, pane.metadata?.owned_by, pane.metadata?.plugin, pane.metadata?.plugin_id];
+  return values.find((value): value is string => typeof value === "string" && value.length > 0);
+}
+
+function layoutArea(input: PaneLayoutInput): Partial<PaneRect> | undefined {
+  const layout = input.result?.layout ?? input.layout ?? { panes: input.panes };
+  return layout.area;
+}
+
+function isLateralPane(
+  pane: { id: string; rect: PaneRect; owner?: string },
+  area: Partial<PaneRect> | undefined,
+  callerPaneId: string,
+  workerPaneIds: Set<string>,
+): boolean {
+  if (pane.id === callerPaneId) return false;
+  if (typeof area?.x === "number" && typeof area.width === "number" && area.width > 0 && pane.rect.width < area.width * 0.35
+    && (pane.rect.x <= area.x || pane.rect.x + pane.rect.width >= area.x + area.width)) return true;
+  const ownedByHerdrJev = pane.owner ? /herdr[-_]jev/i.test(pane.owner) : workerPaneIds.has(pane.id);
+  return !ownedByHerdrJev && typeof area?.width === "number" && typeof area.height === "number"
+    && (pane.rect.width < area.width * 0.25 || pane.rect.height < area.height * 0.25);
+}
+
+export function planGridSplit(layout: PaneLayoutInput, callerPaneId: string, workerPaneIds: string[]): GridSplitPlan {
+  const panes = layoutPanes(layout);
+  const area = layoutArea(layout);
+  const live = new Set(panes.map((pane) => pane.id));
+  const workers = [...new Set(workerPaneIds)].filter((paneId) => live.has(paneId));
+  if (workers.length === 0) return { targetPaneId: callerPaneId, direction: "right", ratio: 0.5 };
+  const workerSet = new Set(workers);
+  const candidates = [callerPaneId, ...workers].flatMap((paneId) => {
+    const pane = panes.find((item) => item.id === paneId);
+    return pane && !isLateralPane(pane, area, callerPaneId, workerSet)
+      ? [{ paneId, area: pane.rect.width * pane.rect.height, width: pane.rect.width, height: pane.rect.height }] : [];
+  });
+  if (workers.length === 1) {
+    const worker = candidates.find((candidate) => candidate.paneId === workers[0]);
+    if (worker) return { targetPaneId: worker.paneId, direction: "down", ratio: 0.5 };
+  }
+  const caller = panes.find((pane) => pane.id === callerPaneId);
+  const callerNarrow = caller && typeof area?.width === "number" && caller.rect.width < area.width * 0.35;
+  const eligible = callerNarrow ? candidates.filter((candidate) => candidate.paneId !== callerPaneId) : candidates;
+  const largest = (eligible.length > 0 ? eligible : candidates).reduce((current, candidate) => candidate.area > current.area ? candidate : current, candidates[0]);
+  if (!largest) return { targetPaneId: callerPaneId, direction: "right", ratio: 0.5 };
+  const direction = workers.length === 1 && largest.paneId !== callerPaneId || workers.length === 2 && largest.paneId === callerPaneId
+    ? "down" : largest.width >= largest.height ? "right" : "down";
+  return { targetPaneId: largest.paneId, direction, ratio: 0.5 };
+}
+
+function gridStatePath(callerPaneId: string): string {
+  const stateDir = process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev");
+  const safePaneId = callerPaneId.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return join(stateDir, "grid", `${safePaneId}.json`);
+}
+
+function readGridWorkers(callerPaneId: string): string[] {
+  try {
+    const value = JSON.parse(readFileSync(gridStatePath(callerPaneId), "utf8"));
+    const workers = Array.isArray(value) ? value : value.workerPaneIds;
+    return Array.isArray(workers) ? workers.filter((paneId): paneId is string => typeof paneId === "string") : [];
+  } catch { return []; }
+}
+
+function writeGridWorkers(callerPaneId: string, workerPaneIds: string[]): void {
+  const path = gridStatePath(callerPaneId);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify({ workerPaneIds: [...new Set(workerPaneIds)] }), { mode: 0o600 });
+}
 
 /**
  * Resolves split pane direction based on CLI option, env var, or Jev role heuristic:
@@ -52,6 +158,20 @@ export function resolveSplitDirection(
     return "down";
   }
   return "right";
+}
+
+export function resolveSplitLayout(
+  role: RoleKind,
+  triage?: TriageDecision,
+  cliOption?: string,
+): SplitLayoutMode {
+  if (cliOption === "right" || cliOption === "down" || cliOption === "grid") return cliOption;
+  const layout = (process.env.HERDR_JEV_LAYOUT ?? "").trim().toLowerCase();
+  if (layout === "grid") return "grid";
+  if (layout === "role") return resolveSplitDirection(role, triage);
+  const legacy = (process.env.HERDR_JEV_SPLIT_DIRECTION ?? "").trim().toLowerCase();
+  if (legacy === "right" || legacy === "down") return legacy;
+  return "grid";
 }
 
 export function parseHerdrPaneId(stdout: string): string | undefined {
@@ -215,12 +335,30 @@ async function launchStageInHerdrAttempt(input: {
   try { claimHerdrSpawn(`spawn:${agentName}`); }
   catch (error) { return { ok: false, ackStatus: "unknown", agentName, commandText,
     error: `Named spawn already attempted or cannot be fenced. Inspect existing tabs/panes before choosing a fresh handle: ${String(error)}` }; }
-  const splitDirection = resolveSplitDirection(input.stage.role, input.triage, input.direction);
+  const splitLayout = resolveSplitLayout(input.stage.role, input.triage, input.direction);
+  let splitDirection: "right" | "down" = splitLayout === "down" ? "down" : "right";
+  let splitPaneId = input.sourcePaneId;
+  let splitRatio: number | undefined;
+  const callerPaneId = input.sourcePaneId ?? process.env.HERDR_PANE_ID;
+  let gridWorkers: string[] = [];
+  if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId && herdr.paneLayout) {
+    const layoutResult = await herdr.paneLayout(callerPaneId);
+    if (!layoutResult.ok) return { ok: false, ackStatus: classifyHerdrCommandFailure(layoutResult), error: `Pane layout failed: ${layoutResult.stderr || layoutResult.stdout}`, commandText };
+    let layout: PaneLayoutInput;
+    try { layout = JSON.parse(layoutResult.stdout); } catch { return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
+    const livePaneIds = new Set(layoutPanes(layout).map((pane) => pane.id));
+    gridWorkers = readGridWorkers(callerPaneId).filter((paneId) => livePaneIds.has(paneId));
+    const plan = planGridSplit(layout, callerPaneId, gridWorkers);
+    splitPaneId = plan.targetPaneId;
+    splitDirection = plan.direction;
+    splitRatio = plan.ratio;
+    writeGridWorkers(callerPaneId, gridWorkers);
+  }
 
   // 1. Split current pane with resolved direction
   const split = input.layout === "tab"
     ? await herdr.createTab?.({ label: agentName, cwd: input.cwd ?? process.cwd(), workspaceId: input.workspaceId })
-    : await herdr.splitCurrent({ direction: splitDirection, paneId: input.sourcePaneId, cwd: input.cwd });
+    : await herdr.splitCurrent({ direction: splitDirection, paneId: splitPaneId, ratio: splitRatio, cwd: input.cwd });
   if (!split) return { ok: false, ackStatus: "rejected", error: "Tab creation unavailable", commandText };
   if (!split.ok) {
     return { ok: false, ackStatus: classifyHerdrCommandFailure(split), completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Pane split failed: ${split.stderr || split.stdout}`, commandText, direction: splitDirection };
@@ -230,6 +368,8 @@ async function launchStageInHerdrAttempt(input: {
   if (!paneId) {
     return { ok: false, ackStatus: "unknown", completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
   }
+
+  if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId) writeGridWorkers(callerPaneId, [...gridWorkers, paneId]);
 
   let releasePane: (() => Promise<void>) | undefined;
   try { releasePane = await reserveHerdrHandle(`pane:${paneId}`); }
@@ -249,6 +389,18 @@ async function launchStageInHerdrAttempt(input: {
     const ackStatus = classifyHerdrCommandFailure(started);
     if (ackStatus === "rejected") await herdr.closePane(paneId);
     return { ok: false, ackStatus, paneCreated: ackStatus === "unknown", promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
+  }
+
+  if (herdr.reportSpawn) {
+    try {
+      const observed = await herdr.reportSpawn(paneId, {
+        jev_parent: input.sourcePaneId ?? process.env.HERDR_PANE_ID ?? "unknown",
+        jev_role: input.stage.role,
+        jev_model: input.stage.model,
+        jev_handle: agentName,
+      });
+      if (!observed.ok) console.error(`Spawn metadata unavailable for ${paneId}: ${observed.stderr}`);
+    } catch (error) { console.error(`Spawn metadata unavailable for ${paneId}: ${String(error)}`); }
   }
 
   // 3. Send initial prompt/handoff immediately into the split pane
