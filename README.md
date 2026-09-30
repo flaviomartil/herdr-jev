@@ -6,7 +6,7 @@ Kiro peers use native Herdr kind `kiro` and executable `kiro-cli chat --trust-al
 
 Inside Herdr, `plan` and `route` read the source pane's exact model and fresh Codex worker availability. Delegation still requires a matching AI Harness profile. Explicit `--model` overrides advisor discovery; `--available-models` overrides worker availability and may omit the observed advisor. A route without an executable profile exits unsuccessfully instead of reporting an agent launch.
 
-`herdr-jev route "task" --tab` creates a tab; the default creates a sibling split without changing focus. `--source-pane <id>` preserves the advisor pane when routing from an overlay, and `--cwd <repository>` selects the worker repository. Stage effort is passed to both interactive and captured Codex/Claude commands.
+`herdr-jev route "task" --tab` creates a tab; the default tiles delegated workers as a balanced grid in the caller's central region without changing focus. Use `--direction right|down` for the existing explicit split behavior, or `HERDR_JEV_LAYOUT=role` to restore role-based auto layout. `--source-pane <id>` preserves the advisor pane when routing from an overlay, and `--cwd <repository>` selects the worker repository. Stage effort is passed to both interactive and captured Codex/Claude commands.
 
 For implementation followed by independent review, use `--wait --verify-command-json <checks.json>`, where the file contains a JSON command array such as `["bun", "test"]`. `run-resume <id> --cwd <repository> --verify-command-json <checks.json>` reconciles the existing attempt without launching uncertain work again. Resume renews observation of the same bound agent; a task withheld by a trust dialog is submitted once after the dialog is resolved. A prompt with uncertain acknowledgement is never submitted again automatically.
 
@@ -122,11 +122,12 @@ Herdr-Jev supports fine-grained configuration via environment variables (or a `.
 | :--- | :--- | :--- | :--- |
 | `TYPESAFE_API_KEY` | String | Vault / Local heuristic | TypeSafe Jev System One semantic triage key (~260ms response). |
 | `TYPESAFE_DEFAULT_MODEL` | String | `jev-1.13.0` | Pinned TypeSafe Jev model version (avoids moving `jev-latest` alias). |
-| `HERDR_JEV_DEADLINE_MS` | Number (ms) | `344` (or calibrated) | Strict deadline for Jev queries (calibrated via `herdr-jev calibrate -w`). |
+| `HERDR_JEV_DEADLINE_MS` | Number (ms) | `1000` (or calibrated) | Strict deadline for Jev queries (calibrated via `herdr-jev calibrate -w`). Deadline fallbacks use `deadline-exception`; network failures use `network-exception`. |
 | `HERDR_JEV_ALLOW_ALIASES` | `0`, `1`, `false`, `true` | `0` (Strict Base) | Security gate: allows custom alias binaries (`claude-px`, `fcc-claude`). |
 | `HERDR_JEV_CROSS_HARNESS` | `0`, `auto`, peer list, JSON | `0` (Self-Only) | Delegation scope: `0` (self), `auto` (Jev assigns), or priority array. |
 | `HERDR_JEV_SPLIT_SUBAGENTS` | `1` (split), `0` (inline) | `1` in Herdr, `0` outside | Subagent UX: side-by-side split pane vs native inline CLI progress. |
 | `HERDR_JEV_SPLIT_DIRECTION` | `auto`, `right`, `down` | `auto` | Split layout: Jev role heuristics (`right` for research, `down` for review). |
+| `HERDR_JEV_LAYOUT` | `grid`, `role` | `grid` | Auto layout mode for delegated workers; `grid` balances panes, `role` restores role-based directions. |
 | `AI_HARNESS_ROOT` | Filesystem path | Auto-discover | Path to `ai-harness-core` repository for auto-improvements. |
 | `HERDR_BIN_PATH` | Binary name / path | `herdr` | Path to Herdr multiplexer executable in system PATH. |
 | `HERDR_PLUGIN_ID` | String | `herdr-jev` | Registered plugin ID inside Herdr runtime. |
@@ -168,6 +169,11 @@ The global `herdr-jev` command is available directly in your PATH:
 ```bash
 # Check status of TypeSafe Jev, Herdr runtime, AI-Harness connection, Subagent Mode, and Peering
 herdr-jev status
+
+# List, inspect, or retry recorded runs
+herdr-jev runs list --limit 20
+herdr-jev runs get <run-id>
+herdr-jev runs retry <run-id> --from-failed --verify-command-json /absolute/path/checks.json
 
 # Probe installed harnesses, model quotas, and recommended cross-harness peering
 herdr-jev detect

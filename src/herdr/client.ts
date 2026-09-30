@@ -9,7 +9,8 @@ export type HerdrObservedState = HerdrAgentState | "pending" | "timeout";
 const HERDR_COMPLETION_STATES: readonly HerdrCompletionState[] = ["done", "blocked", "unknown"];
 
 export interface HerdrClient {
-  splitCurrent(options?: { direction?: "right" | "down"; paneId?: string; cwd?: string }): Promise<HerdrCommandResult>;
+  splitCurrent(options?: { direction?: "right" | "down"; paneId?: string; cwd?: string; ratio?: number }): Promise<HerdrCommandResult>;
+  paneLayout?(paneId: string): Promise<HerdrCommandResult>;
   createTab?(options: { label: string; cwd: string; workspaceId?: string }): Promise<HerdrCommandResult>;
   startAgent(input: {
     name: string;
@@ -35,6 +36,7 @@ export interface HerdrClient {
   closePane(paneId: string): Promise<HerdrCommandResult>;
   readAgent?(target: string, lines?: number, source?: "visible" | "recent"): Promise<HerdrCommandResult>;
   getAgent?(target: string): Promise<HerdrCommandResult>;
+  reportSpawn?(paneId: string, tokens: Record<string, string>): Promise<HerdrCommandResult>;
   notify(title: string, body: string, sound?: string): Promise<HerdrCommandResult>;
 }
 
@@ -161,10 +163,14 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
         ...(options?.paneId ? ["--pane", options.paneId] : ["--current"]),
         "--direction",
         options?.direction ?? "right",
+        ...(options?.ratio === undefined ? [] : ["--ratio", String(options.ratio)]),
         "--cwd",
         options?.cwd ?? process.cwd(),
         "--no-focus",
       ]);
+    },
+    paneLayout(paneId) {
+      return runCommand([herdrBin, "pane", "layout", "--pane", paneId]);
     },
     createTab(options) {
       return runCommand([herdrBin, "tab", "create", "--label", options.label, "--cwd", options.cwd,
@@ -216,6 +222,10 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
     },
     closePane(paneId) {
       return runCommand([herdrBin, "pane", "close", paneId]);
+    },
+    reportSpawn(paneId, tokens) {
+      return runCommand([herdrBin, "pane", "report-metadata", paneId, "--source", "herdr-jev",
+        "--ttl-ms", "86400000", ...Object.entries(tokens).flatMap(([key, value]) => ["--token", `${key}=${value}`])]);
     },
     readAgent(target, lines = 40, source = "visible") {
       if (!Number.isInteger(lines) || lines < 1 || lines > 100000) throw new Error("Invalid terminal line limit");

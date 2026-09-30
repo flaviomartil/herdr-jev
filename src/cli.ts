@@ -9,7 +9,7 @@ import {
   buildAgentCommand,
   shouldSplitSubagents,
   runAgentInline,
-  resolveSplitDirection,
+  resolveSplitLayout,
   nativeStageEffort,
   type SplitDirectionOption,
 } from "./herdr/launcher.js";
@@ -45,6 +45,8 @@ import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
 import { TurnRouter } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
+import { readOverview } from "./herdr/overview.js";
+import { assertRunId, formatRunHistory, listRunHistory } from "./orchestration/run-history.js";
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,6 +85,31 @@ program
   .name("herdr-jev")
   .description("Jev-driven multi-model triage and triad orchestration plugin for Herdr")
   .version("0.1.0");
+
+program
+  .command("overview")
+  .description("Live project, branch, agent and quota overview without model calls")
+  .option("--json", "Output compact JSON")
+  .option("--attention", "Show only agents waiting for input")
+  .option("--watch", "Refresh the dashboard every two seconds")
+  .action(async (options: { json?: boolean; attention?: boolean; watch?: boolean }) => {
+    if (options.watch && options.json) throw new Error("Use --watch or --json, not both");
+    do {
+      const agents = (await readOverview()).filter((agent) => !options.attention || agent.state === "blocked");
+      if (options.json) { console.log(JSON.stringify(agents)); return; }
+      if (options.watch) process.stdout.write("\x1b[H\x1b[J");
+      const marks: Record<string, string> = { working: "●", blocked: "?", done: "✓", idle: "○", unknown: "·" };
+      for (const project of new Set(agents.map((agent) => agent.project))) {
+        console.log(project);
+        for (const agent of agents.filter((item) => item.project === project)) {
+          console.log(`  ${marks[agent.state] ?? "·"} ${agent.state} · ${agent.pane} · ${agent.branch ?? "—"}`);
+          console.log(`    ${agent.model ?? agent.agent} · ${agent.weekly ?? "quota unknown"}${agent.context ? ` · ${agent.context}` : ""}${agent.parent ? ` · ${agent.role} ← ${agent.parent}` : ""}`);
+        }
+      }
+      if (!agents.length) console.log("No matching agents.");
+      if (options.watch) await Bun.sleep(2000);
+    } while (options.watch);
+  });
 
 program
   .command("status")
@@ -214,7 +241,7 @@ program
   .option("--split", "Force execution in a split pane side-by-side")
   .option("--no-split", "Execute subagents inline without splitting pane")
   .option("--wait", "Supervise launched panes until a terminal protocol state")
-  .option("-d, --direction <direction>", "Split direction: auto (Jev decides), right, or down", "auto")
+  .option("-d, --direction <direction>", "Split layout: auto (grid), grid, right, or down", "auto")
   .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
   .action(async (task: string, options: { client?: string; triad?: boolean; split?: boolean; tab?: boolean; sourcePane?: string; cwd?: string; wait?: boolean; direction?: string; crossHarness?: string; model?: string; availableModels?: string; timeoutMs: string; verifyCommandJson?: string }) => {
     const context = await resolveHerdrContext({ client: options.client, model: options.model,
@@ -259,9 +286,45 @@ program
   .option("--verify-command-json <path>", "Deterministic check argv file")
   .option("--cwd <path>", "Original worker repository")
   .action(async (id: string, options: { timeoutMs: string; verifyCommandJson?: string; cwd?: string }) => {
-    const cwd = options.cwd ?? (await resolveHerdrContext({})).cwd;
     const result = await resumePipeline(id, { delegation: {}, wait: true,
-      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd });
+      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd });
+    console.log(JSON.stringify(result, null, 2));
+    if ("error" in result || result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state))) process.exitCode = 1;
+  });
+
+const runsCommand = program.command("runs").description("Inspect and retry recorded runs");
+
+runsCommand
+  .command("list")
+  .description("List recorded runs newest first")
+  .option("--limit <n>", "Maximum number of runs", "20")
+  .option("--json", "Output JSON")
+  .action((options: { limit: string; json?: boolean }) => {
+    const runs = listRunHistory(undefined, Number(options.limit));
+    if (options.json) console.log(JSON.stringify(runs, null, 2));
+    else for (const run of runs) console.log(formatRunHistory(run));
+  });
+
+runsCommand
+  .command("get <id>")
+  .description("Alias of run-status")
+  .action((id: string) => {
+    assertRunId(id);
+    console.log(JSON.stringify({ run: externalRun("status", { id }), projection: projectRun(id) }, null, 2));
+  });
+
+runsCommand
+  .command("retry <id>")
+  .description("Retry failed, unknown, and blocked stages")
+  .option("--from-failed", "Retry only failed, unknown, and blocked stages")
+  .option("--timeout-ms <ms>", "Deadline for a newly claimed stage", "900000")
+  .option("--verify-command-json <path>", "Deterministic check argv file")
+  .option("--cwd <path>", "Original worker repository")
+  .action(async (id: string, options: { fromFailed?: boolean; timeoutMs: string; verifyCommandJson?: string; cwd?: string }) => {
+    assertRunId(id);
+    if (!options.fromFailed) throw new Error("from_failed_required");
+    const result = await resumePipeline(id, { delegation: {}, wait: true, fromFailed: true,
+      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd });
     console.log(JSON.stringify(result, null, 2));
     if ("error" in result || result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state))) process.exitCode = 1;
   });
@@ -280,7 +343,7 @@ program
   .option("--source-pane <id>", "Caller pane")
   .option("--cwd <path>", "Peer repository")
   .option("--no-split", "Execute subagent inline in current terminal without splitting pane")
-  .option("-d, --direction <direction>", "Split direction: auto (Jev decides), right, or down", "auto")
+  .option("-d, --direction <direction>", "Split layout: auto (grid), grid, right, or down", "auto")
   .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
   .option("-p, --print", "Run non-interactively in inline mode (print output directly)")
   .action(async (promptText: string, options: { client?: string; target?: string; role: string; split?: boolean; tab?: boolean; name?: string; model?: string; effort?: string; sourcePane?: string; cwd?: string; direction?: string; crossHarness?: string; print?: boolean }) => {
@@ -313,7 +376,7 @@ program
       }
 
       const herdr = createHerdrClient();
-      const dir = resolveSplitDirection(role, undefined, options.direction);
+      const dir = resolveSplitLayout(role, undefined, options.direction);
       console.log(`\n[herdr-jev] Opening ${options.tab ? "tab" : `split (${dir})`} for ${role} peer (${effectiveClient}/${stage.model}, Jev effort: ${stage.effort})...`);
       const result = await launchStageInHerdr({
         client: effectiveClient,

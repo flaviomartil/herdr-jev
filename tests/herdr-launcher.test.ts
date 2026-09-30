@@ -54,6 +54,23 @@ afterEach(() => {
 });
 
 describe("Herdr launch acknowledgement", () => {
+  it("reports spawn lineage without exposing the task or repeating dispatch", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    const agentName = `observed-peer-${process.pid}`;
+    let reports = 0;
+    herdr.reportSpawn = async (pane, tokens) => {
+      reports++;
+      expect(pane).toBe("pane-42");
+      expect(tokens).toEqual({ jev_parent: "parent-1", jev_role: stage.role, jev_model: stage.model, jev_handle: agentName });
+      return commandResult(false, "", "metadata unavailable");
+    };
+    const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "private task", sourcePaneId: "parent-1", agentName, herdr });
+    expect(result.ok).toBe(true);
+    expect(reports).toBe(1);
+    expect(herdr.promptCalls).toBe(1);
+  });
+
   it("preserves the stage effort in interactive and captured commands", () => {
     expect(buildAgentCommand("codex", stage)).toContain('model_reasoning_effort="xhigh"');
     expect(buildInlineCommand("codex", stage, "task", true)).toContain('model_reasoning_effort="xhigh"');
@@ -370,9 +387,10 @@ if(args[1]==="wait") console.log(JSON.stringify({state:"done"}));
 if(args[1]==="get") console.log(JSON.stringify({result:{agent:{name:args[2],agent:"codex",pane_id:"pane-1",agent_status:"done"}}}));
 if(args[1]==="read") console.log(process.env.TRUST_BLOCKED==="1"?"1. Trust and continue":"Ask Codex to do anything");
 `, { mode: 0o700 });
-    const env = { ...process.env, PATH: bin + ":" + process.env.PATH, AI_HARNESS_ROOT: root,
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("HERDR_")));
+    Object.assign(env, { PATH: bin + ":" + process.env.PATH, AI_HARNESS_ROOT: root,
       HERDR_BIN_PATH: herdr, HERDR_ENV: "1", HERDR_JEV_SOURCE_PANE_ID: "pane-1", HOME: root, TYPESAFE_API_KEY: "",
-      HERDR_JEV_ALLOW_ALIASES: "1", HERDR_JEV_BIN_CODEX: reviewer, TRUST_BLOCKED: "1" };
+      HERDR_JEV_ALLOW_ALIASES: "1", HERDR_JEV_BIN_CODEX: reviewer, TRUST_BLOCKED: "1" });
     try {
       const result = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "route", "architecture fixture", "--client", "codex", "--triad", "--model", "advisor", "--available-models", "executor,reviewer", "--wait"], {
         encoding: "utf8", env, cwd: repo, timeout: 60_000,
