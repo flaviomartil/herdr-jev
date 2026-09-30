@@ -17,7 +17,7 @@ export const DEFAULT_JEV_MODEL = process.env.TYPESAFE_DEFAULT_MODEL ?? "jev-1.13
 
 export const DEADLINE_ENV = "HERDR_JEV_DEADLINE_MS";
 export const HARNESS_DEADLINE_ENV = "HARNESS_ROUTER_DEADLINE_MS";
-export const FALLBACK_DEADLINE_MS = 600;
+export const FALLBACK_DEADLINE_MS = 1000;
 
 export function getResolvedDeadlineMs(): number {
   const envVal = Number(process.env[DEADLINE_ENV] ?? process.env[HARNESS_DEADLINE_ENV]);
