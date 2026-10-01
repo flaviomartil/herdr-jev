@@ -106,6 +106,7 @@ process.exit(0);
       HERDR_BIN_PATH: fakeHerdr,
       HERDR_JEV_CLI: fakeCli,
       SMOKE_LIVE_JEV: "0",
+      HERDR_JEV_TEST_GUARD: "1",
     };
 
     const res = spawnSync("bash", [smokeScript], { env, cwd: repoDir, encoding: "utf8", timeout: 60000 });
@@ -121,7 +122,7 @@ process.exit(0);
     expect(res.stdout).toContain("ok notify --dry-run --json");
     expect(res.stdout).toContain("ok notify --release --pane <fake>");
     expect(res.stdout).toContain("ok the Office renders");
-    expect(res.stdout).toContain("skip test guard present");
+    expect(res.stdout).toContain("ok test guard present");
     expect(res.stdout).not.toContain("FAIL");
   } finally {
     rmSync(tempBinDir, { recursive: true, force: true });
@@ -163,6 +164,7 @@ process.exit(0);
       HERDR_BIN_PATH: fakeHerdr,
       HERDR_JEV_CLI: fakeCli,
       SMOKE_LIVE_JEV: "0",
+      HERDR_JEV_TEST_GUARD: "1",
     };
 
     const res = spawnSync("bash", [smokeScript], { env, cwd: repoDir, encoding: "utf8", timeout: 60000 });
@@ -192,6 +194,7 @@ test("smoke.sh prints skip and exits 0 when Herdr is unreachable", () => {
       HERDR_BIN_PATH: fakeHerdr,
       HERDR_JEV_CLI: fakeCli,
       SMOKE_LIVE_JEV: "0",
+      HERDR_JEV_TEST_GUARD: "1",
     };
 
     const res = spawnSync("bash", [smokeScript], { env, cwd: repoDir, encoding: "utf8", timeout: 60000 });
@@ -207,7 +210,7 @@ test("smoke.sh prints skip and exits 0 when Herdr is unreachable", () => {
     expect(res.stdout).toContain("ok notify --dry-run --json");
     expect(res.stdout).toContain("ok notify --release --pane <fake>");
     expect(res.stdout).toContain("ok the Office renders");
-    expect(res.stdout).toContain("skip test guard present");
+    expect(res.stdout).toContain("ok test guard present");
     expect(res.stdout).not.toContain("FAIL");
   } finally {
     rmSync(tempBinDir, { recursive: true, force: true });
