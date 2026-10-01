@@ -118,9 +118,11 @@ program
 program
   .command("agents")
   .description("Show tracked swarm agents grouped by project with live state, git change counts, and run history")
+  .option("--caller <pane>", "Caller pane ID")
+  .option("--all", "Show agents for all callers")
   .option("--json", "Output compact JSON")
-  .action(async (options: { json?: boolean }) => {
-    const callerPaneId = process.env.HERDR_PANE_ID;
+  .action(async (options: { caller?: string; all?: boolean; json?: boolean }) => {
+    const callerPaneId = options.all ? undefined : (options.caller ?? process.env.HERDR_PANE_ID);
     const groups = await buildAgentsView(callerPaneId);
     if (options.json) {
       console.log(JSON.stringify(groups));

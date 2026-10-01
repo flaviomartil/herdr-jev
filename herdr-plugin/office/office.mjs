@@ -36,10 +36,21 @@ import { readDirt } from './src/dirt.mjs';
 import { parseGauge, compactionNews } from './src/head.mjs';
 import { Graphics, graphicsLog } from './src/graphics.mjs';
 import { timeChart, attentionStrip } from './src/charts.mjs';
+import { classifyPanes, aggregateSwarmBadge, demoSwarmData } from './src/swarm.mjs';
 
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
 const ONCE = argv.has('--once');
+let panelArg = null;
+for (let i = 0; i < process.argv.length; i++) {
+  const a = process.argv[i];
+  if (a === '--panel') {
+    const next = process.argv[i + 1];
+    panelArg = next && !next.startsWith('-') ? next : true;
+  } else if (a.startsWith('--panel=')) {
+    panelArg = a.slice(8) || true;
+  }
+}
 // Toasts are on by default. The whole reason to watch the office is to find out
 // that somebody is waiting on you, and a default that has to be switched on by
 // editing an installed plugin's manifest is a default nobody ever gets.
@@ -83,6 +94,96 @@ const herdrJevBin = process.env.HERDR_JEV_BIN || 'herdr-jev';
 const JEV_POLL_MS = 3000;
 let jevCache = new Map();
 let lastJevPoll = 0;
+let swarmPanel = null;
+let jevAgentsCache = new Map();
+let jevSubagentPaneIds = new Set();
+let jevPolling = false;
+
+function getSubagentsFor(primaryId) {
+  if (DEMO) {
+    const { demoSubagents } = demoSwarmData();
+    return demoSubagents.get(primaryId) || [];
+  }
+  return jevAgentsCache.get(primaryId) || [];
+}
+
+function openSwarmPanel(deskId) {
+  const person = roster.find(deskId) || roster.people.find((p) => p.name.toLowerCase() === String(deskId).toLowerCase());
+  if (!person) return;
+  selectedId = person.id;
+  const subs = getSubagentsFor(person.id);
+  swarmPanel = { id: person.id, subagents: subs || [], closeConfirm: null };
+  detail = null;
+}
+
+async function focusSubagentPane(paneId) {
+  if (!paneId) return;
+  if (DEMO) {
+    note(`demo mode: would focus ${paneId}`);
+    return;
+  }
+  try {
+    await api.request('pane.focus', { pane_id: paneId });
+    note(`focused ${paneId}`);
+  } catch (err) {
+    note(`could not focus ${paneId}: ${err.code || err.message}`);
+  }
+}
+
+async function requestClosePlan() {
+  if (DEMO) {
+    swarmPanel = {
+      ...swarmPanel,
+      closeConfirm: { plan: 'Plan: close 1 worker pane: w1:p1:sub3 (idle, caller: w1:p1)' },
+    };
+    draw();
+    return;
+  }
+  try {
+    const child = spawn(herdrJevBin, ['workers', 'close', '--all-idle'], {
+      env: { ...process.env, HERDR_PANE_ID: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout?.on('data', (d) => { out += d.toString('utf8'); });
+    child.on('close', () => {
+      const lines = out.trim().split('\n').filter(Boolean);
+      const first = lines[0] || 'Plan: no worker panes to close.';
+      swarmPanel = {
+        ...swarmPanel,
+        closeConfirm: { plan: first },
+      };
+      draw();
+    });
+  } catch (err) {
+    note(`could not check close plan: ${err.message}`);
+  }
+}
+
+async function executeClosePlan() {
+  if (DEMO) {
+    swarmPanel = { ...swarmPanel, closeConfirm: null };
+    note('demo mode: would close idle/done workers');
+    draw();
+    return;
+  }
+  try {
+    const child = spawn(herdrJevBin, ['workers', 'close', '--all-idle', '--yes'], {
+      env: { ...process.env, HERDR_PANE_ID: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.on('close', async () => {
+      swarmPanel = { ...swarmPanel, closeConfirm: null };
+      note('closed idle/done workers');
+      await refresh();
+      draw();
+    });
+  } catch (err) {
+    note(`could not execute close plan: ${err.message}`);
+    swarmPanel = { ...swarmPanel, closeConfirm: null };
+    draw();
+  }
+}
 let floorScope = argv.has('--all') || argv.has('--widen') ? 'all' : 'tab';
 let currentWorkspaceId = '';
 let currentTabId = '';
@@ -177,23 +278,28 @@ function applyJevData(people = roster.people) {
       if (data.handle) person.handle = data.handle;
       if (data.role) person.role = data.role;
     }
+    const subs = getSubagentsFor(person.id);
+    person.swarm = subs;
+    person.swarmBadge = aggregateSwarmBadge(subs);
   }
 }
 
 async function pollJevOverview(force = false) {
   const now = Date.now();
   if (!force && now - lastJevPoll < JEV_POLL_MS) return jevCache;
+  if (jevPolling) return jevCache;
   lastJevPoll = now;
   if (DEMO) return jevCache;
+  jevPolling = true;
   return new Promise((resolve) => {
     const child = spawn(herdrJevBin, ['overview', '--json'], {
-      env: process.env,
+      env: { ...process.env, HERDR_PANE_ID: '' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
     child.stdout?.on('data', (d) => { stdout += d.toString('utf8'); });
-    child.on('close', (code) => {
-      if (code === 0 && stdout.trim()) {
+    const finishOverview = () => {
+      if (stdout.trim()) {
         try {
           const items = JSON.parse(stdout);
           if (Array.isArray(items)) {
@@ -212,9 +318,50 @@ async function pollJevOverview(force = false) {
           }
         } catch {}
       }
+      const agentsChild = spawn(herdrJevBin, ['agents', '--all', '--json'], {
+        env: { ...process.env, HERDR_PANE_ID: '' },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let agentsStdout = '';
+      agentsChild.stdout?.on('data', (d) => { agentsStdout += d.toString('utf8'); });
+      const finishAgents = () => {
+        jevPolling = false;
+        if (agentsStdout.trim()) {
+          try {
+            const groups = JSON.parse(agentsStdout);
+            if (Array.isArray(groups)) {
+              const newMap = new Map();
+              const newSet = new Set();
+              for (const group of groups) {
+                if (Array.isArray(group?.rows)) {
+                  for (const row of group.rows) {
+                    if (row.paneId) newSet.add(row.paneId);
+                    const caller = row.callerPaneId;
+                    if (caller) {
+                      if (!newMap.has(caller)) newMap.set(caller, []);
+                      newMap.get(caller).push(row);
+                    }
+                  }
+                }
+              }
+              jevAgentsCache = newMap;
+              jevSubagentPaneIds = newSet;
+            }
+          } catch {}
+        }
+        resolve(jevCache);
+      };
+      agentsChild.on('close', finishAgents);
+      agentsChild.on('error', () => {
+        jevPolling = false;
+        resolve(jevCache);
+      });
+    };
+    child.on('close', finishOverview);
+    child.on('error', () => {
+      jevPolling = false;
       resolve(jevCache);
     });
-    child.on('error', () => resolve(jevCache));
   });
 }
 
@@ -489,6 +636,7 @@ function view() {
     zoom,
     selectedId,
     detail,
+    swarm: swarmPanel,
     frame: ONCE ? Math.floor(now / ANIM_MS) : frame,
     now,
     size: size(),
@@ -618,6 +766,7 @@ function shepherd() {
   // attached to it. Not a toast: the notification for this already went out.
   note(`${out.person.name} has a hand up`);
   if (detail) loadDetail(selectedId, { force: true });
+  if (swarmPanel) openSwarmPanel(selectedId);
 }
 
 // What is on each desk's screen, for the two things the office takes off one: what a
@@ -807,7 +956,11 @@ function seat(snapshot, tabs) {
 
 async function refresh() {
   if (DEMO) {
-    roster.update(demoAgents());
+    const { demoTracking } = demoSwarmData();
+    const raw = demoAgents();
+    const { primaries } = classifyPanes(raw, demoTracking);
+    roster.update(primaries);
+    applyJevData();
     demoExtras();
     updateScopeFromRoster();
     clocks.observe(roster.people);
@@ -823,8 +976,10 @@ async function refresh() {
       api.request('tab.list', {}).catch(() => null),
     ]);
     seat(snapshot, tabs);
-    const newlyBlocked = roster.update(agentList.agents || []);
     await pollJevOverview();
+    const raw = agentList.agents || [];
+    const { primaries } = classifyPanes(raw, jevAgentsCache);
+    const newlyBlocked = roster.update(primaries);
     applyJevData();
     updateScopeFromRoster();
     clocks.observe(roster.people);
@@ -1700,6 +1855,18 @@ function onInput(chunk) {
     // back out the way you came in rather than throwing away a filter you are
     // still using because a panel happened to be open.
     if (filtering) return closeFilter(true);
+    if (swarmPanel?.closeConfirm) {
+      swarmPanel = { ...swarmPanel, closeConfirm: null };
+      prevLines = [];
+      draw();
+      return;
+    }
+    if (swarmPanel) {
+      swarmPanel = null;
+      prevLines = [];
+      draw();
+      return;
+    }
     if (detail) {
       detail = null;
       prevLines = [];
@@ -1790,10 +1957,58 @@ function onInput(chunk) {
     return;
   }
 
+  if (swarmPanel) {
+    if (swarmPanel.closeConfirm) {
+      if (str === 'y' || str === 'Y') {
+        executeClosePlan();
+        return;
+      }
+      if (str === 'n' || str === 'N') {
+        swarmPanel = { ...swarmPanel, closeConfirm: null };
+        note('close cancelled');
+        prevLines = [];
+        draw();
+        return;
+      }
+      return;
+    }
+    if (str === 'w') {
+      swarmPanel = null;
+      prevLines = [];
+      draw();
+      return;
+    }
+    if (str === 'c') {
+      requestClosePlan();
+      return;
+    }
+    if (str >= '1' && str <= '9') {
+      const slotNum = parseInt(str, 10);
+      const sub = swarmPanel.subagents?.find((s) => s.slot === slotNum);
+      if (sub) {
+        focusSubagentPane(sub.paneId);
+      } else {
+        note(`no subagent at slot ${slotNum}`);
+      }
+      prevLines = [];
+      draw();
+      return;
+    }
+  }
+
   if (str === '/') return openFilter();
   if (str === '+') return openHire();
   if (str === 'a') return openCompose('one');
   if (str === 'A') return openCompose('all');
+  if (str === 'w') {
+    const subs = selectedId && selectedId !== HIRE_ID ? getSubagentsFor(selectedId) : [];
+    if (subs && subs.length > 0) {
+      openSwarmPanel(selectedId);
+      prevLines = [];
+      draw();
+      return;
+    }
+  }
   if (str === 'w' || str === 'W') {
     if (floorScope === 'tab') {
       floorScope = 'workspace';
@@ -1817,7 +2032,14 @@ function onInput(chunk) {
   else if (str === '\t') move(1, 0);
   else if (str === '\r' || str === '\n' || str === ' ') {
     if (selectedId === HIRE_ID) openHire();
-    else if (selectedId) loadDetail(selectedId, { force: true });
+    else if (selectedId) {
+      const subs = getSubagentsFor(selectedId);
+      if (subs && subs.length > 0) {
+        openSwarmPanel(selectedId);
+      } else {
+        loadDetail(selectedId, { force: true });
+      }
+    }
   } else if (str === 'y') respond('approve');
   else if (str === 'n') respond('deny');
   else if (str === 'Y') armTrust();
@@ -1840,6 +2062,7 @@ function onInput(chunk) {
   } else return;
 
   if (detail && selectedId && selectedId !== HIRE_ID && detail.id !== selectedId) loadDetail(selectedId, { force: true });
+  if (swarmPanel && selectedId && selectedId !== HIRE_ID && swarmPanel.id !== selectedId) openSwarmPanel(selectedId);
   draw();
 }
 
@@ -1867,31 +2090,23 @@ function demoAgents() {
     ['w2:p2', 'claude', 'write the office plugin'],
     ['w3:p1', 'gemini', 'triage the bug queue'],
     ['w3:p2', 'kiro', 'chase a null pointer'],
+    ['w1:p1:sub1', 'claude', 'subagent 1'],
+    ['w1:p1:sub2', 'codex', 'subagent 2'],
+    ['w1:p1:sub3', 'kiro', 'subagent 3'],
+    ['w2:p1:sub1', 'claude', 'subagent 4'],
+    ['w2:p1:sub2', 'codex', 'subagent 5'],
   ];
-  roster.setTabs(desks.map(([pane_id], i) => ({ tab_id: i < 3 ? 'w1:t1' : `${pane_id.split(':')[0]}:t${i + 1}`, label: DEMO_TABS[i], number: i + 1 })));
+  roster.setTabs(desks.map(([pane_id], i) => ({ tab_id: i < 3 ? 'w1:t1' : `${pane_id.split(':')[0]}:t${i + 1}`, label: DEMO_TABS[i] || `tab-${i + 1}`, number: i + 1 })));
   return desks.map(([pane_id, agent, title], i) => ({
     pane_id,
     agent,
-    // Room, repo and checkout agree with each other, because a demo where the card
-    // said one workspace and the cwd under it said another repo would be teaching
-    // the reader something that is not true of a real session.
-    // Rotated slowly on purpose. Every desk changing status every twelve seconds
-    // reads as a screensaver rather than an office, and it is shorter than it takes
-    // to walk to a raised hand and open the card: the recording in the README kept
-    // catching the desk it had just jumped to going idle underneath the panel.
     agent_status: cycle[(i + Math.floor(demoTick / 15)) % cycle.length],
     workspace_id: pane_id.split(':')[0],
     tab_id: i < 3 ? 'w1:t1' : `${pane_id.split(':')[0]}:t${i + 1}`,
-    // A checkout each, because that is how a floor of agents on different branches
-    // actually looks: one desk in the repo itself and the rest in linked worktrees.
-    cwd: DEMO_BRANCHES[i]
-      ? `/Users/you/Desktop/projects/${DEMO_WORKSPACES.find((w) => w.workspace_id === pane_id.split(':')[0]).label}${
-        i ? `/.worktrees/${DEMO_BRANCHES[i].replace(/\//g, '-')}` : ''
+    cwd: DEMO_BRANCHES[i % DEMO_BRANCHES.length]
+      ? `/Users/you/Desktop/projects/${(DEMO_WORKSPACES.find((w) => w.workspace_id === pane_id.split(':')[0]) || DEMO_WORKSPACES[0]).label}${
+        i ? `/.worktrees/${(DEMO_BRANCHES[i % DEMO_BRANCHES.length] || 'demo').replace(/\//g, '-')}` : ''
       }`
-      // The one desk with no branch is somewhere that is not a repository at all,
-      // which has to be its own directory: a branch is a fact about a checkout, so
-      // two desks in the same checkout cannot disagree about it, and the cache is
-      // keyed that way on purpose.
       : '/Users/you',
     terminal_title_stripped: title,
     focused: i === 0,
@@ -2027,7 +2242,11 @@ async function main() {
     clearInterval(anim);
     clearInterval(poll);
     if (DEMO) {
-      roster.update(demoAgents());
+      const { demoTracking } = demoSwarmData();
+      const raw = demoAgents();
+      const { primaries } = classifyPanes(raw, demoTracking);
+      roster.update(primaries);
+      applyJevData();
       demoExtras();
       updateScopeFromRoster();
       clocks.observe(roster.people);
@@ -2036,8 +2255,10 @@ async function main() {
       const tabs = await api.request('tab.list', {}).catch(() => null);
       seat(snapshot, tabs);
       const list = await api.request('agent.list', {});
-      roster.update(list.agents || []);
       await pollJevOverview(true);
+      const raw = list.agents || [];
+      const { primaries } = classifyPanes(raw, jevAgentsCache);
+      roster.update(primaries);
       applyJevData();
       updateScopeFromRoster();
       clocks.observe(roster.people);
@@ -2051,6 +2272,10 @@ async function main() {
     }
     ensureSelection();
     if (argv.has('--detail') && selectedId) await loadDetail(selectedId, { force: true });
+    if (panelArg) {
+      const targetId = typeof panelArg === 'string' ? panelArg : selectedId;
+      openSwarmPanel(targetId);
+    }
     // Written *and flushed* before the exit. Whenever this render is being diffed,
     // piped or read by a test, stdout is a pipe, and a pipe write is asynchronous on
     // macOS: a frame bigger than the pipe buffer is queued rather than issued, so an
@@ -2084,6 +2309,10 @@ async function main() {
     await graphics.probe();
   }
   await refresh();
+  if (panelArg) {
+    const targetId = typeof panelArg === 'string' ? panelArg : selectedId;
+    openSwarmPanel(targetId);
+  }
   draw();
 }
 
