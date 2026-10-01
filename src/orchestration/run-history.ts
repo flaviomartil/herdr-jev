@@ -51,14 +51,14 @@ export function listRunHistory(stateDir?: string, limit = 20): RunHistoryEntry[]
   }).sort((a, b) => b.timestampMs - a.timestampMs || b.mtimeMs - a.mtimeMs).slice(0, limit);
 }
 
-function stages(projection: Record<string, any>): Array<{ id?: string; state?: string }> {
+function stages(projection: Record<string, any>): Array<{ id?: string; state?: string; blocked_reason?: string }> {
   if (Array.isArray(projection.tasks)) return projection.tasks;
   if (Array.isArray(projection.stages)) return projection.stages;
   return [];
 }
 
 export function runStateSummary(projection: Record<string, any>): string {
-  const summary = stages(projection).map((stage) => `${stage.id ?? "stage"}:${stage.state ?? "unknown"}`);
+  const summary = stages(projection).map((stage) => `${stage.id ?? "stage"}:${stage.state ?? "unknown"}${stage.blocked_reason ? `(${stage.blocked_reason})` : ""}`);
   return summary.length ? summary.join(",") : "no-stages";
 }
 
