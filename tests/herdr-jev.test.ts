@@ -137,7 +137,7 @@ describe("Agent Command Builder", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["agy", "--model", "gemini-3-8-flash", "--effort", "high"]);
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.8-flash-high"]);
     expect(mapClientToHerdrKind("antigravity")).toBe("agy");
   });
 });
@@ -329,10 +329,10 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
     };
 
     const interactiveCmd = buildInlineCommand("antigravity", stage, "Scan repository structure");
-    expect(interactiveCmd).toEqual(["agy", "-i", "Scan repository structure", "--model", stage.model, "--effort", "high"]);
+    expect(interactiveCmd).toEqual(["agy", "-i", "Scan repository structure", "--model", "gemini-3.8-flash-high"]);
 
     const nonInteractiveCmd = buildInlineCommand("antigravity", stage, "Scan repository structure", true);
-    expect(nonInteractiveCmd).toEqual(["agy", "-p", "Scan repository structure", "--model", stage.model, "--effort", "high"]);
+    expect(nonInteractiveCmd).toEqual(["agy", "-p", "Scan repository structure", "--model", "gemini-3.8-flash-high"]);
   });
 });
 
