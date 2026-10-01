@@ -356,7 +356,9 @@ export async function buildDailyReport(
     let tarefa: string | null = null;
     const rawTarefa = paneInfo?.terminal_title_stripped || paneInfo?.label || "";
     if (rawTarefa) {
-      const sanitized = sanitizeText(rawTarefa.trim());
+      const stripped = rawTarefa.replace(/[\x00-\x1F\x7F]/g, "");
+      const redacted = redactSecrets(stripped);
+      const sanitized = sanitizeText(redacted).trim();
       const agentName = handle ?? agent;
       const isLaunchCommand = /^(?:agy|codex|claude|node)(?:\s+|$)/i.test(sanitized);
       if (
