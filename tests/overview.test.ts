@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatOverviewRun, matchRunForPane, readOverview } from "../src/herdr/overview.js";
+import { formatOverviewRun, matchRunForPane, readOverview, cleanModel } from "../src/herdr/overview.js";
 
 test("overview joins projects, deduplicates branch reads and excludes transcripts", async () => {
   const calls: readonly string[][] = [];
@@ -116,4 +116,36 @@ test("overview matches runs by pane id, agent handle, or cwd fallback and format
   const agents = await readOverview(runCommand, runs, now);
   expect(agents[0].run).toBe("implementer:failed 2m ago");
   expect(agents[1].run).toBe("");
+});
+
+test("cleanModel and readOverview trim leading zero-width spaces and whitespace from models", async () => {
+  expect(cleanModel(" \u200B gpt-6.1-sol ")).toBe("gpt-6.1-sol");
+  expect(cleanModel("")).toBeNull();
+  expect(cleanModel(null)).toBeNull();
+
+  const runCommand = async () => ({
+    ok: true,
+    code: 0,
+    stderr: "",
+    stdout: JSON.stringify({
+      result: {
+        snapshot: {
+          workspaces: [{ workspace_id: "w1", label: "API" }],
+          agents: [
+            {
+              workspace_id: "w1",
+              pane_id: "p1",
+              cwd: "/tmp/api",
+              agent: "codex",
+              agent_status: "working",
+              tokens: { quota_model: "  \u200B  gpt-6.1-sol  " },
+            },
+          ],
+        },
+      },
+    }),
+  });
+
+  const agents = await readOverview(runCommand);
+  expect(agents[0].model).toBe("gpt-6.1-sol");
 });

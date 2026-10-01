@@ -47,6 +47,12 @@ export function matchRunForPane(
   return undefined;
 }
 
+export function cleanModel(model?: string | null): string | null {
+  if (typeof model !== "string") return null;
+  const cleaned = model.replace(/^[\s\u200B\u200C\u200D\uFEFF]+|[\s\u200B\u200C\u200D\uFEFF]+$/g, "").trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 export function formatOverviewRun(entry?: RunHistoryEntry, now?: number): string {
   if (!entry) return "";
   const summary = runStateSummary(entry.projection);
@@ -92,7 +98,7 @@ export async function readOverview(
       pane: agent.pane_id,
       state: agent.agent_status ?? "unknown",
       agent: agent.agent,
-      model: tokens.quota_model || tokens.jev_model || null,
+      model: cleanModel(tokens.quota_model || tokens.jev_model),
       parent: tokens.jev_parent || null,
       role: tokens.jev_role || null,
       handle,
