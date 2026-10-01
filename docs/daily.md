@@ -15,7 +15,7 @@ herdr-jev daily [--json] [--md] [--since <ISO date-time>] [--write]
 - `--since <ISO date-time>`: Scope commits and runs since the specified ISO timestamp (defaults to local midnight).
 - `--write`: Save the Markdown report to `<stateDir>/daily/YYYY-MM-DD.md` (where `stateDir` honors `HERDR_JEV_STATE_DIR` and defaults to `~/.local/state/herdr-jev`), and prints the resulting path as the last output line.
 
-Default output without `--md`, `--json`, or `--write` is a one-screen aligned text table grouped by repository and branch, including a `TASK` column and cell truncation with ellipsis (`...`).
+Default output without `--md`, `--json`, or `--write` is an aligned text table grouped by repository and branch, displaying repository facts once under each project heading, a 34-character `TASK` column, and cell truncation with ellipsis (`...`).
 
 The command can run inside or outside Herdr panes, and functions cleanly when invoked by a background daemon without `HERDR_PANE_ID`.
 
@@ -30,9 +30,9 @@ The report aggregates data through injectable dependencies:
    - Commits since local midnight on that branch, excluding commits reachable from the default branch (`git log <default>..HEAD --since=midnight`).
    - Repository facts printed once under the heading: `N commits hoje (assunto 1; assunto 2; assunto 3)` and `M arquivos não commitados`.
 3. **Pane Tasks & Terminal Output**:
-   - Extracted from `herdr pane list` (`terminal_title_stripped` or `label`), trimmed to 60 characters and omitted when empty or equal to the agent name.
-   - Reads the last 40 lines of each pane (`herdr pane read <id> --lines 40`), filters out terminal chrome (braille spinners, status bar glyphs, shortcuts, warning banners, update notices, prompt lines), and prefers the last real action bullet (`•` for Codex, `●` for Claude Code and Antigravity).
-   - Redacts sensitive credentials (tokens starting with `sk-`, `ghp_`, `xoxb-`, `Bearer`, long hex/base64 strings, key-value secrets).
+   - Extracted from `herdr pane list` (`terminal_title_stripped` or `label`), trimmed to 60 characters. Omitted when empty, equal to the agent name, or when it is simply a launch command starting with `agy `, `codex `, `claude `, or `node `.
+   - Reads the last 40 lines of each pane (`herdr pane read <id> --lines 40`), filters out terminal chrome (braille spinners, status bar glyphs, shortcuts, warning banners, collapsed-output hints like `expand)` and `(ctrl+o to expand)`, report headers, update notices, prompt lines), and prefers the last real action bullet (`•` for Codex, `●` for Claude Code and Antigravity).
+   - Redacts sensitive credentials: tokens starting with `sk-`, `ghp_`, `xoxb-`, `Bearer`, key-value secrets, pure hex strings of 32+ characters, and strings of 32+ characters mixing letters and digits with no `/` or `.` path separators. File paths with `/` or `.` are preserved.
 4. **Run History**: Projections from recorded runs (`src/orchestration/run-history.ts`) matched by pane ID, handle, or cwd, formatted via `runStateSummary`.
 
 ## Markdown Format

@@ -35,6 +35,12 @@ const CHROME_LINE_PATTERNS: readonly RegExp[] = [
   /^[\s\u2800-\u28FF]+$/,
   /[\u2800-\u28FF]/,
   /[⏱⏵▶⚡⚙↑↓▲▼←→]/,
+  /\bexpand\)/i,
+  /\(ctrl\+o to expand\)/i,
+  /ctrl\+o to expand/i,
+  /^\s*Sem atividade:\s*/i,
+  /^Sem atividade\b/i,
+  /^Resumo do dia\b/i,
 ];
 
 export function lastMeaningfulLine(text: string): string {
@@ -77,7 +83,10 @@ export function redactSecrets(text: string): string {
   );
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [REDACTED]");
   result = result.replace(/\b(?:sk-[a-zA-Z0-9_-]+|ghp_[a-zA-Z0-9]+|xoxb-[a-zA-Z0-9_-]+)\b/g, "[REDACTED]");
-  result = result.replace(/\b[0-9a-fA-F]{24,}\b/g, "[REDACTED]");
-  result = result.replace(/\b(?=[A-Za-z0-9+/]{24,}\b)[A-Za-z0-9+/]{24,}={0,2}\b/g, "[REDACTED]");
+  result = result.replace(/\b[0-9a-fA-F]{32,}\b/g, "[REDACTED]");
+  result = result.replace(
+    /\b(?=[A-Za-z0-9_+=~-]*[0-9])(?=[A-Za-z0-9_+=~-]*[a-zA-Z])[A-Za-z0-9_+=~-]{32,}={0,2}\b/g,
+    "[REDACTED]",
+  );
   return result;
 }

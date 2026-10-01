@@ -233,10 +233,13 @@ export async function buildDailyReport(
           );
           if (commonDirRes.ok) {
             const commonDir = cleanGitLine(commonDirRes.stdout);
-            if (commonDir) {
+            if (commonDir && (commonDir.endsWith(".git") || commonDir.endsWith(".git/"))) {
               const absCommonDir = isAbsolute(commonDir) ? commonDir : resolve(cwd, commonDir);
-              const mainWorktreeDir = dirname(absCommonDir);
-              const resolvedName = basename(mainWorktreeDir);
+              const parent = dirname(absCommonDir.replace(/\/+$/, ""));
+              const resolvedName =
+                basename(absCommonDir).endsWith(".git") && basename(absCommonDir) !== ".git"
+                  ? basename(absCommonDir).replace(/\.git$/, "")
+                  : basename(parent);
               if (resolvedName) {
                 repoName = resolvedName;
               }
@@ -361,8 +364,10 @@ export async function buildDailyReport(
     if (rawTarefa) {
       const sanitized = sanitizeText(rawTarefa.trim());
       const agentName = handle ?? agent;
+      const isLaunchCommand = /^(?:agy|codex|claude|node)(?:\s+|$)/i.test(sanitized);
       if (
         sanitized.length > 0 &&
+        !isLaunchCommand &&
         sanitized.toLowerCase() !== agentName.toLowerCase() &&
         sanitized.toLowerCase() !== agent.toLowerCase()
       ) {
@@ -504,9 +509,32 @@ export function formatDailyText(report: DailyReport): string {
     if (lines.length > 0) lines.push("");
     const branchStr = group.branch ? ` (${group.branch})` : "";
     lines.push(`${group.project}${branchStr}`);
-    lines.push("  AGENT        TASK         MODEL        STATE    COMMITS  CHANGES  RUN                 LAST");
 
     const commitsCount = group.commitsCount ?? Math.max(0, ...group.agents.map((a) => a.commitsCount));
+    const commitSubjects = group.commitSubjects ?? group.agents.find((a) => a.commitSubjects.length > 0)?.commitSubjects ?? [];
+    const uncommittedCount = group.uncommittedCount ?? Math.max(0, ...group.agents.map((a) => a.uncommittedCount));
+
+    const repoFactsParts: string[] = [];
+    if (commitsCount > 0) {
+      const commitWord = commitsCount === 1 ? "commit" : "commits";
+      const subjectsStr =
+        commitSubjects.length > 0
+          ? ` (${commitSubjects.join("; ")})`
+          : "";
+      repoFactsParts.push(`${commitsCount} ${commitWord} hoje${subjectsStr}`);
+    }
+
+    if (uncommittedCount > 0) {
+      const fileWord = uncommittedCount === 1 ? "arquivo não commitado" : "arquivos não commitados";
+      repoFactsParts.push(`${uncommittedCount} ${fileWord}`);
+    }
+
+    if (repoFactsParts.length > 0) {
+      lines.push(`  ${repoFactsParts.join("; ")}`);
+    }
+
+    lines.push("  AGENT        TASK                               MODEL        STATE    RUN                 LAST");
+
     const inactiveAgents: string[] = [];
 
     for (const item of group.agents) {
@@ -522,15 +550,13 @@ export function formatDailyText(report: DailyReport): string {
       }
 
       const agentCol = truncateCell(agentName, 12);
-      const taskCol = truncateCell(item.tarefa ?? "-", 12);
+      const taskCol = truncateCell(item.tarefa ?? "-", 34);
       const modelCol = truncateCell(item.model ?? "-", 12);
       const stateCol = truncateCell(item.state, 8);
-      const commitsCol = truncateCell(String(item.commitsCount), 8);
-      const changesCol = truncateCell(String(item.uncommittedCount), 8);
       const runCol = truncateCell(item.runSummary ?? "-", 19);
       const lastCol = item.lastLine ?? "";
 
-      lines.push(`  ${agentCol} ${taskCol} ${modelCol} ${stateCol} ${commitsCol} ${changesCol} ${runCol} ${lastCol}`.trimEnd());
+      lines.push(`  ${agentCol} ${taskCol} ${modelCol} ${stateCol} ${runCol} ${lastCol}`.trimEnd());
     }
 
     if (inactiveAgents.length > 0) {
