@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHerdrClient, readHerdrObservedState, type HerdrClient } from "../src/herdr/client.js";
-import { buildAgentCommand, buildInlineCommand, launchStageInHerdr, parseHerdrPaneId } from "../src/herdr/launcher.js";
+import { buildAgentCommand, buildInlineCommand, launchStageInHerdr, parseHerdrPaneId, resolveAntigravityModel } from "../src/herdr/launcher.js";
 import { converseWithPeer, resolvePeerStage } from "../src/herdr/peer.js";
 import type { HerdrCommandResult, StageSpec } from "../src/types/index.js";
 import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
@@ -512,3 +512,87 @@ if(args[1]==="read") console.log(process.env.TRUST_BLOCKED==="1"?"1. Trust and c
     } finally { rmSync(root, { recursive: true, force: true }); }
   }, 60_000);
 });
+
+describe("Antigravity model and effort resolution", () => {
+  it("maps gemini-3-8-flash with high effort to gemini-3.8-flash-high with no --effort", () => {
+    expect(resolveAntigravityModel("gemini-3-8-flash", "high")).toBe("gemini-3.8-flash-high");
+    const cmd = buildAgentCommand("antigravity", {
+      role: "implementer",
+      model: "gemini-3-8-flash",
+      effort: "high",
+      extraFlags: [],
+      description: "implementer",
+    });
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.8-flash-high"]);
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("maps gemini-3-8-pro with xhigh effort to gemini-3.1-pro-high with no --effort", () => {
+    expect(resolveAntigravityModel("gemini-3-8-pro", "xhigh")).toBe("gemini-3.1-pro-high");
+    expect(resolveAntigravityModel("gemini-3-8-pro", "standard")).toBe("gemini-3.1-pro-low");
+    const cmd = buildAgentCommand("antigravity", {
+      role: "reviewer",
+      model: "gemini-3-8-pro",
+      effort: "xhigh",
+      extraFlags: [],
+      description: "reviewer",
+    });
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.1-pro-high"]);
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("maps claude-opus-4-6 with xhigh effort to claude-opus-4-6-thinking and standard to claude-opus-4-6", () => {
+    expect(resolveAntigravityModel("claude-opus-4-6", "xhigh")).toBe("claude-opus-4-6-thinking");
+    expect(resolveAntigravityModel("claude-opus-4-6", "high")).toBe("claude-opus-4-6-thinking");
+    expect(resolveAntigravityModel("claude-opus-4-6", "standard")).toBe("claude-opus-4-6");
+    const cmd = buildAgentCommand("antigravity", {
+      role: "advisor",
+      model: "claude-opus-4-6",
+      effort: "xhigh",
+      extraFlags: [],
+      description: "advisor",
+    });
+    expect(cmd).toEqual(["agy", "--model", "claude-opus-4-6-thinking"]);
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("passes through explicit model gemini-3.1-pro-high unchanged with no --effort", () => {
+    expect(resolveAntigravityModel("gemini-3.1-pro-high", "high")).toBe("gemini-3.1-pro-high");
+    const cmd = buildAgentCommand("antigravity", {
+      role: "implementer",
+      model: "gemini-3.1-pro-high",
+      effort: "high",
+      extraFlags: [],
+      description: "implementer",
+    });
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.1-pro-high"]);
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("preserves claude-sonnet-4-6 and gpt-oss as is and never emits --effort", () => {
+    expect(resolveAntigravityModel("claude-sonnet-4-6", "high")).toBe("claude-sonnet-4-6");
+    expect(resolveAntigravityModel("gpt-oss-120b-medium", "standard")).toBe("gpt-oss-120b-medium");
+    const cmd = buildAgentCommand("antigravity", {
+      role: "implementer",
+      model: "claude-sonnet-4-6",
+      effort: "high",
+      extraFlags: ["--effort", "high"],
+      description: "implementer",
+    });
+    expect(cmd).toEqual(["agy", "--model", "claude-sonnet-4-6"]);
+    expect(cmd).not.toContain("--effort");
+  });
+
+  it("builds inline commands without --effort for antigravity", () => {
+    const stage: StageSpec = {
+      role: "implementer",
+      model: "gemini-3-8-flash",
+      effort: "high",
+      extraFlags: ["--effort", "high"],
+      description: "implementer",
+    };
+    expect(buildInlineCommand("antigravity", stage, "task", false)).toEqual(["agy", "-i", "task", "--model", "gemini-3.8-flash-high"]);
+    expect(buildInlineCommand("antigravity", stage, "task", true)).toEqual(["agy", "-p", "task", "--model", "gemini-3.8-flash-high"]);
+  });
+});
+
