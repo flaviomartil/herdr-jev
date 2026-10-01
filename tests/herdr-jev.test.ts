@@ -115,7 +115,7 @@ describe("Agent Command Builder", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["claude", "--model", "sonnet-5", "--effort", "high"]);
+    expect(cmd).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high"]);
   });
 
   it("builds codex command with reasoning effort config flag", () => {
@@ -282,10 +282,10 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
     };
 
     const interactiveCmd = buildInlineCommand("claude", stage, "Analyze authentication flow");
-    expect(interactiveCmd).toEqual(["claude", "--model", "sonnet-5", "--effort", "medium", "Analyze authentication flow"]);
+    expect(interactiveCmd).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "medium", "Analyze authentication flow"]);
 
     const nonInteractiveCmd = buildInlineCommand("claude", stage, "Analyze authentication flow", true);
-    expect(nonInteractiveCmd).toEqual(["claude", "-p", "Analyze authentication flow", "--model", "sonnet-5", "--effort", "medium"]);
+    expect(nonInteractiveCmd).toEqual(["claude", "-p", "Analyze authentication flow", "--model", "claude-sonnet-5-5", "--effort", "medium"]);
   });
 
   it("builds inline commands for codex with extra flags in both modes", () => {
@@ -568,7 +568,7 @@ describe("Client Aliases & Executable Resolution", () => {
       description: "implementer",
     };
     const cmd = buildAgentCommand("claude-px", stage);
-    expect(cmd).toEqual(["claude-px", "--model", "sonnet-5", "--effort", "high"]);
+    expect(cmd).toEqual(["claude-px", "--model", "claude-sonnet-5-5", "--effort", "high"]);
 
     delete process.env.HERDR_JEV_ALLOW_ALIASES;
   });

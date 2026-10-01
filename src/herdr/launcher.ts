@@ -605,7 +605,9 @@ async function launchStageInHerdrAttempt(input: {
   sourcePaneId?: string;
   workspaceId?: string;
   cwd?: string;
+  clock?: { now: () => number; sleep: (ms: number) => Promise<void> };
 }): Promise<LaunchResult> {
+  const clock = input.clock ?? { now: Date.now, sleep: (ms: number) => new Promise(r => setTimeout(r, ms)) };
   const herdr = input.herdr ?? createHerdrClient();
   const effectiveClient = input.stage.client ?? input.client;
   const command = buildAgentCommand(effectiveClient, input.stage);
@@ -736,10 +738,10 @@ async function launchStageInHerdrAttempt(input: {
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
     const baseClient = resolveBaseClientKind(effectiveClient);
     const readyTimeoutMs = parseInt(process.env.HERDR_JEV_READY_TIMEOUT_MS || "45000", 10);
-    const readyDeadline = Date.now() + readyTimeoutMs;
+    const readyDeadline = clock.now() + readyTimeoutMs;
     let isReady = false;
 
-    while (Date.now() < readyDeadline) {
+    while (clock.now() < readyDeadline) {
       if (herdr.getAgent && herdr.readAgent) {
         const [agentRes, screenRes] = await Promise.all([
           herdr.getAgent(agentName),
@@ -765,7 +767,7 @@ async function launchStageInHerdrAttempt(input: {
         isReady = true;
         break;
       }
-      await new Promise(r => setTimeout(r, 500));
+      await clock.sleep(500);
     }
 
     if (!isReady) {
@@ -804,7 +806,7 @@ async function launchStageInHerdrAttempt(input: {
           const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
           const promptPrefix = input.handoffPrompt.trim().slice(0, Math.min(input.handoffPrompt.trim().length, 32));
           if (state === "idle" && !cleanText.includes(promptPrefix)) {
-            await new Promise(r => setTimeout(r, 2000));
+            await clock.sleep(2000);
             prompted = await herdr.prompt({
               target: agentName,
               text: input.handoffPrompt,
@@ -860,8 +862,8 @@ async function launchStageInHerdrAttempt(input: {
           }
         }
       }
-      if (Date.now() >= deadline) break;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
+      if (clock.now() >= deadline) break;
+      await clock.sleep(Math.min(100, Math.max(0, deadline - clock.now())));
     }
     if (!promptDelivered) {
       return {
