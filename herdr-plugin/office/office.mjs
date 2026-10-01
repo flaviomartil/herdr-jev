@@ -13,6 +13,7 @@ import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
 //   node office.mjs --no-graphics  text only, no pixel charts
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
+import { createHash } from "node:crypto";
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster, cleanModel } from './src/roster.mjs';
@@ -359,17 +360,28 @@ function applyJevData(people = roster.people) {
          if (state.rev !== person.revision) {
              state.rev = person.revision;
              const project = person.cwd ? person.cwd.split('/').pop() : 'Project';
-             notifyPending.push(['notify', '--pane', person.id, '--name', person.name || 'Agent', '--project', project, '--attention', person.jevAttention || 'none', '--reason', person.jevBlockedReason || 'none', '--confidence', (person.jevConfidence || 0).toString(), '--native-status', person.status || 'unknown', '--agent', person.kind || 'unknown']);
+             const taskTitle = (person.title || '').substring(0, 80);
+             notifyPending.push({
+               args: [
+                 'notify', '--pane', person.id, '--project', project, '--task', taskTitle,
+                 '--attention', person.jevAttention || 'none', '--reason', person.jevBlockedReason || 'none',
+                 '--confidence', (person.jevConfidence || 0).toString(), '--native-status', person.status || 'unknown',
+                 '--agent', person.kind || 'unknown', '--json'
+               ],
+               onResult: (res) => {
+                 if (res && res.channels && res.channels.includes('escalation')) {
+                   state.escalatedRev = person.revision;
+                 }
+               }
+             });
          }
       }
       
-      if (state.escalatedRev !== -1 && state.escalatedRev !== person.revision) {
-         notifyPending.push(['notify', '--release', '--pane', person.id, '--agent', person.kind || 'unknown']);
+      if (process.env.HERDR_JEV_ESCALATE_BLOCKED && state.escalatedRev !== -1 && state.escalatedRev !== person.revision) {
+         notifyPending.push({
+           args: ['notify', '--release', '--pane', person.id, '--agent', person.kind || 'unknown', '--json']
+         });
          state.escalatedRev = -1;
-      }
-      
-      if (attentionChanged || blockedChanged) {
-         state.escalatedRev = person.revision;
       }
       
       state.attention = person.jevAttention || '';
@@ -697,8 +709,7 @@ function quit(code = 0, msg) {
   closeTheBooks();
   if (!DEMO) {
     try {
-      const { spawnSync } = require('node:child_process');
-      spawnSync(herdrJevBin, ['notify', '--release-stale'], { stdio: 'ignore' });
+      spawn(herdrJevBin, ['notify', '--release-stale'], { stdio: 'ignore' });
     } catch (e) {}
   }
   events?.close();
@@ -2486,10 +2497,31 @@ async function pollJevClassify() {
 
   try {
     if (notifyPending.length > 0) {
-      const { spawnSync } = await import('node:child_process');
       while (notifyPending.length > 0) {
         const task = notifyPending.shift();
-        try { spawnSync(herdrJevBin, task, { stdio: 'ignore' }); } catch (e) {}
+        await new Promise(resolve => {
+          const child = spawn(herdrJevBin, task.args, { stdio: ['ignore', 'pipe', 'ignore'] });
+          let out = '';
+          child.stdout?.on('data', d => { out += d; });
+          let done = false;
+          const complete = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve();
+          };
+          const timer = setTimeout(() => {
+            try { child.kill(); } catch (e) {}
+            complete();
+          }, 5000);
+          child.on('error', complete);
+          child.on('close', () => {
+            if (task.onResult) {
+              try { task.onResult(JSON.parse(out)); } catch (e) {}
+            }
+            complete();
+          });
+        });
       }
     }
     
@@ -2508,12 +2540,13 @@ async function pollJevClassify() {
       
       let tracker = paneRevisions.get(person.id);
       if (!tracker || tracker.rev !== person.revision) {
-        tracker = { rev: person.revision, stableTicks: 0 };
+        tracker = { rev: person.revision, stableTicks: 0, lastClassifiedRev: tracker?.lastClassifiedRev || -1 };
         paneRevisions.set(person.id, tracker);
       } else {
         tracker.stableTicks++;
       }
       
+      if (tracker.lastClassifiedRev === person.revision) continue;
       if (!isWorking && tracker.stableTicks < 2) continue;
       const lastTime = classifyTimestamps.get(person.id) || 0;
       if (isWorking && now - lastTime < 60000) continue;
@@ -2540,12 +2573,12 @@ async function pollJevClassify() {
       }
       
       const text = outputLines.slice(-30).join('\n');
-      let hash = 5381;
-      for (let i = 0; i < text.length; i++) hash = ((hash << 5) + hash) + text.charCodeAt(i);
-      const key = `${hash}:${person.status}`;
+      const key = `${createHash('sha1').update(text).digest('hex')}:${person.status}`;
       
       if (classifyCache.has(key)) {
         classifyHashes.set(person.id, key);
+        const tracker = paneRevisions.get(person.id);
+        if (tracker) tracker.lastClassifiedRev = person.revision;
         continue;
       }
       
@@ -2559,6 +2592,8 @@ async function pollJevClassify() {
       }
       classifyHashes.set(person.id, key);
       classifyTimestamps.set(person.id, Date.now());
+      const tracker = paneRevisions.get(person.id);
+      if (tracker) tracker.lastClassifiedRev = person.revision;
     }
   } finally {
     jevPolling = false;
@@ -2577,6 +2612,7 @@ export const _testHooks = {
   get paneRevisions() { return paneRevisions; },
   get classifyTimestamps() { return classifyTimestamps; },
   get notifyPending() { return notifyPending; },
+  get notifyState() { return notifyState; },
   get roster() { return roster; },
   set api(v) { api = v; },
   get jevPolling() { return jevPolling; },
