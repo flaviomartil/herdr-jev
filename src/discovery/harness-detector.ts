@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import type { BaseClientKind } from "../types/index.js";
 import { BASE_CLIENTS, resolveClientExecutable } from "../config/aliases.js";
 import { loadBaseCatalog, loadQuotaRecords } from "../config/catalog.js";
-import { hasExhaustedUsageQuota } from "../harness/bridge.js";
+import { hasExhaustedUsageQuota, readUsageQuota } from "../harness/bridge.js";
 
 export interface DetectedHarness {
   client: BaseClientKind;
@@ -94,13 +94,17 @@ export async function detectInstalledHarnesses(): Promise<DetectedHarness[]> {
       Object.values(clientRoles).flatMap((entry) => [entry.model, ...(entry.fallbackChain || [])])
     ));
     const clientExhausted = quotas.filter((q) => q.client === client).map((q) => q.model);
-    const available = clientModels.filter((m) => !clientExhausted.includes(m));
+    const hasWildcardBreaker = clientExhausted.includes("*");
+    const available = clientModels.filter((m) => !hasWildcardBreaker && !clientExhausted.includes(m));
 
     let quotaStatus: "healthy" | "degraded" | "exhausted" | "unconfigured" = "healthy";
     let healthy = false;
 
-    const envExhausted = process.env[`HERDR_JEV_${client.toUpperCase()}_EXHAUSTED`] === "1"
-      || (client === "codex" && hasExhaustedUsageQuota("codex"));
+    const isCodex = client === "codex";
+    const manualCircuitBreaker = hasWildcardBreaker || (clientModels.length > 0 && available.length === 0);
+    const codexExhausted = isCodex && hasExhaustedUsageQuota("codex", readUsageQuota());
+    const envExhausted = !isCodex && process.env[`HERDR_JEV_${client.toUpperCase()}_EXHAUSTED`] === "1";
+    const isExhausted = isCodex ? (codexExhausted || manualCircuitBreaker) : (envExhausted || manualCircuitBreaker);
     const isOpencode = client === "opencode";
     const isOpencodeEnabled = process.env.HERDR_JEV_ENABLE_OPENCODE === "1";
 
@@ -108,7 +112,7 @@ export async function detectInstalledHarnesses(): Promise<DetectedHarness[]> {
       if ((isOpencode && !isOpencodeEnabled) || (client === "kiro" && clientModels.length === 0)) {
         quotaStatus = "unconfigured";
         healthy = false;
-      } else if (envExhausted || (clientModels.length > 0 && available.length === 0)) {
+      } else if (isExhausted) {
         quotaStatus = "exhausted";
         healthy = false;
       } else if (clientExhausted.length > 0) {

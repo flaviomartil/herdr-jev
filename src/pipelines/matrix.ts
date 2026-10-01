@@ -13,6 +13,7 @@ export function resolveStageSpec(
 
   return {
     role,
+    client,
     model: resolved.model,
     effort: overrideEffort ?? resolved.entry.defaultEffort,
     extraFlags: [...resolved.entry.extraFlags],

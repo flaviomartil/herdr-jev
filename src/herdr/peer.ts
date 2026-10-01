@@ -26,9 +26,11 @@ export async function resolvePeerStage(input: { prompt: string; source: ClientKi
   if (!BASE_CLIENTS.includes(client as any) && !loadClientAliases()[client]) throw new Error(`Unknown peer harness: ${client}`);
   if (resolveBaseClientKind(client) === "codex" && hasExhaustedUsageQuota("codex")) throw new Error("Codex account quota is exhausted in a fresh usage observation; select another permitted peer");
   if (client === "kiro" && !input.model?.trim()) throw new Error("Kiro peer requires a verified model from kiro-cli chat --list-models --format json");
+  const isDifferentClient = resolveBaseClientKind(client) !== resolveBaseClientKind(input.source);
+  const stageEffort = input.effort ?? (isDifferentClient ? undefined : triage.effort);
   const stage = client === "kiro"
-    ? { role, model: input.model!.trim(), effort: (input.effort ?? triage.effort) as ReasoningEffort, extraFlags: [] as string[], description: "Kiro peer with explicit model; native scalar effort unavailable" }
-    : resolveStageSpec(client, role, (input.effort ?? triage.effort) as ReasoningEffort);
+    ? { role, client, model: input.model!.trim(), effort: (input.effort ?? triage.effort) as ReasoningEffort, extraFlags: [] as string[], description: "Kiro peer with explicit model; native scalar effort unavailable" }
+    : resolveStageSpec(client, role, stageEffort as ReasoningEffort | undefined);
   if (input.model) stage.model = input.model;
   stage.client = client;
   if (input.effort && !["codex", "claude", "antigravity"].includes(resolveBaseClientKind(client))) throw new Error(`Explicit effort is unsupported by ${client}`);

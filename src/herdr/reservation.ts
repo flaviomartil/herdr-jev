@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 function reservationPath(key: string) {
-  const root = join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "herdr-jev", "peer-locks");
+  const root = join(process.env.HERDR_JEV_STATE_DIR ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "herdr-jev"), "peer-locks");
   mkdirSync(root, { recursive: true, mode: 0o700 });
   return join(root, createHash("sha256").update(`${process.env.HERDR_SOCKET_PATH ?? "default"}:${key}`).digest("hex"));
 }
