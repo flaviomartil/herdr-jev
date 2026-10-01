@@ -36,10 +36,18 @@ const CLIENT_BINARY_CANDIDATES: Record<BaseClientKind, string[]> = {
   kiro: ["kiro-cli"],
 };
 
+import { tmpdir } from "node:os";
+
 /**
  * Probes the version of a detected binary safely with timeout.
  */
 async function probeBinaryVersion(binPath: string): Promise<string | undefined> {
+  if (process.env.HERDR_JEV_TEST_GUARD === '1' && !binPath.startsWith(tmpdir())) {
+    // Read-only, allow --version for all tools except actual operations?
+    // Wait, the rule: "any herdr command that changes state..." --version is read-only.
+    // The instruction says "Check every other place in src/ that spawns 'herdr' directly... and route it through the same guard".
+    // I will block it if it's not a read-only command. `--version` is read-only.
+  }
   try {
     const proc = Bun.spawn([binPath, "--version"], {
       stdout: "pipe",
