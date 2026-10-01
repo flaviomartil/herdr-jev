@@ -138,6 +138,7 @@ export function gridStatePath(callerPaneId: string, stateDir?: string): string {
 
 export interface GridWorkerRecord {
   paneId: string;
+  callerPaneId?: string;
   handle?: string | null;
   cwd?: string | null;
   branch?: string | null;
@@ -182,6 +183,7 @@ export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): 
         seen.add(paneId);
         records.push({
           paneId,
+          ...(typeof rec.callerPaneId === "string" ? { callerPaneId: rec.callerPaneId } : {}),
           handle: typeof rec.handle === "string" ? rec.handle : null,
           cwd: typeof rec.cwd === "string" ? rec.cwd : null,
           branch: typeof rec.branch === "string" ? rec.branch : null,

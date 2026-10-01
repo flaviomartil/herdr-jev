@@ -19,6 +19,7 @@ export interface AgentRow {
   uncommitted: number | null;
   run: string | null;
   paneId?: string;
+  callerPaneId?: string;
 }
 
 export interface AgentProjectGroup {
@@ -105,7 +106,7 @@ export async function buildAgentsView(
         for (const item of readGridWorkerRecords(caller, deps?.stateDir)) {
           if (!seen.has(item.paneId)) {
             seen.add(item.paneId);
-            workers.push(item);
+            workers.push({ ...item, callerPaneId: item.callerPaneId ?? caller });
           }
         }
       }
@@ -219,6 +220,7 @@ export async function buildAgentsView(
       uncommitted,
       run,
       paneId: worker.paneId,
+      callerPaneId: worker.callerPaneId ?? callerPaneId,
     };
 
     const groupRows = groupsMap.get(project) ?? [];

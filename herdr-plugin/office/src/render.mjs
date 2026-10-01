@@ -511,10 +511,20 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   jevRow.gap(INNER);
 
   const runBadge = resolveRunBadge(person, frame);
+  const swarmBadge = person.swarmBadge;
   const runRow = cells();
-  if (runBadge) {
+  if (runBadge && swarmBadge) {
+    runRow.add('▌ ', { fg: runBadge.fg });
+    const maxRunW = Math.max(3, INNER - width(swarmBadge.text) - 4);
+    runRow.add(truncate(runBadge.text, maxRunW), { fg: runBadge.textFg, bold: runBadge.bold });
+    runRow.gap(INNER - width(swarmBadge.text));
+    runRow.add(swarmBadge.text, { fg: swarmBadge.fg, bold: swarmBadge.bold });
+  } else if (runBadge) {
     runRow.add('▌ ', { fg: runBadge.fg });
     runRow.add(truncate(runBadge.text, INNER - 2), { fg: runBadge.textFg, bold: runBadge.bold });
+  } else if (swarmBadge) {
+    runRow.add('▌ ', { fg: swarmBadge.fg });
+    runRow.add(swarmBadge.text, { fg: swarmBadge.fg, bold: swarmBadge.bold });
   }
   runRow.gap(INNER);
 
@@ -562,7 +572,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       P.deskTop,
     ),
     row(deskFrontText, deskFrontSpans, P.deskFront),
-    runBadge ? row(runRow.out().text, runRow.out().spans) : blank(),
+    (runBadge || swarmBadge) ? row(runRow.out().text, runRow.out().spans) : blank(),
     row(bar.out().text, bar.out().spans),
     row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),
@@ -752,6 +762,20 @@ function keyHints(view) {
   }
   // While the filter field has the keyboard every printable key is a letter in it,
   // the same as the assign field, so the footer must stop advertising the floor.
+  if (view.swarm) {
+    if (view.swarm.closeConfirm) {
+      return [
+        ['y', 'confirm close'],
+        ['n', 'cancel close'],
+        ['esc', 'back'],
+      ];
+    }
+    return [
+      ['1-9', 'focus subagent'],
+      ['c', 'close idle'],
+      ['esc/w', 'close swarm'],
+    ];
+  }
   if (view.filtering) {
     return [
       ['type', 'to narrow the floor'],
@@ -779,10 +803,11 @@ function keyHints(view) {
     ...(selected?.status === 'blocked' && selected?.choice?.always ? [['Y', 'always allow']] : []),
     ...(filtered ? [['esc', 'show everyone']] : []),
     ['hjkl', 'walk'],
-    ...(view.detail ? [['esc', 'close']] : vacant ? [] : [['enter', 'what are you up to?']]),
+    ...(view.detail ? [['esc', 'close']] : vacant ? [] : selected?.swarmBadge ? [['enter/w', 'swarm']] : [['enter', 'what are you up to?']]),
     ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),
-    ['w', view.scope === 'all' ? 'narrow' : 'widen'],
+    ['w', selected?.swarmBadge ? 'swarm' : (view.scope === 'all' ? 'narrow' : 'widen')],
+    ...(selected?.swarmBadge ? [['W', view.scope === 'all' ? 'narrow' : 'widen']] : []),
     ['b', 'next raised hand'],
     ...(view.following ? [['F', 'stop following']] : [['F', 'follow hands']]),
     // The hint names what the key will do next rather than where you are, because
@@ -1730,6 +1755,99 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   return lines;
 }
 
+function swarmPanel(view, floorRows, hitboxes, startRow) {
+  const { swarm, size } = view;
+  const person = view.people.find((p) => p.id === swarm?.id);
+  const PW = Math.min(size.cols, Math.max(30, size.cols - 4));
+  const TEXT = PW - 4;
+  const desk = hitboxes.find((h) => h.id === swarm?.id);
+  const deskCenterX = desk ? desk.x + Math.floor(desk.w / 2) : Math.floor(size.cols / 2);
+  const left = Math.max(0, Math.min(size.cols - PW, deskCenterX - Math.floor(PW / 2)));
+  const chrome = { borderFg: P.accent, bold: false };
+  const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
+  const body = [];
+
+  const head = cells();
+  head.add('╭─ ');
+  head.add('SWARM', { fg: P.accent, bold: true });
+  head.add(' · ');
+  head.add(truncate(person ? person.name : (swarm?.id || ''), 16), { fg: P.ink, bold: true });
+  const subCount = swarm?.subagents?.length || 0;
+  head.add(` (${subCount} subagent${subCount === 1 ? '' : 's'})`, { fg: P.dim });
+  head.add(' ');
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
+  head.add('╮');
+  body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+
+  if (swarm?.closeConfirm) {
+    body.push(row(''));
+    const confirmLine = cells();
+    confirmLine.add('  ');
+    confirmLine.add(truncate(swarm.closeConfirm.plan || 'Close all idle/done subagents?', TEXT - 20), { fg: '#ffc14d', bold: true });
+    confirmLine.add('  Close? (y/n)', { fg: P.ink, bold: true });
+    body.push(row(confirmLine.out().text, confirmLine.out().spans));
+    body.push(row(''));
+  } else if (!swarm?.subagents || swarm.subagents.length === 0) {
+    body.push(row('  no subagents for this agent', [{ from: 0, to: Infinity, fg: P.dim }]));
+  } else {
+    const sorted = [...swarm.subagents].sort((a, b) => a.slot - b.slot);
+    for (const sub of sorted) {
+      const line = cells();
+      line.add('  ');
+      line.add(String(sub.slot).padEnd(2), { fg: P.accent, bold: true });
+      line.add(' ');
+      const isBlocked = sub.state === 'blocked';
+      const stGlyph = isBlocked ? '!' : sub.state === 'working' ? '*' : sub.state === 'idle' ? '-' : sub.state === 'done' ? '+' : '?';
+      const stFg = isBlocked ? '#ef6b43' : sub.state === 'working' ? '#5ce08a' : '#7e8a9b';
+      const stText = `${stGlyph} ${sub.state}`.padEnd(10);
+      if (isBlocked) {
+        line.add(stText, { fg: '#ffffff', bg: '#8b0000', bold: true });
+      } else {
+        line.add(stText, { fg: stFg });
+      }
+      line.add(' ');
+      const handle = truncate(sub.handle || '-', 14).padEnd(15);
+      line.add(handle, { fg: P.ink });
+      const cm = truncate(`${sub.client || '-'}/${sub.model || '-'}`, 16).padEnd(17);
+      line.add(cm, { fg: P.soft });
+      const branch = truncate(sub.branch || '-', 16).padEnd(17);
+      line.add(branch, { fg: P.dim });
+      const changes = `+${sub.commitsAhead ?? 0} ~${sub.uncommitted ?? 0}`.padEnd(8);
+      line.add(changes, { fg: P.dim });
+      if (sub.run) {
+        const remaining = Math.max(0, TEXT - line.w - 1);
+        if (remaining > 0) {
+          line.add(truncate(String(sub.run), remaining), { fg: P.soft });
+        }
+      }
+      body.push(row(line.out().text, line.out().spans));
+    }
+  }
+
+  const foot = cells();
+  foot.add('╰─ ');
+  foot.add('1-9', { fg: P.accent });
+  foot.add(' focus  ');
+  foot.add('c', { fg: P.accent });
+  foot.add(' close idle  ');
+  foot.add('esc/w', { fg: P.accent });
+  foot.add(' close');
+  foot.add(' ');
+  foot.add('─'.repeat(Math.max(0, PW - foot.w - 1)));
+  foot.add('╯');
+  body.push(paint(foot.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...foot.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+
+  const lines = [];
+  for (let i = 0; i < floorRows; i += 1) {
+    if (i >= body.length) {
+      lines.push(fill(size.cols, P.carpet));
+      continue;
+    }
+    lines.push(fill(left, P.carpet) + body[i] + fill(size.cols - left - PW, P.carpet));
+  }
+  return lines;
+}
+
 /* --------------------------------------------------------------------- frame */
 
 export function renderFrame(view) {
@@ -1744,7 +1862,7 @@ export function renderFrame(view) {
   // are either reading about somebody, deciding who to hire, or writing down what
   // somebody should do, never two of the three. Assign outranks the others because
   // it is the one holding half-typed text somebody would lose.
-  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.detail ? 'detail' : null;
+  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.swarm ? 'swarm' : view.detail ? 'detail' : null;
   const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
   const floorRows = Math.max(1, roomBelowHeader - detailRows);
   const startRow = out.length;
@@ -1899,6 +2017,7 @@ export function renderFrame(view) {
     grid.menuVisible = drawn.menuVisible;
     out.push(...drawn.lines);
   } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
+  else if (panel === 'swarm') out.push(...swarmPanel(view, detailRows, hitboxes, out.length));
   else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
   return { lines: out.slice(0, rows), hitboxes, grid, regions };
