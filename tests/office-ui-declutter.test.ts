@@ -196,3 +196,36 @@ test("jev-classify parses flat JSON from fake executable and renderFrame shows m
   
   unlinkSync(fakeBin);
 });
+
+test("activity short forms fit in 12 cells and detail view shows long form", () => {
+  const shortForms = ['testing', 'editing', 'reading', 'running', 'planning', 'approval?', 'answer?', 'error', 'idle', 'done'];
+  for (const form of shortForms) {
+    expect(form.length).toBeLessThanOrEqual(12);
+  }
+
+  const person = {
+    id: "p1", name: "Ada", kind: "codex", status: "working",
+    jevState: "working", jevConfidence: 0.9, jevActivity: "waiting_approval", since: Date.now(), cwd: "/test"
+  };
+
+  const viewFloor = {
+    size: { cols: 80, rows: 24 },
+    people: [person],
+    now: Date.now(),
+    frame: 0,
+    counts: {},
+    stats: { counts: {} }
+  };
+  
+  const floorOut = renderFrame(viewFloor).lines.join("\\n");
+  // The monitor should contain the short form alone
+  expect(floorOut).toContain("approval?");
+  expect(floorOut).not.toContain("codex · approval?");
+  expect(floorOut).not.toContain("codex · waiting");
+
+  const viewDetail = { ...viewFloor, detail: { id: "p1" } };
+
+  const detailOut = renderFrame(viewDetail).lines.join("\\n");
+  // The detail panel should contain the long form
+  expect(detailOut).toContain("WORKING · waiting approval");
+});
