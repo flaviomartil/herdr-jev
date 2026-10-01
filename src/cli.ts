@@ -421,12 +421,43 @@ program
     }
   });
 
-program.command("peer-message <agent> <text>")
+program.command("peer-message [agent] [text]")
   .description("Send the next turn to an existing peer without spawning another agent")
+  .option("--all", "Broadcast to all tracked grid workers")
+  .option("--exclude <handles>", "Comma-separated list of peer handles to exclude")
   .option("--wait", "Wait for the peer response")
   .option("--lines <n>", "Terminal snapshot line limit", "2000")
   .option("--timeout-ms <ms>", "Peer wait deadline", "900000")
-  .action(async (agent: string, text: string, options: { wait?: boolean; lines: string; timeoutMs: string }) => console.log(await converseWithPeer({ target: agent, text, wait: options.wait, lines: Number(options.lines), timeoutMs: Number(options.timeoutMs) })));
+  .action(async (agentOrText: string | undefined, maybeText: string | undefined, options: { all?: boolean; exclude?: string; wait?: boolean; lines: string; timeoutMs: string }) => {
+    if (options.all) {
+      if (maybeText !== undefined) throw new Error("Cannot specify both <agent> and --all");
+      if (!agentOrText?.trim()) throw new Error("A nonempty message is required");
+      const result = await converseWithPeer({
+        all: true,
+        text: agentOrText,
+        exclude: options.exclude,
+        wait: options.wait,
+        lines: Number(options.lines),
+        timeoutMs: Number(options.timeoutMs),
+      });
+      console.log(result);
+      try {
+        const items = JSON.parse(result);
+        if (Array.isArray(items) && items.some((item: any) => !item.acknowledged)) {
+          process.exitCode = 1;
+        }
+      } catch {}
+      return;
+    }
+    if (!agentOrText || !maybeText) throw new Error("Peer agent handle and message text are required");
+    console.log(await converseWithPeer({
+      target: agentOrText,
+      text: maybeText,
+      wait: options.wait,
+      lines: Number(options.lines),
+      timeoutMs: Number(options.timeoutMs),
+    }));
+  });
 
 program.command("peer-read <agent>")
   .description("Read the existing peer conversation")
