@@ -444,68 +444,24 @@ program
   .option("-p, --print", "Run non-interactively in inline mode (print output directly)")
   .option("--worktree [name]", "Create a sibling worktree for the subagent")
   .action(async (promptText: string, options: { client?: string; target?: string; role: string; split?: boolean; tab?: boolean; name?: string; model?: string; effort?: string; sourcePane?: string; cwd?: string; direction?: string; crossHarness?: string; print?: boolean; worktree?: boolean | string; gitRunner?: any }) => {
+    const { setupWorktree } = await import("./herdr/agents.js");
     const context = await resolveHerdrContext({ client: options.client, sourcePaneId: options.sourcePane });
     let finalCwd = options.cwd ?? context.cwd ?? process.cwd();
     let worktreeBranch = null;
     let worktreePath = null;
     
     if (options.worktree !== undefined) {
-      let gitRunner = options.gitRunner;
-      if (!gitRunner) {
-        const agents = await import("./herdr/agents.js");
-        gitRunner = agents.defaultGitRunner;
-      }
-      
-      const toplevelRes = await gitRunner(["rev-parse", "--show-toplevel"], finalCwd);
-      if (!toplevelRes.ok) {
-        console.error(`[herdr-jev] Error: Directory is not inside a git repository (${finalCwd})`);
+      const res = await setupWorktree(options, finalCwd);
+      if (res.error) {
+        console.error(`[herdr-jev] ${res.error}`);
         process.exitCode = 1;
         return;
       }
-      const repoDir = toplevelRes.stdout.trim();
-      
-      const slug = (typeof options.worktree === "string" && options.worktree) 
-        ? options.worktree 
-        : (options.name || Math.random().toString(36).substring(2, 8));
-        
-      if (slug.startsWith("codex/")) {
-        console.error(`[herdr-jev] Error: Worktree branch name cannot start with codex/`);
-        process.exitCode = 1;
-        return;
+      if (res.worktreePath && res.worktreeBranch) {
+        worktreePath = res.worktreePath;
+        worktreeBranch = res.worktreeBranch;
+        finalCwd = worktreePath;
       }
-      
-      const branchName = `wt/${slug}`;
-      const targetDir = `${repoDir}-wt-${slug}`;
-      
-      const targetToplevelRes = await gitRunner(["rev-parse", "--show-toplevel"], targetDir);
-      if (targetToplevelRes.ok) {
-        if (targetToplevelRes.stdout.trim() === repoDir) {
-          worktreePath = targetDir;
-          worktreeBranch = branchName;
-        } else {
-          console.error(`[herdr-jev] Error: Directory ${targetDir} already exists but is not a worktree of ${repoDir}`);
-          process.exitCode = 1;
-          return;
-        }
-      } else {
-        const branchRes = await gitRunner(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repoDir);
-        if (branchRes.ok) {
-          console.error(`[herdr-jev] Error: Branch ${branchName} already exists`);
-          process.exitCode = 1;
-          return;
-        }
-        
-        const addRes = await gitRunner(["worktree", "add", "-b", branchName, targetDir, "HEAD"], repoDir);
-        if (!addRes.ok) {
-          console.error(`[herdr-jev] Error creating worktree: ${addRes.stderr}`);
-          process.exitCode = 1;
-          return;
-        }
-        worktreePath = targetDir;
-        worktreeBranch = branchName;
-      }
-      
-      finalCwd = worktreePath;
     }
 
     const sourceClient = context.client as ClientKind;

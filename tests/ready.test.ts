@@ -136,4 +136,58 @@ describe("launcher prompt readiness and retry", () => {
     expect(res.ok).toBe(false);
     expect(promptCalls).toBe(1);
   });
+
+  it("detects agy trust dialog and returns blocked", async () => {
+    const fakeClock = { now: () => 1000000, sleep: async () => {} };
+    const client = {
+      splitCurrent: async () => commandResult(true, '{"result":{"pane":{"pane_id":"pane-42"}}}'),
+      startAgent: async () => commandResult(true),
+      closePane: async () => commandResult(true),
+      getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => commandResult(true, "Do you trust this folder? Yes, I trust this folder / No, exit"),
+      readAgent: async () => commandResult(true, "Do you trust this folder? Yes, I trust this folder / No, exit"),
+      prompt: async () => commandResult(true),
+    };
+    const res = await launchStageInHerdr({ client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock } as any);
+    expect(res.ok).toBe(false);
+    expect(res.ackStatus).toBe("blocked");
+    expect(res.trustRequired).toBe(true);
+    expect(res.promptPending).toBe(true);
+    expect(res.hint).toContain("confirm trust in the pane, then send the task with peer-message");
+  });
+
+  it("detects Claude Code trust dialog and returns blocked", async () => {
+    const fakeClock = { now: () => 1000000, sleep: async () => {} };
+    const client = {
+      splitCurrent: async () => commandResult(true, '{"result":{"pane":{"pane_id":"pane-42"}}}'),
+      startAgent: async () => commandResult(true),
+      closePane: async () => commandResult(true),
+      getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => commandResult(true, "1) Trust and continue\n2) Exit"),
+      readAgent: async () => commandResult(true, "1) Trust and continue\n2) Exit"),
+      prompt: async () => commandResult(true),
+    };
+    const res = await launchStageInHerdr({ client: "claude", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock } as any);
+    expect(res.ok).toBe(false);
+    expect(res.ackStatus).toBe("blocked");
+    expect(res.trustRequired).toBe(true);
+  });
+
+  it("detects Codex trust dialog and returns blocked", async () => {
+    const fakeClock = { now: () => 1000000, sleep: async () => {} };
+    const client = {
+      splitCurrent: async () => commandResult(true, '{"result":{"pane":{"pane_id":"pane-42"}}}'),
+      startAgent: async () => commandResult(true),
+      closePane: async () => commandResult(true),
+      getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => commandResult(true, "Yes, I trust this folder\nEnter to confirm"),
+      readAgent: async () => commandResult(true, "Yes, I trust this folder\nEnter to confirm"),
+      prompt: async () => commandResult(true),
+    };
+    const res = await launchStageInHerdr({ client: "codex", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock } as any);
+    expect(res.ok).toBe(false);
+    expect(res.ackStatus).toBe("blocked");
+    expect(res.trustRequired).toBe(true);
+  });
 });
+

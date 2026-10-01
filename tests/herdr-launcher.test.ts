@@ -249,7 +249,8 @@ describe("Herdr launch acknowledgement", () => {
     herdr.readAgent = async () => commandResult(true, "1. Trust and continue");
     const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "bounded task", herdr });
     expect(herdr.promptCalls).toBe(0);
-    expect(result.ackStatus).toBe("rejected");
+    expect(result.ackStatus).toBe("blocked");
+    expect(result.trustRequired).toBe(true);
     expect(result.error).toContain("trust confirmation");
   });
 

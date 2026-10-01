@@ -331,3 +331,36 @@ export function formatAgentsTable(groups: AgentProjectGroup[]): string {
   }
   return lines.join("\n");
 }
+
+export async function setupWorktree(options: { worktree?: boolean | string; name?: string; gitRunner?: any }, finalCwd: string): Promise<{ worktreePath: string | null; worktreeBranch: string | null; error?: string }> {
+  let gitRunner = options.gitRunner || defaultGitRunner;
+  const toplevelRes = await gitRunner(["rev-parse", "--show-toplevel"], finalCwd);
+  if (!toplevelRes.ok) {
+    return { worktreePath: null, worktreeBranch: null, error: `Error: Directory is not inside a git repository (${finalCwd})` };
+  }
+  const repoDir = toplevelRes.stdout.trim();
+  const slug = (typeof options.worktree === "string" && options.worktree) ? options.worktree : (options.name || Math.random().toString(36).substring(2, 8));
+  if (slug.startsWith("codex/")) {
+    return { worktreePath: null, worktreeBranch: null, error: `Error: Worktree branch name cannot start with codex/` };
+  }
+  const branchName = `wt/${slug}`;
+  const targetDir = `${repoDir}-wt-${slug}`;
+  const targetToplevelRes = await gitRunner(["rev-parse", "--show-toplevel"], targetDir);
+  if (targetToplevelRes.ok) {
+    if (targetToplevelRes.stdout.trim() === repoDir) {
+      return { worktreePath: targetDir, worktreeBranch: branchName };
+    } else {
+      return { worktreePath: null, worktreeBranch: null, error: `Error: Directory ${targetDir} already exists but is not a worktree of ${repoDir}` };
+    }
+  } else {
+    const branchRes = await gitRunner(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repoDir);
+    if (branchRes.ok) {
+      return { worktreePath: null, worktreeBranch: null, error: `Error: Branch ${branchName} already exists` };
+    }
+    const addRes = await gitRunner(["worktree", "add", "-b", branchName, targetDir, "HEAD"], repoDir);
+    if (!addRes.ok) {
+      return { worktreePath: null, worktreeBranch: null, error: `Error creating worktree: ${addRes.stderr}` };
+    }
+    return { worktreePath: targetDir, worktreeBranch: branchName };
+  }
+}
