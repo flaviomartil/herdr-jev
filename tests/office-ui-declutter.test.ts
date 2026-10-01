@@ -65,7 +65,7 @@ test("cache once per revision and timeout fallback", async () => {
   const failingBin = resolve(import.meta.dir, `../.test-failing-classify-${Date.now()}.mjs`);
   writeFileSync(
     fakeBin,
-    `#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ state: { choice: "working", confidence: 0.9 }, attention: "now", blockedReason: { choice: "none" } }));\n`
+    `#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ state: "working", stateConfidence: 0.9, attention: "now", blockedReason: "none" }));\n`
   );
   chmodSync(fakeBin, 0o755);
   writeFileSync(failingBin, `#!/usr/bin/env node\nprocess.exit(1);\n`);
@@ -150,4 +150,49 @@ import { formatCommand } from "../herdr-plugin/office/src/render.mjs";
 test("formatCommand parses raw command strings", () => {
   expect(formatCommand("node /home/martil/.nvm/versions/node/v22.22.2/bin/node /home/martil/.local/share/codex.js", "")).toBe("codex");
   expect(formatCommand("claude --model something bun test", "claude")).toBe("claude · bun test");
+});
+
+import { renderFrame } from "../herdr-plugin/office/src/render.mjs";
+
+test("jev-classify parses flat JSON from fake executable and renderFrame shows marker", async () => {
+  const fakeBin = resolve(import.meta.dir, "fake-jev-classify.sh");
+  writeFileSync(fakeBin, `#!/bin/sh\ncat ${resolve(import.meta.dir, "fixtures/jev-classify-raw-blocked.json")} | sed 's/.*//g'\necho '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScore":1.87,"attentionConfidence":0.81,"blockedReason":"approval","blockedReasonConfidence":0.48,"activity":"unknown","activityConfidence":0,"jevMs":942,"model":"jev-1.13.0"}'\n`);
+  chmodSync(fakeBin, "755");
+  
+  process.env.HERDR_JEV_BIN = fakeBin;
+  const result = await classifyPane("p1", 1, { kind: "codex" }, ["some output"]);
+  
+  expect(result.state).toBe("blocked");
+  expect(result.attention).toBe("now");
+  
+  const person = {
+    id: "p1",
+    name: "Ada",
+    kind: "codex",
+    title: "task",
+    since: Date.now(),
+    status: "blocked",
+    cwd: "/path/to/repo",
+    jevState: result.state,
+    jevAttention: result.attention,
+    jevConfidence: result.confidence
+  };
+  
+  const view = {
+    size: { cols: 80, rows: 24 },
+    people: [person],
+    now: Date.now(),
+    frame: 0,
+    counts: {},
+    stats: { counts: {} }
+  };
+  
+  const rendered = renderFrame(view);
+  const outStr = rendered.lines.join("\n");
+  
+  // The name-plate attention marker for 'now' is ' !' with #ffb000
+  // Since paint() puts ANSI codes, we can just check for ' !'
+  expect(outStr).toContain(" !");
+  
+  unlinkSync(fakeBin);
 });

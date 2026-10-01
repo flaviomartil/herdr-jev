@@ -435,8 +435,11 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // A working desk whose foreground command herdr could name shows the command
   // instead of the generic scrolling code: same two rows, same twelve cells, but
   // now the monitor says `npm test` and the bar underneath chugs.
-  const scr = person.status === 'working' && person.command
-    ? runningScreen(formatCommand(person.command, person.kind), frame)
+  const monitorLabel = person.jevActivity && person.jevActivity !== 'unknown'
+    ? `${person.kind} · ${person.jevActivity.replace(/_/g, ' ')}`
+    : formatCommand(person.command, person.kind);
+  const scr = person.status === 'working' && monitorLabel
+    ? runningScreen(monitorLabel, frame)
     : screen(person.status, frame);
   // Amber pulse so a raised hand catches the eye from across the room.
   const alert = person.status === 'blocked' && frame % 4 < 2;
@@ -1566,7 +1569,10 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     // "for at least 0s" is just noise on someone we only just laid eyes on.
     const held = view.now - person.since;
     const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held)}`;
-    let statusLine = st.label + dwell;
+    const activityLabel = person.jevActivity && person.jevActivity !== 'unknown'
+      ? `${person.kind} · ${person.jevActivity.replace(/_/g, ' ')}`
+      : formatCommand(person.command, person.kind);
+    let statusLine = (activityLabel || st.label) + dwell;
     if (view.shift && view.shift.onShift >= 1000) {
       const shift = view.shift;
       const parts = [`${formatDuration(shift.onShift)} on shift`];

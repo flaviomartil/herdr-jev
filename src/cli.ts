@@ -47,6 +47,7 @@ import {
 import type { ClientKind, RoleKind } from "./types/index.js";
 import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
+import { classifyPaneText } from "./triage/pane-classifier.js";
 import { TurnRouter } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
@@ -808,25 +809,7 @@ program.command("classify-pane")
     for await (const chunk of process.stdin) input += chunk;
     const data = JSON.parse(input);
     const client = getGlobalJevClient();
-    const result = await client.ask(
-      { paneText: data.paneText, agent: data.agent, status: data.status },
-      {
-        state: choice("Given paneText, the recent terminal output of a coding agent, which state is the agent in now? blocked means waiting for a human approval, answer or stuck on an error; working means actively running tools or producing output; idle means at an empty prompt with nothing pending; done means it reported completion; unknown otherwise", {
-          blocked: "waiting for a human approval, answer or stuck on an error",
-          working: "actively running tools or producing output",
-          idle: "at an empty prompt with nothing pending",
-          done: "reported completion",
-          unknown: "otherwise"
-        }),
-        attention: score("Based on the paneText, what is the level of attention required?", ["none: nothing needed", "soon: will need input shortly or finished and awaits review", "now: blocked on a human right now"]),
-        blockedReason: choice("If blocked, what is the reason?", {
-          approval: "waiting for human approval to proceed",
-          question: "waiting for human answer to a question",
-          error: "stuck on an error",
-          none: "not blocked"
-        })
-      }
-    );
+    const result = await classifyPaneText(data, client);
     if (options.json) {
       console.log(JSON.stringify(result));
     }
