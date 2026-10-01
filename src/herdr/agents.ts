@@ -1,9 +1,10 @@
 import { basename } from "node:path";
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { readGridWorkerRecords, gridStateDir, type GridWorkerRecord } from "./launcher.js";
+import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, type GridWorkerRecord } from "./launcher.js";
 import { readOverview, matchRunForPane, formatOverviewRun } from "./overview.js";
 import { listRunHistory, type RunHistoryEntry } from "../orchestration/run-history.js";
+import { createHerdrClient, type HerdrClient } from "./client.js";
 
 export type AgentState = "blocked" | "working" | "idle" | "done" | "unknown";
 
@@ -41,6 +42,8 @@ export interface AgentsViewDeps {
   runs?: readonly RunHistoryEntry[];
   now?: number;
   workers?: readonly GridWorkerRecord[];
+  client?: HerdrClient;
+  herdrClient?: HerdrClient;
 }
 
 export const defaultGitRunner: GitRunner = async (args: string[], cwd?: string) => {
@@ -83,6 +86,36 @@ function normalizeState(state?: string | null): AgentState {
   return "unknown";
 }
 
+function parseLivePaneIds(stdout: string): Set<string> | null {
+  if (!stdout || !stdout.trim()) return null;
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    const firstBrace = stdout.indexOf("{");
+    const lastBrace = stdout.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      try {
+        parsed = JSON.parse(stdout.slice(firstBrace, lastBrace + 1));
+      } catch {
+      }
+    }
+  }
+  if (parsed) {
+    const layout = parsed.result?.layout ?? parsed.layout ?? parsed.result?.panes ?? parsed.panes ?? parsed.result ?? parsed;
+    const panes = Array.isArray(layout.panes)
+      ? layout.panes
+      : Array.isArray(layout)
+      ? layout
+      : [];
+    const ids = panes
+      .map((p: any) => (typeof p === "string" ? p : p?.pane_id ?? p?.id))
+      .filter((id: any): id is string => typeof id === "string" && id.length > 0);
+    return new Set(ids);
+  }
+  return null;
+}
+
 export async function buildAgentsView(
   callerPaneId?: string,
   deps?: AgentsViewDeps,
@@ -111,6 +144,42 @@ export async function buildAgentsView(
         }
       }
     } catch {
+    }
+  }
+
+  const herdr = deps?.client ?? deps?.herdrClient ?? (deps?.workers || deps?.stateDir ? undefined : createHerdrClient());
+  let livePaneIds: Set<string> | null = null;
+  if (herdr) {
+    try {
+      if (herdr.listPanes) {
+        const res = await herdr.listPanes();
+        if (res.ok) {
+          livePaneIds = parseLivePaneIds(res.stdout);
+        }
+      }
+      if (!livePaneIds && herdr.paneLayout) {
+        const res = await herdr.paneLayout(callerPaneId ?? "");
+        if (res.ok) {
+          livePaneIds = parseLivePaneIds(res.stdout);
+        }
+      }
+    } catch {
+    }
+  }
+
+  if (livePaneIds) {
+    const deadWorkerIds: string[] = [];
+    const liveWorkers: GridWorkerRecord[] = [];
+    for (const w of workers) {
+      if (livePaneIds.has(w.paneId)) {
+        liveWorkers.push(w);
+      } else {
+        deadWorkerIds.push(w.paneId);
+      }
+    }
+    if (deadWorkerIds.length > 0) {
+      workers = liveWorkers;
+      pruneGridWorkers(deadWorkerIds, deps?.stateDir);
     }
   }
 

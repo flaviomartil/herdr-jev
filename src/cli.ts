@@ -50,6 +50,7 @@ import { getGlobalJevClient } from "./triage/jev-client.js";
 import { TurnRouter } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
+import { buildDailyReport, formatDailyText, formatDailyMarkdown, writeDailyMarkdown } from "./herdr/daily.js";
 import { buildAgentsView, formatAgentsTable } from "./herdr/agents.js";
 import { assertRunId, formatRunHistory, listRunHistory } from "./orchestration/run-history.js";
 
@@ -348,6 +349,28 @@ runsCommand
       timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd });
     console.log(JSON.stringify(result, null, 2));
     if ("error" in result || result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state))) process.exitCode = 1;
+  });
+
+program
+  .command("daily")
+  .description("Deterministic end-of-day summary per agent")
+  .option("--json", "Output JSON")
+  .option("--md", "Output Markdown in Brazilian Portuguese")
+  .option("--since <date-time>", "Commits and runs since ISO date-time")
+  .option("--write", "Save Markdown report to disk and print path")
+  .action(async (options: { json?: boolean; md?: boolean; since?: string; write?: boolean }) => {
+    const report = await buildDailyReport(undefined, { since: options.since });
+    if (options.write) {
+      const savedPath = writeDailyMarkdown(report);
+      console.log(savedPath);
+    }
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else if (options.md) {
+      console.log(formatDailyMarkdown(report));
+    } else if (!options.write) {
+      console.log(formatDailyText(report));
+    }
   });
 
 program
