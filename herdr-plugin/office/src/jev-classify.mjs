@@ -33,7 +33,7 @@ export async function classifyPane(paneId, revision, person, outputLines) {
   }
 
   const defaultSummary = summarize(person, outputLines);
-  const fallback = { summary: defaultSummary, state: null, attention: null };
+  const fallback = { summary: defaultSummary, state: null, attention: null, isFallback: true };
 
   if (inflight) return fallback;
 
@@ -72,6 +72,7 @@ export async function classifyPane(paneId, revision, person, outputLines) {
             attention: ans.attention,
             confidence: ans.stateConfidence ?? 0,
             blockedReason: ans.blockedReason,
+            blockedReasonConfidence: ans.blockedReasonConfidence ?? 0,
             activity: ans.activityConfidence >= 0.45 ? ans.activity : undefined
           };
             cache.set(key, result);
@@ -90,6 +91,7 @@ export async function classifyPane(paneId, revision, person, outputLines) {
       resolve(fallback);
     });
 
+    child.stdin.on('error', () => {});
     child.stdin.write(JSON.stringify({
       paneText: outputLines.join('\n'),
       agent: person.kind || 'unknown',

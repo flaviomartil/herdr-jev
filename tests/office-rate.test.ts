@@ -86,7 +86,7 @@ test("office transition calls notify exactly once per revision", () => {
   office._testHooks.applyJevData();
   
   expect(notifyPending.length).toBe(1);
-  expect(notifyPending[0].args).toEqual(['notify', '--pane', 'p_notify', '--project', 'test', '--task', 'Task', '--attention', 'now', '--reason', 'none', '--confidence', '0.9', '--native-status', 'idle', '--agent', 'codex', '--json']);
+  expect(notifyPending[0].args).toEqual(['notify', '--pane', 'p_notify', '--project', 'test', '--task', 'Task', '--attention', 'now', '--reason', 'none', '--confidence', '0.9', '--native-status', 'idle', '--jev-state', 'blocked', '--reason-confidence', '0', '--agent', 'codex', '--json']);
   
   notifyPending.length = 0;
   
