@@ -658,7 +658,7 @@ function headerLines(view) {
   const { counts, people, size, reducedMotion } = view;
   const clock = new Date(view.now).toTimeString().slice(0, reducedMotion ? 5 : 8);
   if (view.disconnectedSince) {
-    const dur = formatDuration(view.now - view.disconnectedSince);
+    const dur = formatDuration(view.now - view.disconnectedSince, view.reducedMotion);
     const msg = ` HERDR DESCONECTADO: tentando reconectar `;
     const b = cells();
     b.add(msg, { bg: P.accent, fg: P.cubicle, bold: true });
@@ -698,7 +698,7 @@ function headerLines(view) {
   for (const key of ORDER) {
     if (!counts[key]) continue;
     const st = status(key);
-    const chunk = ` ${counts[key]} ${PHRASE[key]} `;
+    const chunk = key === 'blocked' ? ` ${counts[key]} ${PHRASE[key]} · ${formatDuration(counts.longestWait, view.reducedMotion)} ` : ` ${counts[key]} ${PHRASE[key]} `;
     if (b.w + width(chunk) + 1 > budget) break;
     b.add('   ');
     b.add(chunk, { bg: st.fg, fg: P.cubicle, bold: key === 'blocked' });
@@ -914,7 +914,7 @@ const colour = (name) =>
 // pixel layer without counting lines here and there separately.
 const WB_BAR_ROW = 2;
 
-export function whiteboard(stats, now) {
+export function whiteboard(stats, now, reducedMotion = false) {
   if (!stats) return null;
   // A blank board until there is something true to write on it. A fresh office
   // reading "worked 0s, hands 0" would be furniture pretending to be information.
@@ -930,12 +930,12 @@ export function whiteboard(stats, now) {
   // Time first, because the split between working and waiting on a human is the one
   // number here that says something about how the office is being run rather than
   // about how the agents are doing.
-  const spent = `worked ${formatDuration(stats.worked)} \u00b7 waiting ${formatDuration(stats.waiting)}`;
+  const spent = `worked ${formatDuration(stats.worked, reducedMotion)} \u00b7 waiting ${formatDuration(stats.waiting, reducedMotion)}`;
   const hands = [`hands ${stats.hands}`];
   if (stats.answers > 0) hands.push(`${stats.answers} from here`);
   // A second, not a millisecond: on the first frame of a session the worst wait is
   // however long ago the last poll was, and "worst 0s" is not a statistic.
-  if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest)}`);
+  if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest, reducedMotion)}`);
   // The coarse bar: whole cells in the status colours, in the same left-to-right
   // order the header counts them. A cell is the smallest thing this can be wrong by,
   // which is the whole argument for the pixel layer that covers it, and is also why
@@ -1147,7 +1147,7 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     const who = identity(person.id);
     const face = [...pose(person.status, view.frame).rows[1]].slice(HAIR_FROM, HAIR_TO).join('');
     const selected = person.id === view.selectedId;
-    const dur = (person.assumedSince ? '~' : '') + formatDuration(view.now - person.since);
+    const dur = (person.assumedSince ? '~' : '') + formatDuration(view.now - person.since, view.reducedMotion);
     const b = cells();
     // Narrow terminals drop columns from the right rather than wrapping: state
     // and face first, then who they are, then what they are doing.
@@ -1590,15 +1590,15 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   if (person) {
     // "for at least 0s" is just noise on someone we only just laid eyes on.
     const held = view.now - person.since;
-    const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held)}`;
+    const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held, view.reducedMotion)}`;
     const longAct = person.jevActivity && person.jevActivity !== 'unknown' ? person.jevActivity.replace(/_/g, ' ') : null;
     const activityLabel = longAct ? `${st.label} · ${longAct}` : formatCommand(person.command, person.kind);
     let statusLine = (activityLabel || st.label) + dwell;
     if (view.shift && view.shift.onShift >= 1000) {
       const shift = view.shift;
-      const parts = [`${formatDuration(shift.onShift)} on shift`];
-      if (shift.worked >= 1000) parts.push(`${formatDuration(shift.worked)} working`);
-      if (shift.waiting >= 1000) parts.push(`${formatDuration(shift.waiting)} waiting on you`);
+      const parts = [`${formatDuration(shift.onShift, view.reducedMotion)} on shift`];
+      if (shift.worked >= 1000) parts.push(`${formatDuration(shift.worked, view.reducedMotion)} working`);
+      if (shift.waiting >= 1000) parts.push(`${formatDuration(shift.waiting, view.reducedMotion)} waiting on you`);
       if (shift.hands > 1) parts.push(`${shift.hands} hands`);
       statusLine += ' · ' + parts.join(' · ');
     }
@@ -1865,7 +1865,7 @@ function endedPanel(view, floorRows) {
   }
 
   const recap = cells();
-  recap.add(`  Vistos hoje: ${endedLog.length} | Trabalhou: ${formatDuration(totalWork)} | Esperou: ${formatDuration(totalWait)} | Maior espera: ${formatDuration(longestWait)}`, { fg: P.ink, bold: true });
+  recap.add(`  Vistos hoje: ${endedLog.length} | Trabalhou: ${formatDuration(totalWork, view.reducedMotion)} | Esperou: ${formatDuration(totalWait, view.reducedMotion)} | Maior espera: ${formatDuration(longestWait, view.reducedMotion)}`, { fg: P.ink, bold: true });
   body.push(row(recap.out().text, recap.out().spans));
   body.push(row(''));
 
@@ -1884,7 +1884,7 @@ function endedPanel(view, floorRows) {
       line.add(truncate(entry.task || '-', 20).padEnd(21), { fg: P.ink });
       line.add(truncate(entry.state || '-', 9).padEnd(10), { fg: status(entry.state).fg });
       
-      const timeStr = `${formatDuration(entry.worked || 0)} trab / ${formatDuration(entry.waiting || 0)} esp`;
+      const timeStr = `${formatDuration(entry.worked || 0, view.reducedMotion)} trab / ${formatDuration(entry.waiting || 0, view.reducedMotion)} esp`;
       line.add(timeStr, { fg: P.dim });
       
       body.push(row(line.out().text, line.out().spans, i % 2 === 1 ? P.cubicleAlt : P.cubicle));
@@ -2061,7 +2061,7 @@ export function renderFrame(view) {
     const pages = Math.ceil(view.people.length / perPage);
     // Furnish the strip under the desks, keeping clear of the paging note.
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
-    const board = whiteboard(view.stats, view.now);
+    const board = whiteboard(view.stats, view.now, view.reducedMotion);
     const hung = decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, board);
     // Only the bar row, not the writing. The first version of this took both interior
     // rows and so deleted `worked 12m · waiting 3m` to draw a picture of it, which
