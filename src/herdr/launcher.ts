@@ -416,6 +416,20 @@ export function parseHerdrPaneId(stdout: string): string | undefined {
 
 import { resolveBaseClientKind, resolveClientExecutable } from "../config/aliases.js";
 
+export function resolveClaudeModel(modelId: string): string {
+  if (!modelId) return modelId;
+  const trimmed = modelId.trim();
+
+  if (trimmed === "fable-5" || trimmed === "fable-5.1") return "claude-fable-5-1";
+  if (trimmed === "sonnet-5" || trimmed === "claude-sonnet-5" || trimmed === "sonnet-5.5") return "claude-sonnet-5-5";
+  if (trimmed === "opus-5" || trimmed === "opus-5.5") return "claude-opus-5-5";
+  if (trimmed === "haiku-4.5") return "claude-haiku-4-5-20251001";
+  if (trimmed === "opus" || trimmed === "sonnet" || trimmed === "haiku" || trimmed === "fable") return trimmed;
+  if (trimmed.startsWith("claude-") && /\d$/.test(trimmed)) return trimmed;
+
+  return trimmed;
+}
+
 export function resolveAntigravityModel(
   modelId: string,
   effort?: ReasoningEffort | string,
@@ -495,7 +509,7 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
   const bin = resolveClientExecutable(client);
   switch (base) {
     case "claude": {
-      const args = [bin, "--model", stage.model];
+      const args = [bin, "--model", resolveClaudeModel(stage.model)];
       if (stage.extraFlags.length > 0) {
         args.push(...stage.extraFlags);
       }
@@ -720,12 +734,88 @@ async function launchStageInHerdrAttempt(input: {
   }
   let promptDelivered = false;
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
-    const prompted = await herdr.prompt({
+    const baseClient = resolveBaseClientKind(effectiveClient);
+    const readyTimeoutMs = parseInt(process.env.HERDR_JEV_READY_TIMEOUT_MS || "45000", 10);
+    const readyDeadline = Date.now() + readyTimeoutMs;
+    let isReady = false;
+
+    while (Date.now() < readyDeadline) {
+      if (herdr.getAgent && herdr.readAgent) {
+        const [agentRes, screenRes] = await Promise.all([
+          herdr.getAgent(agentName),
+          herdr.readAgent(agentName)
+        ]);
+        if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
+          const state = readHerdrObservedState(agentRes);
+          if (state === "idle") {
+            const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+            let readyMatch = false;
+            if (baseClient === "antigravity") readyMatch = /(^|\n)>\s*(?=\n|$)/.test(cleanText);
+            else if (baseClient === "codex") readyMatch = /(^|\n)› /.test(cleanText);
+            else if (baseClient === "claude") readyMatch = /(^|\n)[❯>] /.test(cleanText);
+            else readyMatch = true;
+
+            if (readyMatch) {
+              isReady = true;
+              break;
+            }
+          }
+        }
+      } else {
+        isReady = true;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    if (!isReady) {
+      return {
+        ok: false,
+        ackStatus: "unknown",
+        completionState: "not_requested",
+        completionObserved: false,
+        workEvidence: "not_checked",
+        promptPending: true,
+        hint: "prompt not observed; use peer-message",
+        error: "Agent prompt readiness timed out",
+        paneCreated: true,
+        agentName,
+        paneId,
+        commandText,
+        direction: splitDirection,
+      };
+    }
+
+    let prompted = await herdr.prompt({
       target: agentName,
       text: input.handoffPrompt,
       wait: true,
       waitForStart: true,
     });
+
+    if (!prompted.ok && `${prompted.stdout}\n${prompted.stderr}`.includes("agent_prompt_stalled")) {
+      if (herdr.getAgent && herdr.readAgent) {
+        const [agentRes, screenRes] = await Promise.all([
+          herdr.getAgent(agentName),
+          herdr.readAgent(agentName)
+        ]);
+        if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
+          const state = readHerdrObservedState(agentRes);
+          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+          const promptPrefix = input.handoffPrompt.trim().slice(0, Math.min(input.handoffPrompt.trim().length, 32));
+          if (state === "idle" && !cleanText.includes(promptPrefix)) {
+            await new Promise(r => setTimeout(r, 2000));
+            prompted = await herdr.prompt({
+              target: agentName,
+              text: input.handoffPrompt,
+              wait: true,
+              waitForStart: true,
+            });
+          }
+        }
+      }
+    }
+
     if (!prompted.ok) {
       return {
         ok: false,
@@ -872,12 +962,13 @@ export function buildInlineCommand(
   const bin = resolveClientExecutable(client);
   switch (base) {
     case "claude": {
+      const model = resolveClaudeModel(stage.model);
       if (nonInteractive) {
-        const args = [bin, "-p", promptText, "--model", stage.model];
+        const args = [bin, "-p", promptText, "--model", model];
         if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
         return args;
       }
-      const args = [bin, "--model", stage.model];
+      const args = [bin, "--model", model];
       if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
       args.push(promptText);
       return args;

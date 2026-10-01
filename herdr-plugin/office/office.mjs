@@ -1615,7 +1615,26 @@ async function openHire() {
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
-  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
+  const hireCwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
+  let defaultWorktree = false;
+  if (!process.argv.includes('--no-git')) {
+    try {
+      const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: hireCwd, encoding: 'utf8' });
+      if (res.status === 0) {
+        const hireToplevel = res.stdout.trim();
+        for (const p of roster.people) {
+          if (p.cwd && !p.focused) {
+            const pRes = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: p.cwd, encoding: 'utf8' });
+            if (pRes.status === 0 && pRes.stdout.trim() === hireToplevel) {
+              defaultWorktree = true;
+              break;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+  hire = { kinds: [], index: 0, pending: null, error: null, worktree: defaultWorktree, branch: '', editing: false };
   prevLines = [];
   draw();
   try {
@@ -1670,7 +1689,6 @@ function editBranch(on) {
   else hire = { ...hire, editing: false, branch: hire.was || defaultBranch(hire.kinds[hire.index]) };
 }
 
-// `agent.start` waits for the agent to reach its own prompt, which can take the
 // better part of a minute, and every request on the main socket is queued behind
 // the one in front of it. So a hire gets its own connection: the office keeps
 // polling and animating while somebody is being shown to their desk.
@@ -1678,6 +1696,7 @@ async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
   const wantsWorktree = hire.worktree;
   const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
+  if (wantsWorktree) args.push('--worktree', branch);
   if (DEMO) {
     note(wantsWorktree
       ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`
@@ -1691,6 +1710,7 @@ async function startHire(kind) {
   const cwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
   const promptText = `Implement task with ${kind}`;
   const args = ['subagent', '--role', 'implementer'];
+  if (wantsWorktree) args.push('--worktree', branch);
   if (caller) args.push('--source-pane', caller);
   if (cwd) args.push('--cwd', cwd);
   args.push('--', promptText);
