@@ -33,7 +33,39 @@ export interface StandupTargetResult {
   reason?: string;
 }
 
+export interface StandupEnvironment {
+  configDir: string;
+  defaultFile: string;
+  stateDir: string;
+  callerPaneId?: string;
+}
+
+export function resolveStandupEnvironment(env: NodeJS.ProcessEnv = process.env): StandupEnvironment {
+  const isForeignPlugin = Boolean(env.HERDR_PLUGIN_ID && env.HERDR_PLUGIN_ID !== "herdr-jev");
+
+  const defaultConfigDir = join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev");
+  const defaultStateDir = join(homedir(), ".local", "state", "herdr-jev");
+
+  const configDir = isForeignPlugin
+    ? defaultConfigDir
+    : (env.HERDR_PLUGIN_CONFIG_DIR || defaultConfigDir);
+
+  const stateDir = env.HERDR_JEV_STATE_DIR ||
+    (!isForeignPlugin && env.HERDR_PLUGIN_STATE_DIR ? env.HERDR_PLUGIN_STATE_DIR : defaultStateDir);
+
+  const callerPaneId = env.HERDR_JEV_SOURCE_PANE_ID ||
+    (!isForeignPlugin ? env.HERDR_PANE_ID : undefined);
+
+  return {
+    configDir,
+    defaultFile: join(configDir, "standup.md"),
+    stateDir,
+    callerPaneId: callerPaneId || undefined,
+  };
+}
+
 export interface StandupPlanDeps {
+  env?: NodeJS.ProcessEnv;
   readOverview?: () => Promise<any[]>;
   overviewRows?: any[];
   callerPaneId?: string;
@@ -59,7 +91,7 @@ export interface StandupCommandDeps extends StandupPlanDeps, StandupRunDeps {
   stateDir?: string;
   fileExists?: (path: string) => boolean;
   readFile?: (path: string) => string;
-  writeFile?: (path: string, content: string) => void;
+  writeFile?: (path: string, content: string, options?: any) => void;
   mkdir?: (path: string) => void;
   log?: (msg: string) => void;
 }
@@ -260,7 +292,8 @@ export async function planStandup(
 
   let callerPaneId = deps.callerPaneId;
   if (!callerPaneId) {
-    callerPaneId = process.env.HERDR_PANE_ID || process.env.HERDR_JEV_SOURCE_PANE_ID;
+    const standupEnv = resolveStandupEnvironment(deps.env);
+    callerPaneId = standupEnv.callerPaneId;
   }
 
   const allowedStates = new Set(
@@ -378,22 +411,20 @@ export async function executeStandupCommand(
   options: StandupCommandOptions,
   deps: StandupCommandDeps = {},
 ): Promise<any> {
+  const standupEnv = resolveStandupEnvironment(deps.env);
+
   const fileExists = deps.fileExists ?? existsSync;
   const readFile = deps.readFile ?? ((p: string) => readFileSync(p, "utf-8"));
-  const writeFile = deps.writeFile ?? ((p: string, c: string) => writeFileSync(p, c, "utf-8"));
+  const writeFile =
+    deps.writeFile ??
+    ((p: string, c: string, opt?: any) => writeFileSync(p, c, opt ?? "utf-8"));
   const mkdir = deps.mkdir ?? ((p: string) => mkdirSync(p, { recursive: true }));
   const log = deps.log ?? console.log;
 
-  const configDir =
-    deps.configDir ??
-    process.env.HERDR_PLUGIN_CONFIG_DIR ??
-    join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev");
-  const filePath = options.file ?? join(configDir, "standup.md");
+  const configDir = deps.configDir ?? standupEnv.configDir;
+  const filePath = options.file ?? (deps.configDir ? join(deps.configDir, "standup.md") : standupEnv.defaultFile);
 
-  const stateDir =
-    deps.stateDir ??
-    process.env.HERDR_JEV_STATE_DIR ??
-    join(homedir(), ".local", "state", "herdr-jev");
+  const stateDir = deps.stateDir ?? standupEnv.stateDir;
 
   const now = deps.now ? (typeof deps.now === "number" ? new Date(deps.now) : deps.now) : new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -429,7 +460,11 @@ export async function executeStandupCommand(
 
   const rawText = readFile(filePath);
   const parsed = parseStandupFile(rawText);
-  const targets = await planStandup(deps, parsed);
+  const planDeps = {
+    ...deps,
+    callerPaneId: deps.callerPaneId ?? standupEnv.callerPaneId,
+  };
+  const targets = await planStandup(planDeps, parsed);
 
   const isDryRun = Boolean(options.dryRun) || (!options.yes && !options.auto);
 
@@ -450,11 +485,35 @@ export async function executeStandupCommand(
     return planResult;
   }
 
+  if (options.auto) {
+    try {
+      mkdir(join(stateDir, "standup"));
+    } catch {}
+
+    const claimPayload = JSON.stringify({ status: "running", date: dateIso }, null, 2);
+    if (!options.force) {
+      try {
+        writeFile(stateFilePath, claimPayload, { flag: "wx" });
+      } catch (err: any) {
+        if (err?.code === "EEXIST" || fileExists(stateFilePath)) {
+          const skipped = { skipped: "already_ran_today" };
+          log(JSON.stringify(skipped));
+          return skipped;
+        }
+        throw err;
+      }
+    } else {
+      try {
+        writeFile(stateFilePath, claimPayload, "utf-8");
+      } catch {}
+    }
+  }
+
   const results = await runStandup(targets, deps);
 
   try {
     mkdir(join(stateDir, "standup"));
-    writeFile(stateFilePath, JSON.stringify(results, null, 2));
+    writeFile(stateFilePath, JSON.stringify(results, null, 2), "utf-8");
   } catch {}
 
   const resultObj = {
