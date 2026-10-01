@@ -12,6 +12,8 @@ import {
 } from "../src/herdr/daily.js";
 import type { GitRunner } from "../src/herdr/agents.js";
 import type { RunHistoryEntry } from "../src/orchestration/run-history.js";
+import { resolveStateDir } from "../src/herdr/state-dir.js";
+import { resolveStandupEnvironment } from "../src/herdr/standup.js";
 
 test("lastMeaningfulLine filters terminal chrome and leaves only the Ran python3 line from real Codex tail", () => {
   const codexTail = [
@@ -904,3 +906,125 @@ test("Finding 7: lastMeaningfulLine redacts before truncating and masks key: val
   const livePath = "Ran /home/martil/projects/italents/impmotordados/motor-ingestao/.venv/bin/python /home/martil/projec";
   expect(redactSecrets(livePath)).toBe(livePath);
 });
+
+test("Finding 17: redactSecrets covers AWS access key ids, user:pass@host URLs, space-separated passwords, Basic auth, base64 with slashes, and wrapped secret tails in lastMeaningfulLine", () => {
+  const livePath = "Ran /home/martil/projects/italents/impmotordados/motor-ingestao/.venv/bin/python /home/martil/projec";
+  expect(redactSecrets(livePath)).toBe(livePath);
+
+  expect(redactSecrets("AWS key AKIAIOSFODNN7EXAMPLE")).toBe("AWS key [REDACTED]");
+  expect(redactSecrets("AKIA1234567890ABCDEF")).toBe("[REDACTED]");
+
+  expect(redactSecrets("https://user:password123@example.com")).toBe("https://user:[REDACTED]@example.com");
+  expect(redactSecrets("postgres://user:password123@localhost:5432/db")).toBe("postgres://user:[REDACTED]@localhost:5432/db");
+  expect(redactSecrets("user:pass@host")).toBe("user:[REDACTED]@host");
+
+  expect(redactSecrets("--password mysecretval123")).toBe("--password [REDACTED]");
+  expect(redactSecrets("password mysecretval123")).toBe("password [REDACTED]");
+
+  expect(redactSecrets("Authorization: Basic dXNlcjpwYXNz")).toBe("Authorization: Basic [REDACTED]");
+  expect(redactSecrets("Authorization: Basic ...")).toBe("Authorization: Basic [REDACTED]");
+
+  expect(redactSecrets("dGhpcy9pcy9hL3Zlcnkvc2VjcmV0L3Rva2VuMTIzNDU2Nzg5MA==")).toBe("[REDACTED]");
+
+  const wrapped = "Running command with token sk-proj-1234567890abcdef1234567890123\n4567890";
+  expect(lastMeaningfulLine(wrapped)).toBe("Running command with token [REDACTED]");
+});
+
+test("Finding 18: commit subjects in daily report are redacted before sanitization", async () => {
+  const fixedNow = new Date("2026-10-01T12:00:00Z").getTime();
+  const overview = [
+    {
+      pane: "w1:p1",
+      workspace_id: "w1",
+      pane_id: "w1:p1",
+      agent: "codex",
+      handle: "worker-1",
+      agent_status: "idle",
+      cwd: "/repos/proj-commits",
+      model: "gpt-6.1-sol",
+    },
+  ];
+
+  const fakeGit: GitRunner = async (args) => {
+    if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return "/repos/proj-commits";
+    if (args[0] === "branch" && args[1] === "--show-current") return "main";
+    if (args[0] === "status") return "";
+    if (args[0] === "log") return "feat: add password=supersecretpassword123 to config\n";
+    return "";
+  };
+
+  const report = await buildDailyReport(
+    {
+      overview,
+      git: fakeGit,
+      runs: [],
+      readPane: async () => "",
+      paneList: [],
+      now: fixedNow,
+    },
+    {
+      now: fixedNow,
+    },
+  );
+
+  const subject = report.projects[0]?.commitSubjects[0];
+  expect(subject).toBeDefined();
+  expect(subject).not.toContain("supersecretpassword123");
+  expect(subject).toContain("password=[REDACTED]");
+});
+
+test("Finding 19: daily honours HERDR_PLUGIN_STATE_DIR via resolveStateDir helper and writes to same state directory as standup", () => {
+  const cliScript = resolve(import.meta.dir, "../src/cli.ts");
+  const tempState = mkdtempSync(join(tmpdir(), "herdr-jev-f19-state-"));
+  const fakeHerdr = join(tmpdir(), `fake-herdr-f19-${Date.now()}.mjs`);
+  writeFileSync(
+    fakeHerdr,
+    `#!/usr/bin/env node
+if (process.argv.includes("snapshot")) {
+  process.stdout.write(JSON.stringify({ result: { snapshot: {
+    workspaces: [{ workspace_id: "w1", label: "my-f19-project" }],
+    agents: [{ workspace_id: "w1", pane_id: "p1", cwd: process.cwd(), agent: "codex", agent_status: "idle", tokens: { quota_model: "gpt-6.1-sol" } }]
+  } } }));
+  process.exit(0);
+}
+if (process.argv.includes("read")) {
+  process.stdout.write("meaningful line\\n");
+  process.exit(0);
+}
+if (process.argv.includes("list")) {
+  process.stdout.write(JSON.stringify({ panes: [{ pane_id: "p1", terminal_title_stripped: "task" }], type: "pane_list" }));
+  process.exit(0);
+}
+process.exit(0);
+`,
+  );
+  chmodSync(fakeHerdr, 0o755);
+
+  try {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      HERDR_BIN_PATH: fakeHerdr,
+      HERDR_PLUGIN_ID: "herdr-jev",
+      HERDR_PLUGIN_STATE_DIR: tempState,
+    };
+    delete env.HERDR_JEV_STATE_DIR;
+    delete env.HERDR_PANE_ID;
+
+    const resolvedState = resolveStateDir(env);
+    expect(resolvedState).toBe(tempState);
+
+    const standupEnv = resolveStandupEnvironment(env);
+    expect(standupEnv.stateDir).toBe(tempState);
+
+    const resWrite = spawnSync("bun", ["run", cliScript, "daily", "--write"], { env, encoding: "utf8" });
+    expect(resWrite.status).toBe(0);
+    const lines = resWrite.stdout.trim().split("\n");
+    const writtenPath = lines[lines.length - 1];
+    expect(writtenPath).toContain(tempState);
+    expect(existsSync(writtenPath)).toBe(true);
+  } finally {
+    try { unlinkSync(fakeHerdr); } catch {}
+    rmSync(tempState, { recursive: true, force: true });
+  }
+});
+
