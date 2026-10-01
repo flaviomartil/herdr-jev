@@ -815,4 +815,28 @@ program.command("classify-pane")
     }
   });
 
+program.command("notify")
+  .description("Notify user about pane state (cooldown, escalation)")
+  .option("--pane <id>", "Pane ID")
+  .option("--name <text>", "Agent name")
+  .option("--project <text>", "Project name")
+  .option("--attention <level>", "Attention level (none|soon|now)")
+  .option("--reason <reason>", "Reason (approval|question|error|none)")
+  .option("--confidence <n>", "Confidence score")
+  .option("--native-status <s>", "Native status")
+  .option("--agent <label>", "Agent label")
+  .option("--dry-run", "Dry run")
+  .option("--json", "JSON output")
+  .option("--release", "Release escalation")
+  .option("--release-stale", "Release stale escalations")
+  .action(async (options: any) => {
+    const { handleNotifyCommand } = await import("./herdr/notify.js");
+    const { createProcessCommandAdapter } = await import("./herdr/client.js");
+    if (options.confidence !== undefined) options.confidence = parseFloat(options.confidence);
+    const result = await handleNotifyCommand(options, createProcessCommandAdapter());
+    if (options.json) {
+      console.log(JSON.stringify(result));
+    }
+  });
+
 program.parse(process.argv);
