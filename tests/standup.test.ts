@@ -184,6 +184,8 @@ test("executeStandupCommand auto mode guard: missing file", async () => {
     { auto: true, file: "/nonexistent/standup.md" },
     {
       fileExists: () => false,
+      overviewRows: [],
+      sendPeer: async () => ({ ok: true }),
       log: (msg) => logs.push(msg),
     },
   );
@@ -199,6 +201,8 @@ test("executeStandupCommand auto mode guard: blank file", async () => {
     {
       fileExists: () => true,
       readFile: () => "   \n\n\t  ",
+      overviewRows: [],
+      sendPeer: async () => ({ ok: true }),
       log: (msg) => logs.push(msg),
     },
   );
@@ -217,8 +221,10 @@ test("executeStandupCommand auto mode guard: already ran today without force", a
     {
       stateDir,
       now,
-      fileExists: (p) => p.includes("2026-10-01.json") || p.includes("standup.md"),
+      fileExists: (p) => p.includes("2026-10-01.auto.json") || p.includes("standup.md"),
       readFile: () => "Standup message.",
+      overviewRows: [],
+      sendPeer: async () => ({ ok: true }),
       log: (msg) => logs.push(msg),
     },
   );
@@ -533,7 +539,7 @@ test("executeStandupCommand concurrent claim with two calls sharing temp state d
     const pad = (n: number) => String(n).padStart(2, "0");
     const d = new Date();
     const dateIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    const stateContent = readFileSync(join(tmpDir, "standup", `${dateIso}.json`), "utf-8");
+    const stateContent = readFileSync(join(tmpDir, "standup", `${dateIso}.auto.json`), "utf-8");
     const stateObj = JSON.parse(stateContent);
     expect(Array.isArray(stateObj)).toBe(true);
     expect(stateObj[0].sent).toBe(true);
@@ -551,7 +557,7 @@ test("executeStandupCommand crash recovery reports already_ran_today unless forc
   const pad = (n: number) => String(n).padStart(2, "0");
   const d = new Date();
   const dateIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-  const stateFilePath = join(tmpDir, "standup", `${dateIso}.json`);
+  const stateFilePath = join(tmpDir, "standup", `${dateIso}.auto.json`);
   writeFileSync(stateFilePath, JSON.stringify({ status: "running", date: dateIso }, null, 2), "utf-8");
 
   try {
@@ -665,6 +671,7 @@ test("executeStandupCommand with --pane filters eligible panes in dry-run and li
       fileExists: () => true,
       readFile: () => "Global daily task.",
       overviewRows: rows,
+      sendPeer: async () => ({ ok: true }),
       log: (msg) => logs.push(msg),
     },
   );
@@ -727,6 +734,7 @@ test("--pane option is subject to agent state rules", async () => {
       fileExists: () => true,
       readFile: () => "Global standup instruction.",
       overviewRows: rows,
+      sendPeer: async () => ({ ok: true }),
       log: () => {},
     },
   );
