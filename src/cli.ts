@@ -11,6 +11,9 @@ import {
   runAgentInline,
   resolveSplitLayout,
   nativeStageEffort,
+  listAllGridWorkers,
+  filterWorkerClosePlan,
+  executeWorkerClose,
   type SplitDirectionOption,
 } from "./herdr/launcher.js";
 import {
@@ -102,7 +105,7 @@ program
       for (const project of new Set(agents.map((agent) => agent.project))) {
         console.log(project);
         for (const agent of agents.filter((item) => item.project === project)) {
-          console.log(`  ${marks[agent.state] ?? "·"} ${agent.state} · ${agent.pane} · ${agent.branch ?? "—"}`);
+          console.log(`  ${marks[agent.state] ?? "·"} ${agent.state} · ${agent.pane} · ${agent.branch ?? "—"}${agent.run ? ` · ${agent.run}` : ""}`);
           console.log(`    ${agent.model ?? agent.agent} · ${agent.weekly ?? "quota unknown"}${agent.context ? ` · ${agent.context}` : ""}${agent.parent ? ` · ${agent.role} ← ${agent.parent}` : ""}`);
         }
       }
@@ -662,6 +665,90 @@ program
       console.log(parts.suffix);
     }
     console.log();
+  });
+
+const workers = program
+  .command("workers")
+  .description("Inspect and clean up tracked grid worker panes");
+
+workers
+  .command("list")
+  .description("List tracked grid workers per caller pane with live agent status")
+  .option("-j, --json", "Output raw JSON")
+  .action(async (options: { json?: boolean }) => {
+    const tracked = listAllGridWorkers();
+    const client = createHerdrClient();
+    const results: Array<{ callerPaneId: string; workerPaneId: string; status: string }> = [];
+    for (const item of tracked) {
+      const res = await client.getAgent?.(item.workerPaneId);
+      const status = res && res.ok ? (readHerdrObservedState(res) ?? "unknown") : "unknown";
+      results.push({ callerPaneId: item.callerPaneId, workerPaneId: item.workerPaneId, status });
+    }
+
+    if (options.json) {
+      console.log(JSON.stringify(results));
+      return;
+    }
+
+    if (results.length === 0) {
+      console.log("No tracked grid workers.");
+      return;
+    }
+
+    const grouped = new Map<string, Array<{ paneId: string; status: string }>>();
+    for (const r of results) {
+      const list = grouped.get(r.callerPaneId) ?? [];
+      list.push({ paneId: r.workerPaneId, status: r.status });
+      grouped.set(r.callerPaneId, list);
+    }
+
+    for (const [caller, list] of grouped) {
+      console.log(`${caller}:`);
+      for (const w of list) {
+        console.log(`  ${w.paneId}: ${w.status}`);
+      }
+    }
+  });
+
+workers
+  .command("close")
+  .description("Close tracked worker panes whose status is idle or done")
+  .option("--pane <id>", "Specific worker pane to close")
+  .option("--all-idle", "Close all idle or done tracked workers")
+  .option("--yes", "Execute the close plan")
+  .action(async (options: { pane?: string; allIdle?: boolean; yes?: boolean }) => {
+    const tracked = listAllGridWorkers();
+    const client = createHerdrClient();
+    const candidateIds = options.pane ? [options.pane] : tracked.map((t) => t.workerPaneId);
+    const statuses: Record<string, string> = {};
+    for (const paneId of new Set(candidateIds)) {
+      const res = await client.getAgent?.(paneId);
+      statuses[paneId] = res && res.ok ? (readHerdrObservedState(res) ?? "unknown") : "unknown";
+    }
+
+    const plan = filterWorkerClosePlan(tracked, statuses, options);
+
+    if (!options.yes) {
+      if (plan.length === 0) {
+        console.log("Plan: no worker panes to close.");
+        return;
+      }
+      console.log(`Plan: close ${plan.length} worker pane${plan.length === 1 ? "" : "s"}:`);
+      for (const item of plan) {
+        console.log(`  ${item.paneId} (${item.status}, caller: ${item.callerPaneId})`);
+      }
+      return;
+    }
+
+    if (plan.length === 0) {
+      console.log("No matching idle or done worker panes to close.");
+      return;
+    }
+
+    await executeWorkerClose(client, plan);
+    for (const item of plan) {
+      console.log(`Closed ${item.paneId} (${item.status})`);
+    }
   });
 
 program.parse(process.argv);
