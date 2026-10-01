@@ -1396,8 +1396,8 @@ function move(dx, dy) {
 }
 
 function nextRaisedHand() {
-  const raised = floorPeople().filter((p) => p.status === 'blocked').sort((a, b) => {
-    const score = (p) => p.jevAttention === 'now' ? 2 : (p.jevAttention === 'soon' ? 1 : 0);
+  const raised = floorPeople().filter((p) => p.status === 'blocked' || p.jevAttention === 'now' || (p.jevAttention === 'soon' && (p.status === 'idle' || p.status === 'done'))).sort((a, b) => {
+    const score = (p) => p.jevAttention === 'now' ? 2 : (p.jevAttention === 'soon' && (p.status === 'idle' || p.status === 'done') ? 1 : 0);
     return score(b) - score(a);
   });
   if (!raised.length) {

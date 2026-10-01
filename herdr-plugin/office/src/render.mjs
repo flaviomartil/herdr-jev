@@ -496,7 +496,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   if (person.hiredSparkle) plateL.add(' *', { fg: '#ffe6a8', bold: true });
   else if (person.focused) plateL.add(' *', { fg: selected ? '#ffffff' : P.accent, bold: true });
   if (person.jevAttention === 'now') plateL.add(' !', { fg: '#ffb000', bold: true });
-  else if (person.jevAttention === 'soon') plateL.add(' ·', { fg: P.dim });
+  else if (person.jevAttention === 'soon' && (person.status === 'idle' || person.status === 'done')) plateL.add(' ·', { fg: P.dim });
 
   const right = truncate(person.kind, 10);
   const maxBadge = INNER - plateL.w - width(right) - 1;
