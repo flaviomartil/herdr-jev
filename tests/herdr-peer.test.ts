@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,18 @@ import { converseWithPeer, resolvePeerStage } from "../src/herdr/peer.js";
 import type { HerdrClient } from "../src/herdr/client.js";
 import { readHerdrObservedState, createHerdrClient, createProcessCommandAdapter, requiresTrustConfirmation, classifyHerdrCommandFailure } from "../src/herdr/client.js";
 import { buildAgentCommand, buildInlineCommand, formatHerdrAgentName, nativeStageEffort, writeGridWorkers } from "../src/herdr/launcher.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
+
+let testEnv: { stateDir: string; cleanup: () => void };
+
+beforeEach(() => {
+  testEnv = createTestStateDir();
+});
+
+afterEach(() => {
+  testEnv?.cleanup();
+  assertNoRealHomeStateLeaks();
+});
 
 test("Kiro peers use an explicit native model and never invent scalar effort flags", async () => {
   const input = { source: "codex", target: "kiro", prompt: "Review a bounded task", model: "verified-kiro-model", crossHarness: "auto" };

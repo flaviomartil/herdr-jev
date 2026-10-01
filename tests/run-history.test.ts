@@ -1,8 +1,20 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { listRunHistory, retryableStages, runStateSummary } from "../src/orchestration/run-history.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
+
+let testEnv: { stateDir: string; cleanup: () => void };
+
+beforeEach(() => {
+  testEnv = createTestStateDir();
+});
+
+afterEach(() => {
+  testEnv?.cleanup();
+  assertNoRealHomeStateLeaks();
+});
 
 const ids = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"];
 

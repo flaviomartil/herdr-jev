@@ -25,7 +25,7 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 export function projectRun(id: string): string {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("invalid_run_id");
   const projection = externalRun("project", { id });
-  const dir = join(homedir(), ".local/state/herdr-jev", id);
+  const dir = join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, "run.json");
@@ -52,7 +52,7 @@ export async function runPipeline(plan: PipelinePlan, options: RunOptions) {
   const run = externalRun("create", { client: plan.client, model: options.delegation.model,
     availableModels: options.delegation.availableModels ?? [], role: options.delegation.role ?? "advisor",
     work: "substantive", cwd: options.cwd ?? process.cwd(), objectiveDigest: digest(plan.task) });
-  const dir = join(homedir(), ".local/state/herdr-jev", run.id);
+  const dir = join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), run.id);
   projectRun(run.id);
   writeFileSync(join(dir, "objective.md"), plan.task, { mode: 0o600 });
   return continueRun(run, plan.task, options);
@@ -63,14 +63,14 @@ export async function resumePipeline(id: string, options: RunOptions) {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000 || options.timeoutMs > 3_600_000) throw new Error("invalid_timeout");
   const run = externalRun("status", { id });
   if (realpathSync(resolve(options.cwd ?? run.cwd)) !== realpathSync(resolve(run.cwd))) throw new Error("resume_repository_mismatch");
-  const task = readFileSync(join(homedir(), ".local/state/herdr-jev", id, "objective.md"), "utf8");
+  const task = readFileSync(join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), id, "objective.md"), "utf8");
   if (Buffer.byteLength(task) > 16_384 || digest(task) !== run.objectiveDigest) throw new Error("resume_objective_changed");
   if (process.env.HERDR_ENV !== "1") return { mode: "preview", run, projection: projectRun(id) };
   return continueRun(run, task, options);
 }
 
 async function continueRun(run: any, task: string, options: RunOptions) {
-  const dir = join(homedir(), ".local/state/herdr-jev", run.id);
+  const dir = join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), run.id);
   const herdr = createHerdrClient();
   let outcome: "success" | "partial" | "failed" = "partial";
   let launchError: string | undefined;

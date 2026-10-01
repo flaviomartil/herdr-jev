@@ -1,7 +1,19 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach, afterEach } from "bun:test";
 import { planExecution } from "../src/pipelines/planner.js";
 import { runPipeline, reviewerCommand, projectRun } from "../src/orchestration/pipeline.js";
 import type { TriageDecision } from "../src/types/index.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
+
+let testEnv: { stateDir: string; cleanup: () => void };
+
+beforeEach(() => {
+  testEnv = createTestStateDir();
+});
+
+afterEach(() => {
+  testEnv?.cleanup();
+  assertNoRealHomeStateLeaks();
+});
 
 const triage: TriageDecision = { complexity: "architectural", confidence: 1, needsResearch: true,
   effort: "xhigh", recommendedPipeline: "triad", latencyMs: 0, rawAnswers: {} };

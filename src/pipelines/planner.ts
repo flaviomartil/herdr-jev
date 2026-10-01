@@ -25,7 +25,7 @@ export function planExecution(
 
   const resolveStage = (role: RoleKind): StageSpec => {
     const target = resolveDelegatedClient(client, role, { config: crossHarness, triage });
-    const spec = resolveStageSpec(target.client, role, triage.effort);
+    const spec = resolveStageSpec(target.client, role, target.delegated ? undefined : triage.effort);
     spec.client = target.client;
     if (target.delegated) {
       spec.description = `[CROSS-HARNESS: ${target.client.toUpperCase()}] ${spec.description}`;
