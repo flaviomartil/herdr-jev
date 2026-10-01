@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import { summarize } from './summary.mjs';
 
-const cache = new Map();
 let inflight = null;
 
 export function jevClassificationEnabled(env = process.env, argv = process.argv) {
@@ -25,11 +24,6 @@ export function jevClassificationEnabled(env = process.env, argv = process.argv)
 export async function classifyPane(paneId, revision, person, outputLines) {
   if (!jevClassificationEnabled()) {
     return { summary: summarize(person, outputLines), state: null, attention: null };
-  }
-
-  const key = `${paneId}:${revision}`;
-  if (cache.has(key)) {
-    return cache.get(key);
   }
 
   const defaultSummary = summarize(person, outputLines);
@@ -75,7 +69,6 @@ export async function classifyPane(paneId, revision, person, outputLines) {
             blockedReasonConfidence: ans.blockedReasonConfidence ?? 0,
             activity: ans.activityConfidence >= 0.45 ? ans.activity : undefined
           };
-            cache.set(key, result);
             resolve(result);
             return;
           }

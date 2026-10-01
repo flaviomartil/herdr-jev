@@ -49,7 +49,7 @@ test("notify uses cooldowns per pane", async () => {
   mkdirSync(join(stateDir, "notify"), { recursive: true });
   
   const now = Date.now();
-  writeFileSync(join(stateDir, "notify", "pane-w1p1.json"), JSON.stringify({ time: now - 5000 }));
+  writeFileSync(join(stateDir, "notify", "pane-w1_3Ap1.json"), JSON.stringify({ time: now - 5000 }));
   
   const res = await handleNotifyCommand({ 
     pane: "w1:p1", name: "Ada", project: "StixLab", 
