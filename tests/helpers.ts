@@ -25,3 +25,30 @@ export function assertNoRealHomeStateLeaks(): void {
     expect(existsSync(join(realGridDir, file))).toBe(false);
   }
 }
+
+import { writeFileSync, chmodSync } from "node:fs";
+export function createFakeHerdr(dir: string): string {
+  const fakeHerdr = join(dir, "herdr");
+  const script = `#!/usr/bin/env node
+const args = process.argv.slice(2);
+let prev = null;
+for (const arg of args) {
+  if (prev === "--" && !arg.startsWith("--")) {
+    console.error("usage error: unexpected -- before positional");
+    process.exit(2);
+  }
+  prev = arg;
+}
+if (args[0] === "pane" && args[1] === "get") {
+  const paneId = args[args.length - 1];
+  if (paneId === "missing:pane" || paneId === "unknown:pane" || paneId === "w1:missing" || paneId === "wZZ:missing" || paneId === "w1:stale") {
+    console.log(JSON.stringify({ error: "pane_not_found" }));
+    process.exit(1);
+  }
+}
+process.exit(0);
+`;
+  writeFileSync(fakeHerdr, script, "utf8");
+  chmodSync(fakeHerdr, 0o755);
+  return fakeHerdr;
+}
