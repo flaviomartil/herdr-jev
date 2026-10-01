@@ -451,19 +451,25 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     { from: INNER - 1, to: INNER, fg: bezel },
   ];
 
-  const plate = cells();
-  plate.add('▌ ', { fg: st.fg });
-  plate.add(truncate(person.name, 12), { fg: P.ink, bold: true });
-  if (person.hiredSparkle) plate.add(' *', { fg: '#ffe6a8', bold: true });
-  else if (person.focused) plate.add(' *', { fg: P.accent, bold: true });
-  if (person.swarmBadge) {
-    plate.add(' ');
-    plate.add(person.swarmBadge.text, { fg: st.fg, bold: person.swarmBadge.bold });
+  const plateL = cells();
+  plateL.add('▌ ', { fg: st.fg });
+  plateL.add(truncate(person.name, 12), { fg: P.ink, bold: true });
+  if (person.hiredSparkle) plateL.add(' *', { fg: '#ffe6a8', bold: true });
+  else if (person.focused) plateL.add(' *', { fg: P.accent, bold: true });
+
+  const right = truncate(person.kind, 10);
+  const maxBadge = INNER - plateL.w - width(right) - 1;
+
+  if (person.swarmBadge && maxBadge > 0) {
+    plateL.add(' ');
+    const badgeText = truncate(` ${person.swarmBadge.text} `, maxBadge);
+    plateL.add(badgeText, { bg: P.accent, fg: P.cubicle, bold: person.swarmBadge.bold });
   }
-  const kind = truncate(person.kind, 10);
-  plate.gap(INNER - width(kind));
-  plate.add(kind, { fg: P.dim });
-  plate.gap(INNER);
+
+  plateL.gap(INNER - width(right));
+  plateL.add(right, { fg: P.dim });
+
+  const plate = plateL;
 
   const bar = cells();
   const dur = (person.assumedSince ? '~' : '') + formatDuration(now - person.since);
