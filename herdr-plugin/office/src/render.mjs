@@ -403,6 +403,30 @@ function resolveRunBadge(person, frame) {
   };
 }
 
+
+export function formatCommand(cmd, kind) {
+  if (!cmd) return null;
+  let parsed = cmd;
+  // Node / python scripts
+  if (cmd.includes('codex.js') || cmd.includes('/codex')) parsed = 'codex';
+  else if (cmd.includes('claude') || cmd.includes('claude.js')) parsed = 'claude';
+  else if (cmd.includes('opencode') || cmd.includes('opencode.js')) parsed = 'opencode';
+  else if (cmd.includes('kiro') || cmd.includes('kiro.js')) parsed = 'kiro';
+  else if (cmd.includes('gemini') || cmd.includes('gemini.js')) parsed = 'gemini';
+  
+  // Try to find the tool or test
+  let action = '';
+  if (cmd.includes('bun test') || cmd.includes('npm test')) action = 'bun test';
+  else if (cmd.includes('cargo build')) action = 'cargo build';
+  else if (cmd.includes('editing') || cmd.includes('edit')) action = 'editing';
+  else if (cmd.includes('bun run') || cmd.includes('npm run')) action = 'bun run';
+  
+  if (parsed === cmd && kind) parsed = kind;
+  
+  if (action && parsed !== action) return parsed + ' · ' + action;
+  return parsed;
+}
+
 function tile(person, { selected, frame, now, lifted = false, dropTarget = false, wall = P.wall }) {
   const jevState = person.jevConfidence >= 0.7 && person.jevState && person.jevState !== "unknown" ? person.jevState : person.status;
   const st = status(jevState);
@@ -412,7 +436,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // instead of the generic scrolling code: same two rows, same twelve cells, but
   // now the monitor says `npm test` and the bar underneath chugs.
   const scr = person.status === 'working' && person.command
-    ? runningScreen(person.command, frame)
+    ? runningScreen(formatCommand(person.command, person.kind), frame)
     : screen(person.status, frame);
   // Amber pulse so a raised hand catches the eye from across the room.
   const alert = person.status === 'blocked' && frame % 4 < 2;
@@ -500,7 +524,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   }
   foot.gap(INNER);
 
-  const card = wallCard(person.tabName);
+  const card = person.tabName === task ? null : wallCard(person.tabName);
   const bubble = person.status === 'blocked' ? speechBubble(person.ask || 'needs your OK') : null;
   const slab = !bubble && person.event?.label ? eventSlab(person.event.label, person.event.kind) : null;
   const sparkRow = SPARKLE_PATTERNS[frame % SPARKLE_PATTERNS.length];
@@ -1542,52 +1566,26 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     // "for at least 0s" is just noise on someone we only just laid eyes on.
     const held = view.now - person.since;
     const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held)}`;
-    fields.push(['status', st.label + dwell, st.fg]);
-    // The punch clock. The status line above says what is true right now; this says
-    // where the shift went, which is the question you actually have about a desk
-    // that has been up since this morning.
-    //
-    // Every clause is worth a second before it is worth saying. A desk the office
-    // met on this frame would otherwise read "0s on shift · 0s working", which is
-    // three zeros where a real number is about to be, and the first thing anybody
-    // opening a card would see.
+    let statusLine = st.label + dwell;
     if (view.shift && view.shift.onShift >= 1000) {
       const shift = view.shift;
       const parts = [`${formatDuration(shift.onShift)} on shift`];
       if (shift.worked >= 1000) parts.push(`${formatDuration(shift.worked)} working`);
       if (shift.waiting >= 1000) parts.push(`${formatDuration(shift.waiting)} waiting on you`);
-      // One hand is the hand you are looking at. Two is a pattern.
       if (shift.hands > 1) parts.push(`${shift.hands} hands`);
-      fields.push(['clock', parts.join(' · '), P.soft]);
+      statusLine += ' · ' + parts.join(' · ');
     }
-    fields.push(['tab', person.tabName || '(unnamed tab)', P.ink]);
-    fields.push(['doing', person.title || '(no pane title)', P.soft]);
-    // No workspace/tab/pane row. The card's own title already says the pane id, the
-    // tab has a row of its own two lines up, and a tab id is not a thing anybody
-    // reads: it was three identifiers spending a row to repeat what was on screen.
-    fields.push(['cwd', person.cwd, P.soft]);
-    // Only when there is one. A `branch: (none)` row on every desk in an untrusted
-    // repo would be a permanent apology for a thing nobody asked about.
-    if (person.branch) fields.push(['branch', person.repo ? `${person.branch} · ${person.repo}` : person.branch, P.ink]);
-    // The real number behind the pile of paper on the desk, which is the whole reason
-    // the pile can be a shape. Only for a checkout git actually answered about, so this
-    // row is never an apology for a directory that is not a repository, and it is the
-    // checkout's number rather than this person's: two desks in one tree share it, which
-    // is worth knowing and is why the label is `changes` and not `theirs`.
+    fields.push(['status', statusLine, st.fg]);
+
+    let cwdLine = person.cwd;
+    if (person.branch) cwdLine += ' · ' + (person.repo ? `${person.branch} · ${person.repo}` : person.branch);
+    fields.push(['cwd', cwdLine, P.soft]);
+
     const changes = dirtWords(person.dirt);
     if (changes) fields.push(['changes', changes, person.dirt?.conflicts ? SNAG_FG : P.ink]);
-    // How full their head is, in words and at every band, including the calm one. The
-    // floor plan is silent below half full because there is nothing to do about it from
-    // across the room; a card is the opposite case, since opening one is how you ask.
+
     const full = headWords(person.head);
     if (full) fields.push(['context', full, headTint(pressure(person.head.used)) || P.ink]);
-    // And what is doing the thinking, which comes off the same line as the percentage and
-    // is the other half of reading it: eighty per cent of a small window and eighty per
-    // cent of a large one are not the same amount of room.
-    if (person.jevModel) fields.push(['model', person.jevModel, P.soft]);
-    else if (person.head?.model) fields.push(['model', person.head.model, P.soft]);
-    if (person.jevQuota) fields.push(['quota', person.jevQuota, P.soft]);
-    if (person.jevRun) fields.push(['run', person.jevRun, P.accent]);
     if (person.sessionId) fields.push(['session', person.sessionId, P.soft]);
   }
 
@@ -1632,7 +1630,7 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     for (const line of lines) body.push(row(truncate(line, TEXT), [{ from: 0, to: Infinity, ...style }]));
   };
 
-  section(detail.loading ? 'what are they up to (reading…)' : 'what are they up to', detail.summary?.length ? detail.summary : ['(nothing yet)'], {
+  section(detail.loading ? 'what are they up to (reading…)' : 'what are they up to', detail.summary?.length ? detail.summary.slice(-2) : ['(nothing yet)'], {
     fg: P.ink,
   });
   // The explanation is the part you read when you doubt the office, which is never

@@ -43,11 +43,17 @@ const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
 const ONCE = argv.has('--once');
 let panelArg = null;
+let detailArg = null;
 for (let i = 0; i < process.argv.length; i++) {
   const a = process.argv[i];
   if (a === '--panel') {
     const next = process.argv[i + 1];
     panelArg = next && !next.startsWith('-') ? next : true;
+  } else if (a === '--detail') {
+    const next = process.argv[i + 1];
+    detailArg = next && !next.startsWith('-') ? next : true;
+  } else if (a.startsWith('--detail=')) {
+    detailArg = a.slice(9) || true;
   } else if (a.startsWith('--panel=')) {
     panelArg = a.slice(8) || true;
   }
@@ -2164,7 +2170,7 @@ function demoAgents() {
   const desks = [
     ['w1:p1', 'claude', 'refactor the socket client'],
     ['w1:p2', 'kiro', 'rewrite the login flow'],
-    ['w1:p3', 'codex', 'fix a flaky test'],
+    ['w1:p3', 'codex', 'flaky-tests'],
     ['w2:p1', 'opencode', 'bump deps'],
     ['w2:p2', 'claude', 'write the office plugin'],
     ['w3:p1', 'gemini', 'triage the bug queue'],
@@ -2364,6 +2370,10 @@ async function main() {
       const targetId = typeof panelArg === 'string' ? panelArg : selectedId;
       openSwarmPanel(targetId);
     }
+    if (detailArg) {
+      const targetId = typeof detailArg === 'string' ? detailArg : selectedId;
+      loadDetail(targetId, { force: true });
+    }
     // Written *and flushed* before the exit. Whenever this render is being diffed,
     // piped or read by a test, stdout is a pipe, and a pipe write is asynchronous on
     // macOS: a frame bigger than the pipe buffer is queued rather than issued, so an
@@ -2400,6 +2410,10 @@ async function main() {
   if (panelArg) {
     const targetId = typeof panelArg === 'string' ? panelArg : selectedId;
     openSwarmPanel(targetId);
+  }
+  if (detailArg) {
+    const targetId = typeof detailArg === 'string' ? detailArg : selectedId;
+    loadDetail(targetId, { force: true });
   }
   draw();
 }

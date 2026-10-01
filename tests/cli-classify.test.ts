@@ -10,13 +10,13 @@ test("cli command classify-pane with fake Jev client", async () => {
       expect(questions.state).toBeDefined();
       expect(questions.attention).toBeDefined();
       expect(questions.blockedReason).toBeDefined();
-      expect(questions.confidence).toBeDefined();
-      return { answers: { state: { choice: "working" }, attention: 2, blockedReason: { choice: "none" }, confidence: 0.9 }, jevMs: 10 };
+
+      return { answers: { state: { choice: "working", confidence: 0.9 }, attention: 2, blockedReason: { choice: "none", confidence: 0.8 } }, jevMs: 10 };
     }
   };
   
   const outcome = await clientMock.ask({}, {
-    state: "dummy", attention: "dummy", blockedReason: "dummy", confidence: "dummy"
+    state: "dummy", attention: "dummy", blockedReason: "dummy"
   });
   
   expect(outcome.answers.state.choice).toBe("working");

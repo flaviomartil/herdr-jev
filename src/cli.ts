@@ -811,14 +811,24 @@ program.command("classify-pane")
     const result = await client.ask(
       { paneText: data.paneText, agent: data.agent, status: data.status },
       {
-        state: choice("What is the state of the pane?", { working: "working", blocked: "blocked", idle: "idle", done: "done", unknown: "unknown" }),
-        attention: score("What is the attention level?", ["none", "soon", "now"]),
-        blockedReason: choice("What is the blocked reason?", { approval: "approval", question: "question", error: "error", none: "none" }),
-        confidence: score("Confidence score", ["none", "low", "medium", "high", "certain"])
+        state: choice("Given paneText, the recent terminal output of a coding agent, which state is the agent in now? blocked means waiting for a human approval, answer or stuck on an error; working means actively running tools or producing output; idle means at an empty prompt with nothing pending; done means it reported completion; unknown otherwise", {
+          blocked: "waiting for a human approval, answer or stuck on an error",
+          working: "actively running tools or producing output",
+          idle: "at an empty prompt with nothing pending",
+          done: "reported completion",
+          unknown: "otherwise"
+        }),
+        attention: score("Based on the paneText, what is the level of attention required?", ["none: nothing needed", "soon: will need input shortly or finished and awaits review", "now: blocked on a human right now"]),
+        blockedReason: choice("If blocked, what is the reason?", {
+          approval: "waiting for human approval to proceed",
+          question: "waiting for human answer to a question",
+          error: "stuck on an error",
+          none: "not blocked"
+        })
       }
     );
     if (options.json) {
-      console.log(JSON.stringify(result.answers));
+      console.log(JSON.stringify(result));
     }
   });
 
