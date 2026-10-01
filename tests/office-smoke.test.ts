@@ -38,8 +38,8 @@ test("demo frame contains swarm badge for primaries with subagents", () => {
     env: { ...process.env, COLUMNS: "136", LINES: "52" },
   });
   expect(result.status).toBe(0);
-  expect(result.stdout).toContain("3 sub ");
-  expect(result.stdout).toContain("2 sub ");
+  expect(result.stdout).toContain("3s 1!");
+  expect(result.stdout).toContain("2s");
 });
 
 test("frame with swarm panel open contains subagent rows with slot numbers", () => {
@@ -80,21 +80,21 @@ test("classification helper separates primaries and subagents", async () => {
     { slot: 1, state: "blocked" },
     { slot: 2, state: "working" },
   ]);
-  expect(badgeBlocked?.text).toBe("2 sub · 1 blocked");
+  expect(badgeBlocked?.text).toBe("2s 1!");
   expect(badgeBlocked?.state).toBe("blocked");
 
   const badgeWorking = aggregateSwarmBadge([
     { slot: 1, state: "working" },
     { slot: 2, state: "working" },
   ]);
-  expect(badgeWorking?.text).toBe("2 sub · working");
+  expect(badgeWorking?.text).toBe("2s");
   expect(badgeWorking?.state).toBe("working");
 
   const badgeIdle = aggregateSwarmBadge([
     { slot: 1, state: "idle" },
     { slot: 2, state: "done" },
   ]);
-  expect(badgeIdle?.text).toBe("2 sub · idle");
+  expect(badgeIdle?.text).toBe("2s");
 
   const badgeEmpty = aggregateSwarmBadge([]);
   expect(badgeEmpty).toBeNull();

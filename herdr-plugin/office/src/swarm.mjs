@@ -88,7 +88,7 @@ export function aggregateSwarmBadge(subagents) {
       working,
       idle,
       done,
-      text: `${count} sub \u00b7 ${blocked} blocked`,
+      text: `${count}s ${blocked}!`, // compact form
       fg: '#ffc14d',
       bold: true,
       state: 'blocked',
@@ -102,7 +102,7 @@ export function aggregateSwarmBadge(subagents) {
       working,
       idle,
       done,
-      text: `${count} sub \u00b7 working`,
+      text: `${count}s`, // compact form
       fg: '#5ce08a',
       bold: false,
       state: 'working',
@@ -116,7 +116,7 @@ export function aggregateSwarmBadge(subagents) {
       working,
       idle,
       done,
-      text: `${count} sub \u00b7 ${working} working`,
+      text: `${count}s`, // compact form
       fg: '#5ce08a',
       bold: false,
       state: 'working',
@@ -130,7 +130,7 @@ export function aggregateSwarmBadge(subagents) {
       working: 0,
       idle: 0,
       done,
-      text: `${count} sub \u00b7 done`,
+      text: `${count}s`, // compact form
       fg: '#7e8a9b',
       bold: false,
       state: 'done',
@@ -143,7 +143,7 @@ export function aggregateSwarmBadge(subagents) {
     working: 0,
     idle,
     done,
-    text: `${count} sub \u00b7 idle`,
+    text: `${count}s`, // compact form
     fg: '#7e8a9b',
     bold: false,
     state: 'idle',

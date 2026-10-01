@@ -45,3 +45,28 @@ test("ordering by attention (now first, then soon)", () => {
   expect(people[1].id).toBe(2);
   expect(people[2].id).toBe(1);
 });
+
+test("real Codex pane tail chrome filtering", () => {
+  const outputLines = [
+    "• Ran python3 /tmp/imp-benchmark225/collect_case.py 9",
+    "• Interacted with /root/case09_tcers",
+    "for agents · ? for shortcuts 4 warnings · f2 to view",
+    "› Ask Codex to do anything",
+    "GPT-6.1-Sol low · ~/projects/italents/impmotordados"
+  ];
+  const person = { title: "Investigar lentidão" };
+  const summary = summarize(person, outputLines);
+  const text = summary.join(' ');
+  expect(text.includes('Ran python3')).toBe(true);
+  expect(text.includes('Interacted with')).toBe(true);
+  expect(text.includes('shortcuts')).toBe(false);
+  expect(text.includes('warnings')).toBe(false);
+  expect(text.includes('Ask Codex')).toBe(false);
+  expect(text.includes('GPT-6.1')).toBe(false);
+});
+
+import { formatCommand } from "../herdr-plugin/office/src/render.mjs";
+test("formatCommand parses raw command strings", () => {
+  expect(formatCommand("node /home/martil/.nvm/versions/node/v22.22.2/bin/node /home/martil/.local/share/codex.js", "")).toBe("codex");
+  expect(formatCommand("claude --model something bun test", "claude")).toBe("claude · bun test");
+});

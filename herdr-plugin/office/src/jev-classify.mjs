@@ -5,7 +5,7 @@ const cache = new Map();
 let inflight = null;
 
 export async function classifyPane(paneId, revision, person, outputLines) {
-  if (process.env.HERDR_JEV_OFFICE_JEV !== '1') {
+  if (process.env.HERDR_JEV_OFFICE_JEV !== '1' || process.argv.includes('--demo')) {
     return { summary: summarize(person, outputLines), state: null, attention: null };
   }
 
@@ -46,10 +46,11 @@ export async function classifyPane(paneId, revision, person, outputLines) {
           const ans = JSON.parse(stdout);
           const result = {
             summary: defaultSummary,
-            state: ans.state === 'unknown' ? null : ans.state,
+            state: ans.state?.choice === 'unknown' ? null : ans.state?.choice,
             attention: ans.attention,
+            confidence: ans.state?.confidence ?? 0,
             confidence: ans.confidence,
-            blockedReason: ans.blockedReason
+            blockedReason: ans.blockedReason?.choice
           };
           cache.set(key, result);
           resolve(result);
