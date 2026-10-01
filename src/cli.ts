@@ -406,19 +406,21 @@ program
   .description("Deterministic end-of-day summary per agent")
   .option("--json", "Output JSON")
   .option("--md", "Output Markdown in Brazilian Portuguese")
+  .option("--plain", "Output plain Markdown without title line")
+  .option("--project <name>", "Filter by repository name or workspace project label (repeatable)", (val: string, prev: string[]) => (prev ? [...prev, val] : [val]))
   .option("--since <date-time>", "Commits and runs since ISO date-time")
   .option("--write", "Save Markdown report to disk and print path")
-  .action(async (options: { json?: boolean; md?: boolean; since?: string; write?: boolean }) => {
-    const report = await buildDailyReport(undefined, { since: options.since });
+  .action(async (options: { json?: boolean; md?: boolean; plain?: boolean; project?: string[]; since?: string; write?: boolean }) => {
+    const report = await buildDailyReport(undefined, { since: options.since, projects: options.project });
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
-    } else if (options.md) {
-      console.log(formatDailyMarkdown(report));
+    } else if (options.md || options.plain) {
+      console.log(formatDailyMarkdown(report, { plain: options.plain }));
     } else if (!options.write) {
       console.log(formatDailyText(report));
     }
     if (options.write) {
-      const savedPath = writeDailyMarkdown(report);
+      const savedPath = writeDailyMarkdown(report, undefined, { plain: options.plain });
       console.log(savedPath);
     }
   });

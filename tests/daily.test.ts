@@ -600,8 +600,203 @@ process.exit(0);
     const lastLine = mdWriteLines[mdWriteLines.length - 1];
     expect(existsSync(lastLine)).toBe(true);
     expect(mdWriteLines[0]).toContain("Resumo do dia");
+    const resPlain = spawnSync("bun", ["run", cliScript, "daily", "--plain"], { env, encoding: "utf8" });
+    expect(resPlain.status).toBe(0);
+    expect(resPlain.stdout).not.toContain("Resumo do dia");
+    expect(resPlain.stdout).toContain("### ");
+
+    const resProj = spawnSync("bun", ["run", cliScript, "daily", "--project", "my-cli-project", "--json"], { env, encoding: "utf8" });
+    expect(resProj.status).toBe(0);
+    const parsedProj = JSON.parse(resProj.stdout);
+    expect(parsedProj.projects.length).toBe(1);
+
+    const resProjNone = spawnSync("bun", ["run", cliScript, "daily", "--project", "non-existent-project", "--json"], { env, encoding: "utf8" });
+    expect(resProjNone.status).toBe(0);
+    const parsedProjNone = JSON.parse(resProjNone.stdout);
+    expect(parsedProjNone.projects.length).toBe(0);
   } finally {
     try { unlinkSync(fakeHerdr); } catch {}
     rmSync(tempState, { recursive: true, force: true });
   }
+});
+
+test("buildDailyReport filters by projects matching repository name or workspace label case-insensitively", async () => {
+  const fixedNow = new Date("2026-10-01T15:00:00Z").getTime();
+  const overview = [
+    {
+      project: "Workspace-Alpha",
+      pane: "pane-1",
+      agent: "codex",
+      state: "idle",
+      cwd: "/repos/proj-alpha",
+      branch: "main",
+    },
+    {
+      project: "Workspace-Beta",
+      pane: "pane-2",
+      agent: "claude",
+      state: "working",
+      cwd: "/repos/proj-beta",
+      branch: "main",
+    },
+  ];
+
+  const fakeGit: GitRunner = async (args, cwd) => {
+    if (args.includes("--git-common-dir")) {
+      if (cwd === "/repos/proj-alpha") return { ok: true, stdout: "/repos/alpha-repo/.git\n", stderr: "" };
+      if (cwd === "/repos/proj-beta") return { ok: true, stdout: "/repos/beta-repo/.git\n", stderr: "" };
+    }
+    return { ok: true, stdout: "main\n", stderr: "" };
+  };
+
+  const reportAlphaRepo = await buildDailyReport(
+    { overview, git: fakeGit, now: fixedNow, readPane: async () => "", paneList: [] },
+    { now: fixedNow, projects: ["ALPHA-REPO"] },
+  );
+  expect(reportAlphaRepo.projects.length).toBe(1);
+  expect(reportAlphaRepo.projects[0].project).toBe("alpha-repo");
+
+  const reportBetaWorkspace = await buildDailyReport(
+    { overview, git: fakeGit, now: fixedNow, readPane: async () => "", paneList: [] },
+    { now: fixedNow, projects: ["workspace-beta"] },
+  );
+  expect(reportBetaWorkspace.projects.length).toBe(1);
+  expect(reportBetaWorkspace.projects[0].project).toBe("beta-repo");
+
+  const reportBoth = await buildDailyReport(
+    { overview, git: fakeGit, now: fixedNow, readPane: async () => "", paneList: [] },
+    { now: fixedNow, projects: ["ALPHA-REPO", "beta-repo"] },
+  );
+  expect(reportBoth.projects.length).toBe(2);
+
+  const reportNone = await buildDailyReport(
+    { overview, git: fakeGit, now: fixedNow, readPane: async () => "", paneList: [] },
+    { now: fixedNow, projects: ["gamma-repo"] },
+  );
+  expect(reportNone.projects.length).toBe(0);
+});
+
+test("formatDailyMarkdown and formatDailyText display N agentes no mesmo checkout after uncommitted count", () => {
+  const report = {
+    date: new Date("2026-10-01T12:00:00Z"),
+    projects: [
+      {
+        project: "repo-colliding",
+        branch: "main",
+        commitsCount: 1,
+        commitSubjects: ["fix: something"],
+        uncommittedCount: 3,
+        agents: [
+          {
+            project: "repo-colliding",
+            agent: "codex",
+            handle: "agent-1",
+            model: "gpt-6.1-sol",
+            state: "working",
+            branch: "main",
+            cwd: "/repos/same-checkout",
+            commitsCount: 1,
+            commitSubjects: ["fix: something"],
+            uncommittedCount: 3,
+            runSummary: null,
+            lastLine: "Running tests",
+            paneId: "p1",
+          },
+          {
+            project: "repo-colliding",
+            agent: "claude",
+            handle: "agent-2",
+            model: "sonnet-5",
+            state: "working",
+            branch: "main",
+            cwd: "/repos/same-checkout",
+            commitsCount: 1,
+            commitSubjects: ["fix: something"],
+            uncommittedCount: 3,
+            runSummary: null,
+            lastLine: "Writing files",
+            paneId: "p2",
+          },
+        ],
+      },
+      {
+        project: "repo-isolated",
+        branch: "feat/distinct",
+        commitsCount: 0,
+        commitSubjects: [],
+        uncommittedCount: 2,
+        agents: [
+          {
+            project: "repo-isolated",
+            agent: "antigravity",
+            handle: "agent-3",
+            model: "flash",
+            state: "working",
+            branch: "feat/distinct",
+            cwd: "/repos/wt-distinct",
+            commitsCount: 0,
+            commitSubjects: [],
+            uncommittedCount: 2,
+            runSummary: null,
+            lastLine: null,
+            paneId: "p3",
+          },
+        ],
+      },
+    ],
+  };
+
+  const md = formatDailyMarkdown(report);
+  expect(md).toContain("1 commit hoje (fix: something); 3 arquivos não commitados; 2 agentes no mesmo checkout");
+  expect(md).toContain("2 arquivos não commitados");
+  expect(md).not.toContain("repo-isolated\n2 arquivos não commitados; 2 agentes");
+
+  const text = formatDailyText(report);
+  expect(text).toContain("1 commit hoje (fix: something); 3 arquivos não commitados; 2 agentes no mesmo checkout");
+  expect(text).toContain("2 arquivos não commitados");
+  expect(text).not.toContain("repo-isolated\n  2 arquivos não commitados; 2 agentes");
+});
+
+test("formatDailyMarkdown with plain option omits Resumo do dia header", () => {
+  const report = {
+    date: new Date("2026-10-01T12:00:00Z"),
+    projects: [
+      {
+        project: "test-repo",
+        branch: "main",
+        commitsCount: 0,
+        commitSubjects: [],
+        uncommittedCount: 1,
+        agents: [
+          {
+            project: "test-repo",
+            agent: "codex",
+            handle: "worker",
+            model: "gpt-6.1-sol",
+            state: "working",
+            branch: "main",
+            cwd: "/repos/test",
+            commitsCount: 0,
+            commitSubjects: [],
+            uncommittedCount: 1,
+            runSummary: null,
+            lastLine: "building",
+            paneId: "p1",
+          },
+        ],
+      },
+    ],
+  };
+
+  const mdFull = formatDailyMarkdown(report);
+  expect(mdFull).toMatch(/^Resumo do dia \d{2}\/\d{2}\/\d{4}/);
+  expect(mdFull).toContain("### test-repo (main)");
+
+  const mdPlain = formatDailyMarkdown(report, { plain: true });
+  expect(mdPlain).not.toContain("Resumo do dia");
+  expect(mdPlain).toMatch(/^### test-repo \(main\)/);
+
+  const mdPlainBool = formatDailyMarkdown(report, true);
+  expect(mdPlainBool).not.toContain("Resumo do dia");
+  expect(mdPlainBool).toMatch(/^### test-repo \(main\)/);
 });

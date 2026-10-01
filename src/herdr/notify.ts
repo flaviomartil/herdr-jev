@@ -53,15 +53,15 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
 
   const enabled = process.env.HERDR_JEV_NOTIFY;
   if (enabled === "0" || enabled === "false" || enabled === "off") {
-    return { sent: false, skippedReason: "disabled by env", channels: [] };
+    return { sent: false, skippedReason: "disabled by env", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
 
   if (opts.attention !== "now") {
-    return { sent: false, skippedReason: "attention not now", channels: [] };
+    return { sent: false, skippedReason: "attention not now", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
 
   if (!opts.pane || !opts.project || !opts.reason) {
-    return { sent: false, skippedReason: "missing required arguments", channels: [] };
+    return { sent: false, skippedReason: "missing required arguments", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
 
   const stateDir = getStateDir();

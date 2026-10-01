@@ -11,7 +11,8 @@
     "start": "bun run src/cli.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "lint": "bunx biome check src test || true"
+    "lint": "bunx biome check src test || true",
+    "smoke": "bash scripts/smoke.sh"
   },
   "dependencies": {
     "@typesafe-ai/sdk": "^0.6.0",

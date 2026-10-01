@@ -22,6 +22,7 @@ export interface DailyAgentItem {
   lastLine: string | null;
   paneId: string;
   tarefa?: string | null;
+  workspaceProject?: string;
 }
 
 export interface DailyProjectGroup {
@@ -30,6 +31,7 @@ export interface DailyProjectGroup {
   commitsCount?: number;
   commitSubjects?: string[];
   uncommittedCount?: number;
+  sharedCheckoutCount?: number;
   agents: DailyAgentItem[];
 }
 
@@ -41,6 +43,8 @@ export interface DailyReport {
 export interface DailyReportOptions {
   since?: string | Date;
   now?: number;
+  projects?: string[];
+  project?: string[];
 }
 
 export interface DailyReportDeps {
@@ -313,17 +317,7 @@ export async function buildDailyReport(
     return res.ok ? res.stdout : "";
   };
 
-  const groupsMap = new Map<
-    string,
-    {
-      project: string;
-      branch: string | null;
-      commitsCount: number;
-      commitSubjects: string[];
-      uncommittedCount: number;
-      agents: DailyAgentItem[];
-    }
-  >();
+  const groupsMap = new Map<string, DailyProjectGroup>();
 
   for (const row of overviewRows) {
     const rawProject = row.project || "unknown";
@@ -390,6 +384,7 @@ export async function buildDailyReport(
       lastLine,
       paneId,
       tarefa,
+      workspaceProject: rawProject,
     };
 
     const groupKey = `${cwdInfo.repoName}:::${branch ?? ""}`;
@@ -405,30 +400,68 @@ export async function buildDailyReport(
       };
       groupsMap.set(groupKey, group);
     } else {
-      group.commitsCount = Math.max(group.commitsCount, cwdInfo.commitsCount);
-      if (group.commitSubjects.length === 0 && cwdInfo.commitSubjects.length > 0) {
+      group.commitsCount = Math.max(group.commitsCount ?? 0, cwdInfo.commitsCount);
+      if ((group.commitSubjects?.length ?? 0) === 0 && cwdInfo.commitSubjects.length > 0) {
         group.commitSubjects = cwdInfo.commitSubjects;
       }
-      group.uncommittedCount = Math.max(group.uncommittedCount, cwdInfo.uncommittedCount);
+      group.uncommittedCount = Math.max(group.uncommittedCount ?? 0, cwdInfo.uncommittedCount);
     }
     group.agents.push(agentItem);
   }
 
+  for (const group of groupsMap.values()) {
+    const cwdCounts = new Map<string, number>();
+    for (const agent of group.agents) {
+      if (agent.cwd) {
+        cwdCounts.set(agent.cwd, (cwdCounts.get(agent.cwd) ?? 0) + 1);
+      }
+    }
+    const sharedCounts = Array.from(cwdCounts.values()).filter((c) => c >= 2);
+    if (sharedCounts.length > 0) {
+      group.sharedCheckoutCount = sharedCounts.reduce((a, b) => a + b, 0);
+    }
+  }
+
+  const rawFilter = options?.projects ?? options?.project;
+  const projectFilters = (Array.isArray(rawFilter) ? rawFilter : rawFilter ? [rawFilter] : [])
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+
+  let finalGroups = Array.from(groupsMap.values());
+  if (projectFilters.length > 0) {
+    finalGroups = finalGroups.filter((g) => {
+      const matchRepo = projectFilters.includes(g.project.toLowerCase());
+      const matchWorkspace = g.agents.some(
+        (a) => a.workspaceProject && projectFilters.includes(a.workspaceProject.toLowerCase()),
+      );
+      return matchRepo || matchWorkspace;
+    });
+  }
+
   return {
     date: new Date(now),
-    projects: Array.from(groupsMap.values()),
+    projects: finalGroups,
   };
 }
 
-export function formatDailyMarkdown(report: DailyReport): string {
+export function formatDailyMarkdown(
+  report: DailyReport,
+  options?: boolean | { plain?: boolean },
+): string {
+  const isPlain = typeof options === "boolean" ? options : Boolean(options?.plain);
   const date = report.date;
   const dd = String(date.getDate()).padStart(2, "0");
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const yyyy = date.getFullYear();
-  const lines: string[] = [`Resumo do dia ${dd}/${mm}/${yyyy}`];
+  const lines: string[] = [];
+  if (!isPlain) {
+    lines.push(`Resumo do dia ${dd}/${mm}/${yyyy}`);
+  }
 
   for (const group of report.projects) {
-    lines.push("");
+    if (lines.length > 0) {
+      lines.push("");
+    }
     const branchStr = group.branch ? ` (${group.branch})` : "";
     lines.push(`### ${group.project}${branchStr}`);
 
@@ -449,6 +482,18 @@ export function formatDailyMarkdown(report: DailyReport): string {
     if (uncommittedCount > 0) {
       const fileWord = uncommittedCount === 1 ? "arquivo não commitado" : "arquivos não commitados";
       repoFactsParts.push(`${uncommittedCount} ${fileWord}`);
+    }
+
+    const cwdCounts = new Map<string, number>();
+    for (const agent of group.agents) {
+      if (agent.cwd) {
+        cwdCounts.set(agent.cwd, (cwdCounts.get(agent.cwd) ?? 0) + 1);
+      }
+    }
+    const sharedCounts = Array.from(cwdCounts.values()).filter((c) => c >= 2);
+    const sharedCount = group.sharedCheckoutCount ?? (sharedCounts.length > 0 ? sharedCounts.reduce((a, b) => a + b, 0) : 0);
+    if (sharedCount >= 2) {
+      repoFactsParts.push(`${sharedCount} agentes no mesmo checkout`);
     }
 
     if (repoFactsParts.length > 0) {
@@ -529,6 +574,18 @@ export function formatDailyText(report: DailyReport): string {
       repoFactsParts.push(`${uncommittedCount} ${fileWord}`);
     }
 
+    const cwdCounts = new Map<string, number>();
+    for (const agent of group.agents) {
+      if (agent.cwd) {
+        cwdCounts.set(agent.cwd, (cwdCounts.get(agent.cwd) ?? 0) + 1);
+      }
+    }
+    const sharedCounts = Array.from(cwdCounts.values()).filter((c) => c >= 2);
+    const sharedCount = group.sharedCheckoutCount ?? (sharedCounts.length > 0 ? sharedCounts.reduce((a, b) => a + b, 0) : 0);
+    if (sharedCount >= 2) {
+      repoFactsParts.push(`${sharedCount} agentes no mesmo checkout`);
+    }
+
     if (repoFactsParts.length > 0) {
       lines.push(`  ${repoFactsParts.join("; ")}`);
     }
@@ -567,7 +624,11 @@ export function formatDailyText(report: DailyReport): string {
   return sanitizeText(lines.join("\n"));
 }
 
-export function writeDailyMarkdown(report: DailyReport, stateDir?: string): string {
+export function writeDailyMarkdown(
+  report: DailyReport,
+  stateDir?: string,
+  options?: boolean | { plain?: boolean },
+): string {
   const dir = stateDir ?? process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev");
   const dailyDir = join(dir, "daily");
   mkdirSync(dailyDir, { recursive: true, mode: 0o700 });
@@ -576,7 +637,7 @@ export function writeDailyMarkdown(report: DailyReport, stateDir?: string): stri
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   const filePath = join(dailyDir, `${yyyy}-${mm}-${dd}.md`);
-  const markdown = formatDailyMarkdown(report);
+  const markdown = formatDailyMarkdown(report, options);
   writeFileSync(filePath, markdown, { encoding: "utf8", mode: 0o600 });
   return filePath;
 }
