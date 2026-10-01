@@ -40,7 +40,7 @@ test("notify uses cooldowns per pane", async () => {
   mkdirSync(join(stateDir, "notify"), { recursive: true });
   
   const now = Date.now();
-  writeFileSync(join(stateDir, "notify", "test-pane-1.json"), JSON.stringify({ time: now - 5000 }));
+  writeFileSync(join(stateDir, "notify", "pane-test-pane-1.json"), JSON.stringify({ time: now - 5000 }));
   
   const res = await handleNotifyCommand({ 
     pane: "test-pane-1", name: "Ada", project: "StixLab", 
@@ -80,7 +80,7 @@ test("notify escalation blocked requires valid agent", async () => {
 
   const resValid = await handleNotifyCommand({ 
     pane: "escalate-pane-2", name: "Ada", project: "StixLab", 
-    attention: "now", reason: "approval", confidence: 0.9, nativeStatus: "idle", agent: "kiro", dryRun: false, now: Date.now() 
+    attention: "now", reason: "approval", jevState: "blocked", reasonConfidence: 0.9, confidence: 0.9, nativeStatus: "idle", agent: "kiro", dryRun: false, now: Date.now() 
   }, runner);
   
   expect(resValid.sent).toBe(true);

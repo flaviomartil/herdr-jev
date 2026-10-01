@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { HerdrCommandResult } from "../types/index.js";
 
 export type RunCommand = (argv: readonly string[]) => Promise<HerdrCommandResult>;
@@ -52,6 +54,16 @@ export function createProcessCommandAdapter(
       if (!command) {
         resolve({ ok: false, code: 1, stdout: "", stderr: "missing command" });
         return;
+      }
+      if (process.env.HERDR_JEV_TEST_GUARD === '1' && !command.startsWith(tmpdir()) && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
+        const cmdPath = args.join(" ");
+        const isReadOnly = 
+          /^agent (get|list|read)\b/.test(cmdPath) || 
+          /^pane (get|list|read|layout|current)\b/.test(cmdPath);
+        if (!isReadOnly) {
+          resolve({ ok: false, code: 126, stdout: "", stderr: "blocked_by_test_guard" });
+          return;
+        }
       }
       const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
       let stdout = "";
