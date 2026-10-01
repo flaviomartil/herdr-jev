@@ -136,18 +136,114 @@ export function gridStatePath(callerPaneId: string, stateDir?: string): string {
   return join(gridStateDir(stateDir), `${safePaneId}.json`);
 }
 
-export function readGridWorkers(callerPaneId: string, stateDir?: string): string[] {
-  try {
-    const value = JSON.parse(readFileSync(gridStatePath(callerPaneId, stateDir), "utf8"));
-    const workers = Array.isArray(value) ? value : value.workerPaneIds;
-    return Array.isArray(workers) ? workers.filter((paneId): paneId is string => typeof paneId === "string") : [];
-  } catch { return []; }
+export interface GridWorkerRecord {
+  paneId: string;
+  handle?: string | null;
+  cwd?: string | null;
+  branch?: string | null;
+  forkSha?: string | null;
 }
 
-export function writeGridWorkers(callerPaneId: string, workerPaneIds: string[], stateDir?: string): void {
+export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): GridWorkerRecord[] {
+  const filePath = gridStatePath(callerPaneId, stateDir);
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return [];
+  }
+  let needsMigration = false;
+  let rawList: unknown[] = [];
+  if (Array.isArray(value)) {
+    needsMigration = true;
+    rawList = value;
+  } else if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    if (Array.isArray(obj.workers)) {
+      rawList = obj.workers;
+    } else if (Array.isArray(obj.workerPaneIds)) {
+      needsMigration = true;
+      rawList = obj.workerPaneIds;
+    }
+  }
+  const records: GridWorkerRecord[] = [];
+  const seen = new Set<string>();
+  for (const item of rawList) {
+    if (typeof item === "string") {
+      needsMigration = true;
+      if (!seen.has(item)) {
+        seen.add(item);
+        records.push({ paneId: item });
+      }
+    } else if (item && typeof item === "object") {
+      const rec = item as Record<string, unknown>;
+      const paneId = typeof rec.paneId === "string" ? rec.paneId : typeof rec.id === "string" ? rec.id : undefined;
+      if (paneId && !seen.has(paneId)) {
+        seen.add(paneId);
+        records.push({
+          paneId,
+          handle: typeof rec.handle === "string" ? rec.handle : null,
+          cwd: typeof rec.cwd === "string" ? rec.cwd : null,
+          branch: typeof rec.branch === "string" ? rec.branch : null,
+          forkSha: typeof rec.forkSha === "string" ? rec.forkSha : typeof rec.fork_sha === "string" ? rec.fork_sha : null,
+        });
+      }
+    }
+  }
+  if (needsMigration) {
+    try {
+      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+      writeFileSync(
+        filePath,
+        JSON.stringify({
+          callerPaneId,
+          workerPaneIds: records.map((r) => r.paneId),
+          workers: records,
+        }),
+        { mode: 0o600 },
+      );
+    } catch {
+    }
+  }
+  return records;
+}
+
+export function readGridWorkers(callerPaneId: string, stateDir?: string): string[] {
+  return readGridWorkerRecords(callerPaneId, stateDir).map((r) => r.paneId);
+}
+
+export function writeGridWorkers(callerPaneId: string, workers: Array<string | GridWorkerRecord>, stateDir?: string): void {
   const path = gridStatePath(callerPaneId, stateDir);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify({ callerPaneId, workerPaneIds: [...new Set(workerPaneIds)] }), { mode: 0o600 });
+  const records: GridWorkerRecord[] = [];
+  const seen = new Set<string>();
+  for (const item of workers) {
+    const paneId = typeof item === "string" ? item : item.paneId;
+    if (typeof paneId !== "string" || !paneId) continue;
+    if (!seen.has(paneId)) {
+      seen.add(paneId);
+      records.push(
+        typeof item === "string"
+          ? { paneId }
+          : {
+              paneId,
+              handle: item.handle ?? null,
+              cwd: item.cwd ?? null,
+              branch: item.branch ?? null,
+              forkSha: item.forkSha ?? (item as any).fork_sha ?? null,
+            },
+      );
+    }
+  }
+  writeFileSync(
+    path,
+    JSON.stringify({
+      callerPaneId,
+      workerPaneIds: records.map((r) => r.paneId),
+      workers: records,
+    }),
+    { mode: 0o600 },
+  );
 }
 
 export function listAllGridWorkers(stateDir?: string): TrackedWorkerRecord[] {
@@ -164,9 +260,10 @@ export function listAllGridWorkers(stateDir?: string): TrackedWorkerRecord[] {
     try {
       const content = JSON.parse(readFileSync(join(dir, file), "utf8"));
       const callerPaneId = typeof content?.callerPaneId === "string" ? content.callerPaneId : file.slice(0, -5);
-      const workers = Array.isArray(content) ? content : content?.workerPaneIds;
+      const workers = Array.isArray(content) ? content : (content?.workers ?? content?.workerPaneIds);
       if (Array.isArray(workers)) {
-        for (const workerPaneId of workers) {
+        for (const item of workers) {
+          const workerPaneId = typeof item === "string" ? item : item?.paneId;
           if (typeof workerPaneId === "string") {
             result.push({ callerPaneId, workerPaneId });
           }
@@ -235,14 +332,12 @@ export function pruneGridWorkers(closedPaneIds: readonly string[], stateDir?: st
     try {
       const content = JSON.parse(readFileSync(filePath, "utf8"));
       const callerPaneId = typeof content?.callerPaneId === "string" ? content.callerPaneId : file.slice(0, -5);
-      const workers = Array.isArray(content) ? content : content?.workerPaneIds;
-      if (Array.isArray(workers)) {
-        const remaining = workers.filter((id) => typeof id === "string" && !closedSet.has(id));
-        if (remaining.length === 0) {
-          rmSync(filePath, { force: true });
-        } else {
-          writeGridWorkers(callerPaneId, remaining, stateDir);
-        }
+      const records = readGridWorkerRecords(callerPaneId, stateDir);
+      const remaining = records.filter((r) => !closedSet.has(r.paneId));
+      if (remaining.length === 0) {
+        rmSync(filePath, { force: true });
+      } else {
+        writeGridWorkers(callerPaneId, remaining, stateDir);
       }
     } catch {
     }
@@ -409,6 +504,21 @@ export function formatHerdrAgentName(
   return `${candidate.slice(0, 31 - token.length)}-${token}`;
 }
 
+function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: string } {
+  try {
+    const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+    const forkSha = rev.status === 0 && rev.stdout ? rev.stdout.trim() : undefined;
+    const branchRes = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf8" });
+    const branch = branchRes.status === 0 && branchRes.stdout ? branchRes.stdout.trim() : undefined;
+    return {
+      branch: branch || undefined,
+      forkSha: forkSha || undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 async function launchStageInHerdrAttempt(input: {
   client: ClientKind;
   stage: StageSpec;
@@ -467,6 +577,8 @@ async function launchStageInHerdrAttempt(input: {
   let splitPaneId = input.sourcePaneId;
   let splitRatio: number | undefined;
   const callerPaneId = input.sourcePaneId ?? process.env.HERDR_PANE_ID;
+  const existingRecords = callerPaneId ? readGridWorkerRecords(callerPaneId) : [];
+  let liveRecords = existingRecords;
   let gridWorkers: string[] = [];
   if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId && herdr.paneLayout) {
     const layoutResult = await herdr.paneLayout(callerPaneId);
@@ -474,12 +586,13 @@ async function launchStageInHerdrAttempt(input: {
     let layout: PaneLayoutInput;
     try { layout = JSON.parse(layoutResult.stdout); } catch { return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
     const livePaneIds = new Set(layoutPanes(layout).map((pane) => pane.id));
-    gridWorkers = readGridWorkers(callerPaneId).filter((paneId) => livePaneIds.has(paneId));
+    liveRecords = existingRecords.filter((r) => livePaneIds.has(r.paneId));
+    gridWorkers = liveRecords.map((r) => r.paneId);
     const plan = planGridSplit(layout, callerPaneId, gridWorkers);
     splitPaneId = plan.targetPaneId;
     splitDirection = plan.direction;
     splitRatio = plan.ratio;
-    writeGridWorkers(callerPaneId, gridWorkers);
+    writeGridWorkers(callerPaneId, liveRecords);
   }
 
   // 1. Split current pane with resolved direction
@@ -496,7 +609,18 @@ async function launchStageInHerdrAttempt(input: {
     return { ok: false, ackStatus: "unknown", completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
   }
 
-  if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId) writeGridWorkers(callerPaneId, [...gridWorkers, paneId]);
+  if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId) {
+    const workerCwd = input.cwd ?? process.cwd();
+    const gitInfo = resolveGitBranchAndForkSha(workerCwd);
+    const newRecord: GridWorkerRecord = {
+      paneId,
+      handle: agentName,
+      cwd: workerCwd,
+      branch: gitInfo.branch,
+      forkSha: gitInfo.forkSha,
+    };
+    writeGridWorkers(callerPaneId, [...liveRecords, newRecord]);
+  }
 
   let releasePane: (() => Promise<void>) | undefined;
   try { releasePane = await reserveHerdrHandle(`pane:${paneId}`); }

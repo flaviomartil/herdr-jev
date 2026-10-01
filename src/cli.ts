@@ -49,6 +49,7 @@ import { getGlobalJevClient } from "./triage/jev-client.js";
 import { TurnRouter } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
+import { buildAgentsView, formatAgentsTable } from "./herdr/agents.js";
 import { assertRunId, formatRunHistory, listRunHistory } from "./orchestration/run-history.js";
 
 import { existsSync, readFileSync } from "node:fs";
@@ -112,6 +113,20 @@ program
       if (!agents.length) console.log("No matching agents.");
       if (options.watch) await Bun.sleep(2000);
     } while (options.watch);
+  });
+
+program
+  .command("agents")
+  .description("Show tracked swarm agents grouped by project with live state, git change counts, and run history")
+  .option("--json", "Output compact JSON")
+  .action(async (options: { json?: boolean }) => {
+    const callerPaneId = process.env.HERDR_PANE_ID;
+    const groups = await buildAgentsView(callerPaneId);
+    if (options.json) {
+      console.log(JSON.stringify(groups));
+      return;
+    }
+    console.log(formatAgentsTable(groups));
   });
 
 program
