@@ -39,3 +39,9 @@ test("selects only retryable from-failed states", () => {
   expect(retryableStages(stages).map((stage) => stage.state))
     .toEqual(["failed", "unknown", "blocked"]);
 });
+
+test("run summaries expose persisted block reasons without breaking legacy projections", () => {
+  expect(runStateSummary({ tasks: [{ id: "implementer", state: "blocked", blocked_reason: "repository_trust" }] }))
+    .toBe("implementer:blocked(repository_trust)");
+  expect(runStateSummary({ stages: [{ id: "implementer", state: "blocked" }] })).toBe("implementer:blocked");
+});
