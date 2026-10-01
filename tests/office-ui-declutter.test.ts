@@ -1,8 +1,16 @@
 import { expect, test } from "bun:test";
-import { writeFileSync, unlinkSync, chmodSync } from "node:fs";
-import { resolve } from "node:path";
+import { writeFileSync, unlinkSync, chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { afterAll } from "bun:test";
+import { resolve, join } from "node:path";
 import { cleanOutput, findAsk, summarize } from "../herdr-plugin/office/src/summary.mjs";
 import { classifyPane, jevClassificationEnabled } from "../herdr-plugin/office/src/jev-classify.mjs";
+
+
+const tempDir = mkdtempSync(join(tmpdir(), 'herdr-jev-ui-'));
+afterAll(() => {
+  try { rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+});
 
 test("filter terminal chrome from the pane text before showing it", () => {
   const outputLines = [
@@ -61,14 +69,18 @@ test("jevClassificationEnabled covers default on, opt-out with 0, and demo alway
 test("cache once per revision and timeout fallback", async () => {
   const origEnv = process.env.HERDR_JEV_OFFICE_JEV;
   const origBin = process.env.HERDR_JEV_BIN;
-  const fakeBin = resolve(import.meta.dir, `../.test-fake-classify-${Date.now()}.mjs`);
-  const failingBin = resolve(import.meta.dir, `../.test-failing-classify-${Date.now()}.mjs`);
+  const fakeBin = resolve(tempDir, `test-fake-classify-${Date.now()}.mjs`);
+  const failingBin = resolve(tempDir, `test-failing-classify-${Date.now()}.mjs`);
   writeFileSync(
     fakeBin,
-    `#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ state: "working", stateConfidence: 0.9, attention: "now", blockedReason: "none" }));\n`
+    `#!/usr/bin/env node
+process.stdout.write(JSON.stringify({ state: "working", stateConfidence: 0.9, attention: "now", blockedReason: "none" }));
+`
   );
   chmodSync(fakeBin, 0o755);
-  writeFileSync(failingBin, `#!/usr/bin/env node\nprocess.exit(1);\n`);
+  writeFileSync(failingBin, `#!/usr/bin/env node
+process.exit(1);
+`);
   chmodSync(failingBin, 0o755);
 
   try {
@@ -161,8 +173,11 @@ test("formatCommand parses raw command strings", () => {
 import { renderFrame } from "../herdr-plugin/office/src/render.mjs";
 
 test("jev-classify parses flat JSON from fake executable and renderFrame shows marker", async () => {
-  const fakeBin = resolve(import.meta.dir, "fake-jev-classify.sh");
-  writeFileSync(fakeBin, `#!/bin/sh\ncat ${resolve(import.meta.dir, "fixtures/jev-classify-raw-blocked.json")} | sed 's/.*//g'\necho '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScore":1.87,"attentionConfidence":0.81,"blockedReason":"approval","blockedReasonConfidence":0.48,"activity":"unknown","activityConfidence":0,"jevMs":942,"model":"jev-1.13.0"}'\n`);
+  const fakeBin = resolve(tempDir, "fake-jev-classify.sh");
+  writeFileSync(fakeBin, `#!/bin/sh
+cat ${resolve(import.meta.dir, "fixtures/jev-classify-raw-blocked.json")} | sed 's/.*//g'
+echo '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScore":1.87,"attentionConfidence":0.81,"blockedReason":"approval","blockedReasonConfidence":0.48,"activity":"unknown","activityConfidence":0,"jevMs":942,"model":"jev-1.13.0"}'
+`);
   chmodSync(fakeBin, "755");
   
   process.env.HERDR_JEV_BIN = fakeBin;
@@ -223,7 +238,8 @@ test("activity short forms fit in 12 cells and detail view shows long form", () 
     stats: { counts: {} }
   };
   
-  const floorOut = renderFrame(viewFloor).lines.join("\\n");
+  const floorOut = renderFrame(viewFloor).lines.join("\
+");
   // The monitor should contain the short form alone
   expect(floorOut).toContain("approval?");
   expect(floorOut).not.toContain("codex · approval?");
@@ -231,7 +247,8 @@ test("activity short forms fit in 12 cells and detail view shows long form", () 
 
   const viewDetail = { ...viewFloor, detail: { id: "p1" } };
 
-  const detailOut = renderFrame(viewDetail).lines.join("\\n");
+  const detailOut = renderFrame(viewDetail).lines.join("\
+");
   // The detail panel should contain the long form
   expect(detailOut).toContain("WORKING · waiting approval");
 });
