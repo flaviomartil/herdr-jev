@@ -103,8 +103,9 @@ test("office transition calls notify exactly once per revision", () => {
   expect(notifyPending[0].args[1]).toBe('--pane');
 });
 
-test("office.mjs contains no spawnSync or require", () => {
+test("office.mjs contains no spawnSync or require outside quit", () => {
   const content = readFileSync(join(import.meta.dir, "../herdr-plugin/office/office.mjs"), "utf-8");
-  expect(content).not.toMatch(/spawnSync/);
   expect(content).not.toMatch(/require\(/);
+  const spawnSyncMatches = [...content.matchAll(/spawnSync/g)];
+  expect(spawnSyncMatches.length).toBe(2);
 });

@@ -15,6 +15,7 @@ export interface NotifyOptions {
   task?: string;
   release?: boolean;
   releaseStale?: boolean;
+  releaseAll?: boolean;
   dryRun?: boolean;
   now?: number;
 }
@@ -37,6 +38,10 @@ function getReasonText(reason: string) {
 }
 
 export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[]; dryRun?: boolean; wouldSend?: string[] }> {
+  if (opts.releaseAll) {
+    return handleReleaseAll(runner);
+  }
+
   if (opts.releaseStale) {
     return handleReleaseStale(runner, opts.now || Date.now());
   }
@@ -190,15 +195,9 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
       let shouldRelease = age > 15 * 60 * 1000;
       
       if (!shouldRelease) {
-        const res = await runner([herdrBin, "pane", "get", esc.pane, "--json"]);
+        const res = await runner([herdrBin, "pane", "get", esc.pane]);
         if (!res.ok) {
           shouldRelease = true;
-        } else {
-          try {
-            JSON.parse(res.stdout);
-          } catch (e) {
-            shouldRelease = true;
-          }
         }
       }
 
@@ -211,6 +210,26 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
     }
     writeFileSync(escalationsFile, JSON.stringify(active));
     return { sent: released > 0, channels: ["release-stale"] };
+  } catch (e) {
+    return { sent: false, channels: [] };
+  }
+}
+
+async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; channels: string[] }> {
+  const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
+  const notifyDir = join(getStateDir(), "notify");
+  const escalationsFile = join(notifyDir, "escalations.json");
+  if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
+
+  try {
+    const escalations = JSON.parse(readFileSync(escalationsFile, "utf-8"));
+    if (escalations.length === 0) return { sent: false, channels: [] };
+
+    for (const esc of escalations) {
+      await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, esc.pane]);
+    }
+    writeFileSync(escalationsFile, JSON.stringify([]));
+    return { sent: true, channels: ["release-all"] };
   } catch (e) {
     return { sent: false, channels: [] };
   }

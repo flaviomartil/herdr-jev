@@ -118,6 +118,45 @@ test("notify release stale uses pane get", async () => {
   expect(remain.length).toBe(0);
 });
 
+test("notify release all with records", async () => {
+  let calls = 0;
+  const runner = async (args: readonly string[]) => {
+    if (args.includes("release-agent")) calls++;
+    return { ok: true, stdout: "" };
+  };
+  
+  const stateDir = process.env.HERDR_JEV_STATE_DIR!;
+  const notifyDir = join(stateDir, "notify");
+  const escFile = join(notifyDir, "escalations.json");
+  writeFileSync(escFile, JSON.stringify([
+    { pane: "pane1", agent: "kiro", time: Date.now() },
+    { pane: "pane2", agent: "ada", time: Date.now() - 1000 }
+  ]));
+  
+  const res = await handleNotifyCommand({ releaseAll: true }, runner);
+  expect(res.sent).toBe(true);
+  expect(res.channels).toContain("release-all");
+  expect(calls).toBe(2);
+  
+  const remain = JSON.parse(readFileSync(escFile, "utf-8"));
+  expect(remain.length).toBe(0);
+});
+
+test("notify release all without records", async () => {
+  let calls = 0;
+  const runner = async () => { calls++; return { ok: true, stdout: "" }; };
+  
+  const stateDir = process.env.HERDR_JEV_STATE_DIR!;
+  const notifyDir = join(stateDir, "notify");
+  const escFile = join(notifyDir, "escalations.json");
+  writeFileSync(escFile, JSON.stringify([]));
+  
+  const res = await handleNotifyCommand({ releaseAll: true }, runner);
+  expect(res.sent).toBe(false);
+  expect(res.channels).toEqual([]);
+  expect(calls).toBe(0);
+});
+
 test("notify dry run shape", async () => {
   const runner = async () => ({ ok: true, stdout: "" });
   process.env.HERDR_JEV_NOTIFY = "1";

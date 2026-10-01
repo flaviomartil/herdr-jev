@@ -830,6 +830,7 @@ program.command("notify")
   .option("--json", "JSON output")
   .option("--release", "Release escalation")
   .option("--release-stale", "Release stale escalations")
+  .option("--release-all", "Release all escalations")
   .action(async (options: any) => {
     const { handleNotifyCommand } = await import("./herdr/notify.js");
     const { createProcessCommandAdapter } = await import("./herdr/client.js");
