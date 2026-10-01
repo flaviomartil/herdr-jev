@@ -14,7 +14,7 @@ import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
 import { createHash } from "node:crypto";
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster, cleanModel } from './src/roster.mjs';
 import { renderFrame, nextZoom, ZOOMS, HIRE_ID } from './src/render.mjs';
@@ -707,9 +707,9 @@ function quit(code = 0, msg) {
   // the last tick of SAVE_MS would otherwise be the one part of the day that the
   // office watched and then forgot, and quitting is exactly when it happens.
   closeTheBooks();
-  if (!DEMO) {
+  if (!DEMO && process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
     try {
-      spawn(herdrJevBin, ['notify', '--release-stale'], { stdio: 'ignore' });
+      spawnSync(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
     } catch (e) {}
   }
   events?.close();
@@ -2374,7 +2374,7 @@ if (process.env.HERDR_OFFICE_TEST_UNIT === '1') {
 
 async function main() {
   if (!DEMO) {
-    notifyPending.push(['notify', '--release-stale']);
+    spawn(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
     try {
       api = await new ApiClient().open();
     } catch (err) {
