@@ -1,8 +1,11 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { converseWithPeer, resolvePeerStage } from "../src/herdr/peer.js";
 import type { HerdrClient } from "../src/herdr/client.js";
 import { readHerdrObservedState, createHerdrClient, createProcessCommandAdapter, requiresTrustConfirmation, classifyHerdrCommandFailure } from "../src/herdr/client.js";
-import { buildAgentCommand, buildInlineCommand, formatHerdrAgentName, nativeStageEffort } from "../src/herdr/launcher.js";
+import { buildAgentCommand, buildInlineCommand, formatHerdrAgentName, nativeStageEffort, writeGridWorkers } from "../src/herdr/launcher.js";
 
 test("Kiro peers use an explicit native model and never invent scalar effort flags", async () => {
   const input = { source: "codex", target: "kiro", prompt: "Review a bounded task", model: "verified-kiro-model", crossHarness: "auto" };
@@ -190,4 +193,294 @@ test("blocked and unknown replies are not reported as completed answers", async 
     await expect(converseWithPeer({ target: "peer", text: "turn", wait: true }, herdr)).rejects.toThrow(state);
     await expect(converseWithPeer({ target: "peer", wait: true }, herdr)).rejects.toThrow(state);
   }
+});
+
+test("broadcast fan-out sends sequentially to tracked grid workers and prunes dead panes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-fanout-"));
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  process.env.HERDR_JEV_STATE_DIR = dir;
+  try {
+    const callerPane = "caller-pane";
+    writeGridWorkers(callerPane, ["worker-1", "worker-2", "worker-dead", callerPane]);
+
+    const prompted: Array<{ target: string; text: string; wait?: boolean; waitForStart?: boolean; waitForReply?: boolean }> = [];
+    const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+    const herdr = {
+      paneLayout: async () => ok(JSON.stringify({
+        panes: [{ id: callerPane }, { id: "worker-1" }, { id: "worker-2" }]
+      })),
+      getAgent: async (target: string) => {
+        if (target === "worker-1") return ok(JSON.stringify({ result: { agent: { name: "agent-alpha", pane_id: "worker-1", agent_status: "idle" } } }));
+        if (target === "worker-2") return ok(JSON.stringify({ result: { agent: { name: "agent-beta", pane_id: "worker-2", agent_status: "done" } } }));
+        if (target === "agent-alpha") return ok(JSON.stringify({ result: { agent: { name: "agent-alpha", pane_id: "worker-1", agent_status: "idle" } } }));
+        if (target === "agent-beta") return ok(JSON.stringify({ result: { agent: { name: "agent-beta", pane_id: "worker-2", agent_status: "done" } } }));
+        return { ok: false, code: 1, stdout: "", stderr: "not found" };
+      },
+      readAgent: async () => ok("snapshot output"),
+      prompt: async (input: any) => {
+        prompted.push(input);
+        return ok(JSON.stringify({ state: "working" }));
+      },
+    } as unknown as HerdrClient;
+
+    const result = await converseWithPeer({ all: true, text: "broadcast update", callerPaneId: callerPane }, herdr);
+    const parsed = JSON.parse(result);
+    expect(parsed).toEqual([
+      { agent: "agent-alpha", paneId: "worker-1", acknowledged: true, state: "working" },
+      { agent: "agent-beta", paneId: "worker-2", acknowledged: true, state: "working" },
+    ]);
+    expect(prompted.length).toBe(2);
+    expect(prompted[0].target).toBe("agent-alpha");
+    expect(prompted[0].text).toBe("broadcast update");
+    expect(prompted[1].target).toBe("agent-beta");
+    expect(prompted[1].text).toBe("broadcast update");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedStateDir === undefined) delete process.env.HERDR_JEV_STATE_DIR;
+    else process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+  }
+});
+
+test("broadcast honors --wait waiting on each peer with shared timeout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-wait-"));
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  process.env.HERDR_JEV_STATE_DIR = dir;
+  try {
+    const callerPane = "caller-pane";
+    writeGridWorkers(callerPane, ["worker-1", "worker-2"]);
+
+    const prompted: Array<{ target: string; wait?: boolean; waitForReply?: boolean; timeoutMs?: number }> = [];
+    const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+    const herdr = {
+      getAgent: async (target: string) => {
+        if (target === "worker-1") return ok(JSON.stringify({ result: { agent: { name: "agent-1", pane_id: "worker-1", agent_status: "idle" } } }));
+        if (target === "worker-2") return ok(JSON.stringify({ result: { agent: { name: "agent-2", pane_id: "worker-2", agent_status: "idle" } } }));
+        if (target === "agent-1") return ok(JSON.stringify({ result: { agent: { name: "agent-1", pane_id: "worker-1", agent_status: "idle" } } }));
+        if (target === "agent-2") return ok(JSON.stringify({ result: { agent: { name: "agent-2", pane_id: "worker-2", agent_status: "idle" } } }));
+        return { ok: false, code: 1, stdout: "", stderr: "not found" };
+      },
+      readAgent: async () => ok("worker output"),
+      prompt: async (input: any) => {
+        prompted.push(input);
+        return ok(JSON.stringify({ state: "done" }));
+      },
+    } as unknown as HerdrClient;
+
+    const result = await converseWithPeer({ all: true, text: "run task", wait: true, timeoutMs: 50000, callerPaneId: callerPane }, herdr);
+    const parsed = JSON.parse(result);
+    expect(parsed).toEqual([
+      { agent: "agent-1", paneId: "worker-1", acknowledged: true, state: "done" },
+      { agent: "agent-2", paneId: "worker-2", acknowledged: true, state: "done" },
+    ]);
+    expect(prompted[0].waitForReply).toBe(true);
+    expect(prompted[0].timeoutMs).toBeLessThanOrEqual(50000);
+    expect(prompted[1].waitForReply).toBe(true);
+    expect(prompted[1].timeoutMs).toBeLessThanOrEqual(50000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedStateDir === undefined) delete process.env.HERDR_JEV_STATE_DIR;
+    else process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+  }
+});
+
+test("broadcast excludes specified handles by name and paneId", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-exclude-"));
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  process.env.HERDR_JEV_STATE_DIR = dir;
+  try {
+    const callerPane = "caller-pane";
+    writeGridWorkers(callerPane, ["worker-1", "worker-2", "worker-3"]);
+
+    const prompted: string[] = [];
+    const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+    const herdr = {
+      getAgent: async (target: string) => {
+        if (target === "worker-1" || target === "agent-1") return ok(JSON.stringify({ result: { agent: { name: "agent-1", pane_id: "worker-1", agent_status: "idle" } } }));
+        if (target === "worker-2" || target === "agent-2") return ok(JSON.stringify({ result: { agent: { name: "agent-2", pane_id: "worker-2", agent_status: "idle" } } }));
+        if (target === "worker-3" || target === "agent-3") return ok(JSON.stringify({ result: { agent: { name: "agent-3", pane_id: "worker-3", agent_status: "idle" } } }));
+        return { ok: false, code: 1, stdout: "", stderr: "not found" };
+      },
+      readAgent: async () => ok("output"),
+      prompt: async (input: any) => {
+        prompted.push(input.target);
+        return ok(JSON.stringify({ state: "working" }));
+      },
+    } as unknown as HerdrClient;
+
+    const result = await converseWithPeer({ all: true, text: "msg", exclude: "agent-2, worker-3", callerPaneId: callerPane }, herdr);
+    const parsed = JSON.parse(result);
+    expect(parsed).toEqual([
+      { agent: "agent-1", paneId: "worker-1", acknowledged: true, state: "working" },
+    ]);
+    expect(prompted).toEqual(["agent-1"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedStateDir === undefined) delete process.env.HERDR_JEV_STATE_DIR;
+    else process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+  }
+});
+
+test("broadcast collects per-peer results on partial failure", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-partial-fail-"));
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  process.env.HERDR_JEV_STATE_DIR = dir;
+  try {
+    const callerPane = "caller-pane";
+    writeGridWorkers(callerPane, ["worker-1", "worker-2", "worker-3"]);
+
+    const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+    const herdr = {
+      getAgent: async (target: string) => {
+        if (target === "worker-1" || target === "agent-1") return ok(JSON.stringify({ result: { agent: { name: "agent-1", pane_id: "worker-1", agent_status: "idle" } } }));
+        if (target === "worker-2" || target === "agent-2") return ok(JSON.stringify({ result: { agent: { name: "agent-2", pane_id: "worker-2", agent_status: "working" } } }));
+        if (target === "worker-3" || target === "agent-3") return ok(JSON.stringify({ result: { agent: { name: "agent-3", pane_id: "worker-3", agent_status: "idle" } } }));
+        return { ok: false, code: 1, stdout: "", stderr: "not found" };
+      },
+      readAgent: async () => ok("output"),
+      prompt: async (input: any) => {
+        if (input.target === "agent-3" || input.target === "worker-3") {
+          return { ok: false, code: 1, stdout: "", stderr: "connection lost" };
+        }
+        return ok(JSON.stringify({ state: "working" }));
+      },
+    } as unknown as HerdrClient;
+
+    const result = await converseWithPeer({ all: true, text: "batch command", callerPaneId: callerPane }, herdr);
+    const parsed = JSON.parse(result);
+    expect(parsed).toEqual([
+      { agent: "agent-1", paneId: "worker-1", acknowledged: true, state: "working" },
+      { agent: "agent-2", paneId: "worker-2", acknowledged: false, state: "working" },
+      { agent: "agent-3", paneId: "worker-3", acknowledged: false, state: "idle" },
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedStateDir === undefined) delete process.env.HERDR_JEV_STATE_DIR;
+    else process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+  }
+});
+
+test("mutual exclusivity of target and --all", async () => {
+  await expect(converseWithPeer({ target: "some-agent", all: true, text: "msg" })).rejects.toThrow("mutually exclusive");
+  await expect(converseWithPeer({ all: true, text: "" })).rejects.toThrow("nonempty message");
+});
+
+test("peer-message CLI enforces mutual exclusivity of <agent> and --all", async () => {
+  const cliPath = join(import.meta.dir, "../src/cli.ts");
+  const child = Bun.spawn([process.execPath, "run", cliPath, "peer-message", "worker-1", "hello", "--all"], {
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const exitCode = await child.exited;
+  const stderr = await new Response(child.stderr).text();
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain("Cannot specify both <agent> and --all");
+});
+
+test("peer-message CLI exits code 1 if any worker send was not acknowledged", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-cli-fail-"));
+  const binDir = join(dir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const mockHerdr = join(binDir, "herdr");
+  writeFileSync(mockHerdr, `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "agent" && args[1] === "get") {
+  const target = args[2];
+  if (target === "w1") {
+    console.log(JSON.stringify({ result: { agent: { name: "w1", pane_id: "w1", agent_status: "idle" } } }));
+    process.exit(0);
+  }
+  if (target === "w2") {
+    console.log(JSON.stringify({ result: { agent: { name: "w2", pane_id: "w2", agent_status: "working" } } }));
+    process.exit(0);
+  }
+}
+if (args[0] === "agent" && args[1] === "read") {
+  console.log("ok");
+  process.exit(0);
+}
+if (args[0] === "agent" && args[1] === "prompt") {
+  console.log(JSON.stringify({ state: "working" }));
+  process.exit(0);
+}
+process.exit(1);
+`, { mode: 0o755 });
+
+  const callerPane = "caller-pane";
+  const stateDir = join(dir, "state");
+  const gridDir = join(stateDir, "grid");
+  mkdirSync(gridDir, { recursive: true });
+  writeFileSync(join(gridDir, `${callerPane}.json`), JSON.stringify({ workerPaneIds: ["w1", "w2"] }));
+
+  const cliPath = join(import.meta.dir, "../src/cli.ts");
+  const child = Bun.spawn([process.execPath, "run", cliPath, "peer-message", "--all", "hello"], {
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      HERDR_BIN_PATH: mockHerdr,
+      HERDR_JEV_STATE_DIR: stateDir,
+      HERDR_PANE_ID: callerPane,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const exitCode = await child.exited;
+  const stdout = await new Response(child.stdout).text();
+  expect(exitCode).toBe(1);
+  const parsed = JSON.parse(stdout.trim());
+  expect(parsed).toEqual([
+    { agent: "w1", paneId: "w1", acknowledged: true, state: "working" },
+    { agent: "w2", paneId: "w2", acknowledged: false, state: "working" },
+  ]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("peer-message CLI exits code 0 when all workers acknowledge", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-cli-ok-"));
+  const binDir = join(dir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const mockHerdr = join(binDir, "herdr");
+  writeFileSync(mockHerdr, `#!/usr/bin/env bun
+const args = process.argv.slice(2);
+if (args[0] === "agent" && args[1] === "get") {
+  console.log(JSON.stringify({ result: { agent: { name: args[2], pane_id: args[2], agent_status: "idle" } } }));
+  process.exit(0);
+}
+if (args[0] === "agent" && args[1] === "read") {
+  console.log("ok");
+  process.exit(0);
+}
+if (args[0] === "agent" && args[1] === "prompt") {
+  console.log(JSON.stringify({ state: "working" }));
+  process.exit(0);
+}
+process.exit(1);
+`, { mode: 0o755 });
+
+  const callerPane = "caller-pane";
+  const stateDir = join(dir, "state");
+  const gridDir = join(stateDir, "grid");
+  mkdirSync(gridDir, { recursive: true });
+  writeFileSync(join(gridDir, `${callerPane}.json`), JSON.stringify({ workerPaneIds: ["w1", "w2"] }));
+
+  const cliPath = join(import.meta.dir, "../src/cli.ts");
+  const child = Bun.spawn([process.execPath, "run", cliPath, "peer-message", "--all", "hello"], {
+    env: {
+      ...process.env,
+      PATH: `${binDir}:${process.env.PATH}`,
+      HERDR_BIN_PATH: mockHerdr,
+      HERDR_JEV_STATE_DIR: stateDir,
+      HERDR_PANE_ID: callerPane,
+    },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const exitCode = await child.exited;
+  const stdout = await new Response(child.stdout).text();
+  expect(exitCode).toBe(0);
+  const parsed = JSON.parse(stdout.trim());
+  expect(parsed).toEqual([
+    { agent: "w1", paneId: "w1", acknowledged: true, state: "working" },
+    { agent: "w2", paneId: "w2", acknowledged: true, state: "working" },
+  ]);
+  rmSync(dir, { recursive: true, force: true });
 });
