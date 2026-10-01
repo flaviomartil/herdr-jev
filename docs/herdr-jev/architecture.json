@@ -122,7 +122,7 @@
       "id": "harness_core",
       "type": "cloud",
       "label": "AI Harness Core",
-      "sublabel": "Review, Tasks & Dagr",
+      "sublabel": "Review & Report History",
       "tag": "control-plane",
       "pos": [
         780,
@@ -583,30 +583,12 @@
       ]
     },
     {
-      "dot": "emerald",
-      "title": "In-Tab Grid Planner & Tracking",
-      "items": [
-        "In-tab grid layout tiles delegated workers balanced without changing focus",
-        "Tracks caller and worker pane lifecycles across interactive sessions",
-        "Automated worker cleanup with workers list and workers close --all-idle"
-      ]
-    },
-    {
-      "dot": "violet",
-      "title": "Swarm Data Layer & Jev Office",
-      "items": [
-        "Aggregates live agent status, git commit delta, and uncommitted diffs",
-        "Powers Radar overview dashboard and Jev Office floor plan with dynamic desks",
-        "Broadcast and targeted peer messaging via herdr-jev peer-message --all"
-      ]
-    },
-    {
       "dot": "rose",
       "title": "AI Harness Bridge & Review Gates",
       "items": [
-        "Bridge executes external-run lifecycle (create, claim, ack, observe, settle)",
+        "Canonical ledger retains reports, attempt history and block reasons",
         "Deterministic checks verify repository state before independent review",
-        "Read-only reviewer via review-judge produces tamper-proof verdict"
+        "Read-only reviewer validates the archived report digest"
       ]
     },
     {
