@@ -235,7 +235,7 @@ test("workspace scope fallback when tab has fewer than 2 primary agents", () => 
     },
   });
   expect(single.status).toBe(0);
-  expect(single.stdout).toContain("[workspace]");
+  expect(single.stdout).toContain(" workspace ");
 
   const multi = spawnSync("node", [officeScript, "--once", "--demo"], {
     encoding: "utf8",
@@ -249,7 +249,7 @@ test("workspace scope fallback when tab has fewer than 2 primary agents", () => 
     },
   });
   expect(multi.status).toBe(0);
-  expect(multi.stdout).toContain("[tab]");
+  expect(multi.stdout).toContain(" tab ");
 });
 
 test("model trimming removes leading zero-width spaces and whitespace in roster", async () => {

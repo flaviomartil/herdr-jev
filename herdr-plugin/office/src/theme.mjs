@@ -101,11 +101,11 @@ export const HEAD = {
 export const headTint = (band) => HEAD[band] || null;
 
 export const STATUS = {
-  working: { label: 'WORKING', fg: '#5ce08a', screen: '#7cf0a6' },
-  blocked: { label: 'NEEDS YOU', fg: '#ffc14d', screen: '#ffd67a', hot: '#fff0c2' },
-  idle: { label: 'IDLE', fg: '#8b97aa', screen: '#7d899c' },
-  done: { label: 'DONE', fg: '#4fd6e8', screen: '#86e9f5' },
-  unknown: { label: 'UNSURE', fg: '#c48bff', screen: '#d9b3ff' },
+  working: { label: 'WORKING', fg: '#5ce08a', screen: '#7cf0a6', bright: '#8bf3ae' },
+  blocked: { label: 'NEEDS YOU', fg: '#ffc14d', screen: '#ffd67a', hot: '#fff0c2', bright: '#ffe299' },
+  idle: { label: 'IDLE', fg: '#748297', screen: '#8b97aa', bright: '#9ca9bb' },
+  done: { label: 'DONE', fg: '#4fd6e8', screen: '#86e9f5', bright: '#a2f1fb' },
+  unknown: { label: 'UNSURE', fg: '#c48bff', screen: '#d9b3ff', bright: '#eac6ff' },
 };
 
 export const status = (name) => STATUS[name] || STATUS.unknown;

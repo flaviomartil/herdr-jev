@@ -36,7 +36,7 @@ const GUTTER = 2;
 const MON_X = POSE_W + 1; // where the monitor starts on an art row
 const INNER = MON_X + MON_W; // 27: person, elbow room, monitor
 export const TILE_W = INNER + GUTTER * 2 + 2; // 33: plus both borders
-export const TILE_H = 16;
+export const TILE_H = 13;
 const GAP_X = 1; // carpet showing between cubicles
 const GAP_Y = 1;
 const CHROME_ROWS = 4; // header bar + spacer, spacer + key bar
@@ -113,13 +113,14 @@ const over = (base, str, col) => {
 // One bordered row of a card: `│ <inner> │`, with inner's spans shifted past the
 // border and gutter. Works out the right-hand border from inner's code-point
 // length so a wide glyph inside cannot push the frame off the grid.
-function framed(inner, spans, { rowBg, borderFg, bold, borderBg = P.cubicle, gutter = 1 }) {
+function framed(inner, spans, { rowBg, borderFg, bold, borderBg = P.cubicle, gutter = 1, selected = false }) {
   const n = [...inner].length;
   const pad = ' '.repeat(gutter);
   const shift = 1 + gutter;
   const right = n + shift + gutter;
+  const borderChar = selected ? '║' : '│';
   return paint(
-    `│${pad}${inner}${pad}│`,
+    `${borderChar}${pad}${inner}${pad}${borderChar}`,
     [
       { from: 0, to: 1, fg: borderFg, bg: borderBg, bold },
       { from: 1, to: right, bg: rowBg },
@@ -130,8 +131,12 @@ function framed(inner, spans, { rowBg, borderFg, bold, borderBg = P.cubicle, gut
   );
 }
 
-const edge = (left, right, w, { borderFg, bold }) =>
-  paint(left + '─'.repeat(Math.max(0, w - 2)) + right, [], { fg: borderFg, bg: P.cubicle, bold });
+const edge = (left, right, w, { borderFg, bold, selected }) => {
+  const lineChar = selected ? '═' : '─';
+  const l = selected && left === '╭' ? '╔' : selected && left === '╰' ? '╚' : left;
+  const r = selected && right === '╮' ? '╗' : selected && right === '╯' ? '╝' : right;
+  return paint(l + lineChar.repeat(Math.max(0, w - 2)) + r, [], { fg: borderFg, bg: P.cubicle, bold });
+};
 
 /* --------------------------------------------------------------------- desks */
 
@@ -418,14 +423,9 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     : lifted
       ? P.faint
       : selected
-        ? P.accent
-        : person.status === 'blocked'
-          ? (alert && st.hot) || st.fg
-          // The cubicle wall is the room, so this is where a workspace tint lands: it
-          // is the last thing consulted, after the drag, the selection and the status,
-          // which is what guarantees a room colour can never paint over a raised hand.
-          : wall;
-  const chrome = { borderFg, bold: dropTarget || (!lifted && (selected || alert)) };
+        ? (alert && st.hot) || st.bright || st.fg
+        : st.fg;
+  const chrome = { borderFg, bold: dropTarget || (!lifted && (selected || alert)), selected };
   const row = (inner, spans, rowBg = P.cubicle) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
   const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
   // A person, a cell of desk, then their monitor.
@@ -452,11 +452,14 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   ];
 
   const plate = cells();
-  plate.add('▌', { fg: who.shirt });
-  plate.add(' ');
+  plate.add('▌ ', { fg: st.fg });
   plate.add(truncate(person.name, 12), { fg: P.ink, bold: true });
   if (person.hiredSparkle) plate.add(' *', { fg: '#ffe6a8', bold: true });
   else if (person.focused) plate.add(' *', { fg: P.accent, bold: true });
+  if (person.swarmBadge) {
+    plate.add(' ');
+    plate.add(person.swarmBadge.text, { fg: st.fg, bold: person.swarmBadge.bold });
+  }
   const kind = truncate(person.kind, 10);
   plate.gap(INNER - width(kind));
   plate.add(kind, { fg: P.dim });
@@ -471,75 +474,45 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   bar.gap(INNER);
 
   const task = person.title || person.cwd.split('/').pop() || person.id;
-  // The bottom line of a desk is "what, and where": the job on the left and the
-  // branch on the right. Which branch a desk is on is the other half of the question
-  // you have looking at a floor of agents, because two desks in the same repo, one on
-  // main and one on a throwaway, are otherwise identical. The `@` is there so a short
-  // branch cannot be mistaken for the tail of the job.
-  //
-  // The job gets whatever the branch does not need, and the branch is dropped
-  // entirely rather than squeezed when that would leave the job unreadable: on a
-  // twenty-seven cell line, half a branch name and half a sentence is two lies where
-  // there could have been one truth.
-  // How much is uncommitted in this checkout, as cells of paper on the desk. Drawn on
-  // the desk row below, and worked out here because the row is built inside a list
-  // literal where a statement cannot go.
   const paper = pile(person.dirt?.files);
 
   const foot = cells();
   const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
-  const roomForRef = ref && INNER - width(ref) - 1 >= TASK_MIN;
-  foot.add(truncate(task, roomForRef ? INNER - width(ref) - 1 : INNER), { fg: P.dim });
+  const roomForRef = ref && INNER - 2 - width(ref) - 1 >= TASK_MIN;
+  foot.add('▌ ', { fg: st.fg });
+  foot.add(truncate(task, roomForRef ? INNER - 2 - width(ref) - 1 : INNER - 2), { fg: P.faint });
   if (roomForRef) {
     foot.gap(INNER - width(ref));
-    foot.add(ref, { fg: P.soft });
+    foot.add(ref, { fg: P.faint });
   }
   foot.gap(INNER);
+
   const card = wallCard(person.tabName);
-  // The bubble only exists while they are stuck, and its tail lands on the row
-  // below, which is the hair row.
   const bubble = person.status === 'blocked' ? speechBubble(person.ask || 'needs your OK') : null;
-  // The same row carries news when nobody has their hand up. An ask always wins
-  // it: whatever just happened at this desk matters less than the fact that this
-  // desk is waiting on you.
   const slab = !bubble && person.event?.label ? eventSlab(person.event.label, person.event.kind) : null;
   const sparkRow = SPARKLE_PATTERNS[frame % SPARKLE_PATTERNS.length];
   const hair = bubble ? over(body.rows[0], '▘', TAIL_X) : person.hiredSparkle ? sparkRow : body.rows[0];
 
-  const jevRow = cells();
-  if (person.jevModel || person.jevQuota) {
-    if (person.jevModel) jevRow.add(truncate(person.jevModel, 14), { fg: P.soft });
-    if (person.jevQuota) {
-      const q = truncate(person.jevQuota, INNER - jevRow.w - 1);
-      jevRow.gap(INNER - width(q));
-      jevRow.add(q, { fg: P.dim });
-    }
-  }
-  jevRow.gap(INNER);
-  const fitJev = jevRow.fit(INNER);
-
   const runBadge = resolveRunBadge(person, frame);
-  const swarmBadge = person.swarmBadge;
-  const runRow = cells();
-  if (runBadge && swarmBadge) {
-    runRow.add('▌ ', { fg: runBadge.fg });
-    const maxRunW = Math.max(3, INNER - width(swarmBadge.text) - 4);
-    runRow.add(truncate(runBadge.text, maxRunW), { fg: runBadge.textFg, bold: runBadge.bold });
-    runRow.gap(INNER - width(swarmBadge.text));
-    runRow.add(swarmBadge.text, { fg: swarmBadge.fg, bold: swarmBadge.bold });
-  } else if (runBadge) {
-    runRow.add('▌ ', { fg: runBadge.fg });
-    runRow.add(truncate(runBadge.text, INNER - 2), { fg: runBadge.textFg, bold: runBadge.bold });
-  } else if (swarmBadge) {
-    runRow.add('▌ ', { fg: swarmBadge.fg });
-    runRow.add(swarmBadge.text, { fg: swarmBadge.fg, bold: swarmBadge.bold });
-  }
-  runRow.gap(INNER);
-  const fitRun = runRow.fit(INNER);
-
   const quotaPct = parseQuotaPercent(person.jevQuota);
-  let deskFrontText = DESK_FRONT;
+  
+  const deskFront = cells();
+  deskFront.gap(MON_X); // skip to under monitor
+  if (runBadge) {
+    deskFront.add(' ', { bg: P.deskFront }); // pill padding
+    deskFront.add(truncate(runBadge.text, 10), { fg: st.fg, bg: P.deskFront });
+    deskFront.add(' ', { bg: P.deskFront });
+  }
+  const quotaStr = person.jevQuota ? String(person.jevQuota) : '';
+  if (quotaStr) {
+    deskFront.gap(INNER - width(quotaStr));
+    deskFront.add(quotaStr, { fg: P.dim });
+  }
+  deskFront.gap(INNER);
+  const fitFront = deskFront.fit(INNER);
+  let deskFrontText = over(DESK_FRONT, fitFront.text.substring(MON_X), MON_X);
   const deskFrontSpans = [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }];
+  for (const sp of fitFront.spans) if (sp.from >= MON_X) deskFrontSpans.push(sp);
   if (quotaPct != null) {
     const gaugeW = 4;
     const gaugeX = 2;
@@ -548,16 +521,11 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     deskFrontSpans.push({ from: gaugeX, to: gaugeX + gaugeW, fg: gaugeFg });
   }
 
-  // Rows, top to bottom, with a blank line wherever two things that mean
-  // different things would otherwise touch: under the nameplate, under the
-  // desk, and inside both borders.
   const rows = [
     edge('╭', '╮', TILE_W, chrome),
-    blank(),
     row(plate.out().text, plate.out().spans),
-    (person.jevModel || person.jevQuota) ? row(fitJev.text, fitJev.spans) : blank(),
-    card ? row(card.text, card.spans) : blank(),
-    bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : blank(),
+    card ? row(card.text, card.spans) : row(' '.repeat(INNER), []),
+    bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : row(' '.repeat(INNER), []),
     row(art(hair, bezelTop(person.head?.used)), [
       { from: 0, to: POSE_W, fg: person.hiredSparkle ? '#ffe6a8' : emoteFg, bold: Boolean(person.hiredSparkle) },
       { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
@@ -581,13 +549,10 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       P.deskTop,
     ),
     row(deskFrontText, deskFrontSpans, P.deskFront),
-    (runBadge || swarmBadge) ? row(fitRun.text, fitRun.spans) : blank(),
     row(bar.out().text, bar.out().spans),
     row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),
   ];
-  // ART_Y and BUTTON_Y are indexes into the list above, so a row added or removed
-  // without moving them would leave the monitor's buttons somewhere else entirely.
   if (rows.length !== TILE_H) throw new Error(`tile is ${rows.length} rows, want TILE_H ${TILE_H}`);
   return rows;
 }
@@ -622,9 +587,7 @@ function vacantTile({ selected, pending, kind }) {
   const hint = pending ? 'give it a moment' : 'enter or click to hire';
   const rows = [
     edge('╭', '╮', TILE_W, chrome),
-    blank(),
     row(plate.out().text, plate.out().spans),
-    blank(),
     blank(),
     blank(),
     row(art(VACANT_CHAIR[0], BEZEL_TOP), [{ from: MON_X, to: INNER, fg: P.faint }]),
@@ -636,7 +599,6 @@ function vacantTile({ selected, pending, kind }) {
     ]),
     row(DESK_TOP, [{ from: KEYS_X, to: KEYS_X + 10, fg: P.keys }], P.deskTop),
     row(DESK_FRONT, [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }], P.deskFront),
-    blank(),
     row(bar.out().text, bar.out().spans),
     row(padEnd(hint, INNER), [{ from: 0, to: Infinity, fg: selected && !pending ? P.soft : P.faint }]),
     edge('╰', '╯', TILE_W, chrome),
@@ -652,60 +614,44 @@ function headerLines(view) {
   const clock = new Date(view.now).toTimeString().slice(0, 8);
   const b = cells();
   b.add('  ');
-  b.add('JEV OFFICE', { fg: P.accent, bold: true });
-  if (view.scope && view.scope !== 'all') b.add(` [${view.scope}]`, { fg: P.dim });
+  b.add('JEV OFFICE', { fg: P.ink, bg: P.accent, bold: true }); 
+  
   b.add('   ');
-  // With a filter on, the count says what it is a count *of*. "3 desks" while
-  // twelve people are in the room is the single most misleading thing this header
-  // could say, and the whole floor below it is filtered too.
+  if (view.scope && view.scope !== 'all') {
+    b.add(` ${view.scope} `, { bg: P.accent, fg: P.cubicle, bold: true });
+    b.add('   ');
+  }
   const on = terms(view.filter).length > 0;
   b.add(on ? `${people.length} of ${view.total ?? people.length} desks` : `${people.length} ${people.length === 1 ? 'desk' : 'desks'}`, { fg: P.dim });
   if (on || view.filtering) {
     b.add('   ');
     b.add('/', { fg: P.accent, bold: true });
-    // The field is live, so the text is shown as typed rather than as parsed. A
-    // cursor only while it has the keyboard: an accepted filter is a state the
-    // office is in, not something you are in the middle of.
     b.add(truncate(String(view.filter || ''), 24), { fg: P.soft, bold: true });
     if (view.filtering) b.add('_', { fg: P.accent, bold: true });
   }
-  // Shepherd mode moves the selection on its own, so it has to be visible from the
-  // header: a highlight that walks by itself is alarming when you do not know why,
-  // and it is exactly the kind of mode you leave on and forget. Amber, because it is
-  // about raised hands and it should read as the same concern as the count is.
   if (view.following) {
     b.add('   ');
-    b.add('» following hands', { fg: status('blocked').fg, bold: true });
+    b.add(' following hands ', { bg: status('blocked').fg, fg: '#000000', bold: true });
   }
-  // A zoom level is sticky and it changes what the whole pane looks like, so it says
-  // which one you are in. Nothing at all for `auto`, because that is not a mode you
-  // chose and a badge reading "automatic" on every normal frame is just noise.
   if (view.zoom === 'cubicle' || view.zoom === 'list') {
     b.add('   ');
-    b.add(view.zoom === 'cubicle' ? 'one desk' : 'list view', { fg: P.faint });
+    b.add(view.zoom === 'cubicle' ? ' one desk ' : ' list view ', { bg: P.dim, fg: P.cubicle });
   }
   const budget = size.cols - width(clock) - 4;
   for (const key of ORDER) {
     if (!counts[key]) continue;
     const st = status(key);
-    const chunk = `   ${counts[key]} ${PHRASE[key]}`;
+    const chunk = ` ${counts[key]} ${PHRASE[key]} `;
     if (b.w + width(chunk) + 1 > budget) break;
     b.add('   ');
-    b.add('▌', { fg: st.fg });
-    b.add(` ${counts[key]} `, { fg: P.soft, bold: key === 'blocked' });
-    b.add(PHRASE[key], { fg: P.dim });
+    b.add(chunk, { bg: st.fg, fg: P.cubicle, bold: key === 'blocked' });
   }
-  // The legend for the rooms, which is what turns the wall colours from decoration
-  // into information. After the counts, because a count of raised hands outranks a
-  // note about which workspace they are in, and it drops off a narrow pane the same
-  // way the counts do rather than shoving the clock off the end.
   for (const room of roomsShown(view.rooms, people)) {
     const name = truncate(room.name || `room ${room.number}`, 10);
-    if (b.w + width(name) + 5 > budget) break;
+    const chunk = ` ${name} `;
+    if (b.w + width(chunk) + 5 > budget) break;
     b.add('   ');
-    b.add('▌', { fg: room.wall });
-    b.add(' ');
-    b.add(name, { fg: room.ink });
+    b.add(chunk, { bg: room.wall, fg: room.ink });
   }
   b.gap(size.cols - width(clock) - 2);
   if (b.w + width(clock) + 2 <= size.cols) b.add(clock, { fg: P.dim });
@@ -1772,21 +1718,22 @@ function swarmPanel(view, floorRows, hitboxes, startRow) {
   const desk = hitboxes.find((h) => h.id === swarm?.id);
   const deskCenterX = desk ? desk.x + Math.floor(desk.w / 2) : Math.floor(size.cols / 2);
   const left = Math.max(0, Math.min(size.cols - PW, deskCenterX - Math.floor(PW / 2)));
-  const chrome = { borderFg: P.accent, bold: false };
-  const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
+  const st = person ? status(person.status) : status('working');
+  const chrome = { borderFg: st.fg, bold: false };
+  const row = (inner, spans = [], rowBg = P.cubicle) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg });
   const body = [];
 
   const head = cells();
-  head.add('╭─ ');
-  head.add('SWARM', { fg: P.accent, bold: true });
+  head.add('╭─ ', { fg: chrome.borderFg });
+  head.add(' SWARM ', { bg: st.fg, fg: P.cubicle, bold: true });
   head.add(' · ');
   head.add(truncate(person ? person.name : (swarm?.id || ''), 16), { fg: P.ink, bold: true });
   const subCount = swarm?.subagents?.length || 0;
   head.add(` (${subCount} subagent${subCount === 1 ? '' : 's'})`, { fg: P.dim });
   head.add(' ');
-  head.add('─'.repeat(Math.max(0, PW - head.w - 1)));
-  head.add('╮');
-  body.push(paint(head.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...head.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)), { fg: chrome.borderFg });
+  head.add('╮', { fg: chrome.borderFg });
+  body.push(paint(head.out().text, head.out().spans, { bg: P.cubicle, fg: chrome.borderFg }));
 
   if (swarm?.closeConfirm) {
     body.push(row(''));
@@ -1800,11 +1747,13 @@ function swarmPanel(view, floorRows, hitboxes, startRow) {
     body.push(row('  no subagents for this agent', [{ from: 0, to: Infinity, fg: P.dim }]));
   } else {
     const sorted = [...swarm.subagents].sort((a, b) => a.slot - b.slot);
-    for (const sub of sorted) {
+    for (let index = 0; index < sorted.length; index++) {
+      const sub = sorted[index];
+      const rBg = index % 2 === 1 ? P.cubicleAlt : P.cubicle;
       const line = cells();
-      line.add('  ');
-      line.add(String(sub.slot).padEnd(2), { fg: P.accent, bold: true });
       line.add(' ');
+      line.add(` ${sub.slot} `, { bg: P.accent, fg: P.cubicle, bold: true });
+      line.add('  ');
       const isBlocked = sub.state === 'blocked';
       const stGlyph = isBlocked ? '!' : sub.state === 'working' ? '*' : sub.state === 'idle' ? '-' : sub.state === 'done' ? '+' : '?';
       const stFg = isBlocked ? '#ef6b43' : sub.state === 'working' ? '#5ce08a' : '#7e8a9b';
@@ -1829,22 +1778,21 @@ function swarmPanel(view, floorRows, hitboxes, startRow) {
           line.add(truncate(String(sub.run), remaining), { fg: P.soft });
         }
       }
-      body.push(row(line.out().text, line.out().spans));
+      body.push(row(line.out().text, line.out().spans, rBg));
     }
   }
 
   const foot = cells();
-  foot.add('╰─ ');
-  foot.add('1-9', { fg: P.accent });
+  foot.add('╰─ ', { fg: chrome.borderFg });
+  foot.add(' 1-9 ', { bg: P.accent, fg: P.cubicle });
   foot.add(' focus  ');
-  foot.add('c', { fg: P.accent });
+  foot.add(' c ', { bg: P.accent, fg: P.cubicle });
   foot.add(' close idle  ');
-  foot.add('esc/w', { fg: P.accent });
-  foot.add(' close');
-  foot.add(' ');
-  foot.add('─'.repeat(Math.max(0, PW - foot.w - 1)));
-  foot.add('╯');
-  body.push(paint(foot.out().text, [{ from: 0, to: Infinity, fg: chrome.borderFg }, ...foot.out().spans], { bg: P.cubicle, fg: chrome.borderFg }));
+  foot.add(' esc/w ', { bg: P.accent, fg: P.cubicle });
+  foot.add(' close ');
+  foot.add('─'.repeat(Math.max(0, PW - foot.w - 1)), { fg: chrome.borderFg });
+  foot.add('╯', { fg: chrome.borderFg });
+  body.push(paint(foot.out().text, foot.out().spans, { bg: P.cubicle, fg: chrome.borderFg }));
 
   const lines = [];
   for (let i = 0; i < floorRows; i += 1) {
