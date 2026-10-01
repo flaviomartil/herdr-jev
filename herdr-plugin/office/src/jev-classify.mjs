@@ -72,7 +72,7 @@ export async function classifyPane(paneId, revision, person, outputLines) {
             attention: ans.attention,
             confidence: ans.stateConfidence ?? 0,
             blockedReason: ans.blockedReason,
-            activity: ans.activityConfidence >= 0.6 ? ans.activity : undefined
+            activity: ans.activityConfidence >= 0.45 ? ans.activity : undefined
           };
             cache.set(key, result);
             resolve(result);
