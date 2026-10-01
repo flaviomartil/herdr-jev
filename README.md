@@ -67,6 +67,9 @@ Keybindings registered in Herdr:
 - `prefix+J`: `herdr-jev.triad` (Jev: Full Triad Pipeline)
 - `prefix+m`: `herdr-jev.models` (Jev: Models and Cascades)
 - `prefix+s`: `herdr-jev.status` (Jev: Status)
+- `prefix+o`: `herdr-jev.office` (Jev: Office)
+
+**Jev Office Hotkeys:** Use `arrows/tab` to move between desks, `enter` to interact or inspect an agent's task, and `+` to hire a new subagent. Use `y`/`n`/`s` to approve, deny, or answer blocked agents.
 
 ---
 

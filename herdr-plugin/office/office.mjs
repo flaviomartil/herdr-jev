@@ -572,7 +572,7 @@ function enterTerminal() {
   // is held, which is the difference between being able to drag a desk and only
   // seeing where it was picked up and put down.
   process.stdout.write('\x1b[?1049h\x1b[?25l\x1b[2J\x1b[?1002h\x1b[?1006h');
-  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  if (process.stdin.setRawMode) process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.on('data', onInput);
   process.stdout.on('resize', () => {
@@ -589,7 +589,7 @@ function enterTerminal() {
 function leaveTerminal() {
   // Both trackers off, in case something upstream left 1000 on.
   process.stdout.write('\x1b[?1002l\x1b[?1000l\x1b[?1006l\x1b[?25h\x1b[?1049l');
-  if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  if (process.stdin.setRawMode) process.stdin.setRawMode(false);
 }
 
 // Pick up this morning, if there was one. Called before the first `observe`, because
@@ -1992,10 +1992,11 @@ function onInput(chunk) {
       draw();
       return;
     }
-    if (str === '\x1b[A' || str === 'k') moveHire(0, -1);
-    else if (str === '\x1b[B' || str === 'j') moveHire(0, 1);
-    else if (str === '\x1b[D' || str === 'h') moveHire(-1, 0);
-    else if (str === '\x1b[C' || str === 'l' || str === '\t') moveHire(1, 0);
+    if (str === '\x1b[A' || str === '\x1bOA' || str === 'k') moveHire(0, -1);
+    else if (str === '\x1b[B' || str === '\x1bOB' || str === 'j') moveHire(0, 1);
+    else if (str === '\x1b[D' || str === '\x1bOD' || str === 'h') moveHire(-1, 0);
+    else if (str === '\x1b[C' || str === '\x1bOC' || str === 'l' || str === '\t') moveHire(1, 0);
+    else if (str === '\x1b[Z') moveHire(-1, 0);
     else if (str === 'w') setWorktree(true);
     else if (str === 't') setWorktree(false);
     else if (str === 'e') editBranch(true);
@@ -2090,11 +2091,11 @@ function onInput(chunk) {
     draw();
     return;
   }
-  if (str === '\x1b[A' || str === 'k') move(0, -1);
-  else if (str === '\x1b[B' || str === 'j') move(0, 1);
-  else if (str === '\x1b[D' || str === 'h') move(-1, 0);
-  else if (str === '\x1b[C' || str === 'l') move(1, 0);
-  else if (str === '\t') move(1, 0);
+  if (str === '\x1b[A' || str === '\x1bOA' || str === 'k') move(0, -1);
+  else if (str === '\x1b[B' || str === '\x1bOB' || str === 'j') move(0, 1);
+  else if (str === '\x1b[D' || str === '\x1bOD' || str === 'h') move(-1, 0);
+  else if (str === '\x1b[C' || str === '\x1bOC' || str === 'l' || str === '\t') move(1, 0);
+  else if (str === '\x1b[Z') move(-1, 0);
   else if (str === '\r' || str === '\n' || str === ' ') {
     if (selectedId === HIRE_ID) openHire();
     else if (selectedId) {
