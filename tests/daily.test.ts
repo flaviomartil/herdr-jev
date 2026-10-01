@@ -50,7 +50,7 @@ test("lastMeaningfulLine drops spinner rows, box-drawing, and truncates to 100 c
   expect(lastMeaningfulLine("   \n\n  ")).toBe("");
 });
 
-test("lastMeaningfulLine drops all real chrome lines seen today, braille spinners, and status bar glyphs", () => {
+test("lastMeaningfulLine drops all real chrome lines seen today, braille spinners, status bar glyphs, hints, and report lines", () => {
   expect(lastMeaningfulLine("└ Tip: Use /subagents to switch between this session’s subagents.")).toBe("");
   expect(lastMeaningfulLine("⏵ bypass permissions on - 2 shells - ← 2 agents")).toBe("");
   expect(lastMeaningfulLine("⣯  Running command...")).toBe("");
@@ -60,6 +60,10 @@ test("lastMeaningfulLine drops all real chrome lines seen today, braille spinner
   expect(lastMeaningfulLine("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")).toBe("");
   expect(lastMeaningfulLine("⏱ 1h 20m ↑")).toBe("");
   expect(lastMeaningfulLine("⚡ status info ⚙")).toBe("");
+  expect(lastMeaningfulLine("expand)")).toBe("");
+  expect(lastMeaningfulLine("(ctrl+o to expand)")).toBe("");
+  expect(lastMeaningfulLine("Sem atividade: codex, claude")).toBe("");
+  expect(lastMeaningfulLine("Resumo do dia 01/10/2026")).toBe("");
 });
 
 test("lastMeaningfulLine prefers the last line starting with an action bullet with the bullet stripped", () => {
@@ -86,7 +90,10 @@ test("lastMeaningfulLine prefers the last line starting with an action bullet wi
   expect(lastMeaningfulLine(fallbackLines)).toBe("Container image built successfully");
 });
 
-test("redactSecrets masks credentials including sk, ghp, xoxb, bearer, long hex, base64, and key-value pairs", () => {
+test("redactSecrets preserves file paths and masks long credentials with 32+ chars, prefixed tokens, and key-value pairs", () => {
+  const livePath = "Ran /home/martil/projects/italents/impmotordados/motor-ingestao/.venv/bin/python /home/martil/projec";
+  expect(redactSecrets(livePath)).toBe(livePath);
+
   const sample = [
     "sk-proj-1234567890abcdef1234567890",
     "ghp_123456789012345678901234567890",
@@ -96,7 +103,7 @@ test("redactSecrets masks credentials including sk, ghp, xoxb, bearer, long hex,
     "my_api_key='secret-api-key'",
     "TOKEN=\"some-secret-token\"",
     "auth_secret=vault-secret",
-    "hex token: 4a8f9b2c3d4e5f6a7b8c9d0e",
+    "hex token: 4a8f9b2c3d4e5f6a7b8c9d0e1f2a3b4c",
     "base64 token: dGhpcyBpcyBhIHZlcnkgc2VjcmV0IHRva2Vu",
   ].join("\n");
 
@@ -110,7 +117,7 @@ test("redactSecrets masks credentials including sk, ghp, xoxb, bearer, long hex,
   expect(redacted).not.toContain("secret-api-key");
   expect(redacted).not.toContain("some-secret-token");
   expect(redacted).not.toContain("vault-secret");
-  expect(redacted).not.toContain("4a8f9b2c3d4e5f6a7b8c9d0e");
+  expect(redacted).not.toContain("4a8f9b2c3d4e5f6a7b8c9d0e1f2a3b4c");
   expect(redacted).not.toContain("dGhpcyBpcyBhIHZlcnkgc2VjcmV0IHRva2Vu");
 
   expect(redacted).toContain("Bearer [REDACTED]");
@@ -118,6 +125,8 @@ test("redactSecrets masks credentials including sk, ghp, xoxb, bearer, long hex,
   expect(redacted).toContain("my_api_key='[REDACTED]'");
   expect(redacted).toContain("TOKEN=\"[REDACTED]\"");
   expect(redacted).toContain("auth_secret=[REDACTED]");
+  expect(redacted).toContain("hex token: [REDACTED]");
+  expect(redacted).toContain("base64 token: [REDACTED]");
 });
 
 test("buildDailyReport resolves repository from main worktree git-common-dir, respects default branch commit exclusion, and extracts tarefa", async () => {
@@ -218,8 +227,8 @@ test("buildDailyReport resolves repository from main worktree git-common-dir, re
     },
     {
       pane_id: "pane-2",
-      terminal_title_stripped: "jev-idle-1",
-      label: "claude",
+      terminal_title_stripped: "agy --model gemini-3.1-pro-high",
+      label: "agy",
     },
   ];
 
@@ -379,8 +388,11 @@ test("formatDailyMarkdown formats in Brazilian Portuguese, prints repo facts und
   expect(emojiRegex.test(text)).toBe(false);
 
   expect(text).toContain("herdr-jev (feat/daily)");
+  expect(text).toContain("2 commits hoje (feat: add daily summary; fix: sanitize text - detail); 1 arquivo não commitado");
   expect(text).toContain("TASK");
-  expect(text).toContain("Resumo do...");
+  expect(text).not.toContain("COMMITS");
+  expect(text).not.toContain("CHANGES");
+  expect(text).toContain("Resumo do card");
   expect(text).toContain("codex-active");
 });
 
@@ -440,10 +452,11 @@ test("formatDailyMarkdown collapses idle and done agents with no run and no bran
   expect(md).not.toContain("- worker-done");
 
   const text = formatDailyText(report);
+  expect(text).toContain("12 arquivos não commitados");
   expect(text).toContain("Sem atividade: worker-idle, worker-done");
 });
 
-test("formatDailyText truncates long cells with ellipsis", () => {
+test("formatDailyText truncates long cells with ellipsis and 34-character task column", () => {
   const report = {
     date: new Date("2026-10-01T12:00:00Z"),
     projects: [
@@ -468,7 +481,7 @@ test("formatDailyText truncates long cells with ellipsis", () => {
             runSummary: "implementer:working",
             lastLine: "Running build step",
             paneId: "p1",
-            tarefa: "Very long task description exceeding width",
+            tarefa: "Very long task description exceeding thirty-four characters",
           },
         ],
       },
@@ -477,10 +490,11 @@ test("formatDailyText truncates long cells with ellipsis", () => {
 
   const text = formatDailyText(report);
   expect(text).toContain("TASK");
+  expect(text).not.toContain("COMMITS");
+  expect(text).not.toContain("CHANGES");
   expect(text).toContain("super-lon...");
-  expect(text).toContain("Very long...");
+  expect(text).toContain("Very long task description exce...");
   expect(text).toContain("Gemini 3....");
-  expect(text).not.toContain("Gemini 3.8 F ");
 });
 
 test("writeDailyMarkdown saves Markdown to <stateDir>/daily/YYYY-MM-DD.md and returns the path", async () => {
