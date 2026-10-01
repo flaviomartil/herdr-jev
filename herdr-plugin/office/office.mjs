@@ -86,6 +86,21 @@ let lastJevPoll = 0;
 let floorScope = argv.has('--all') || argv.has('--widen') ? 'all' : 'tab';
 let currentWorkspaceId = '';
 let currentTabId = '';
+const paneAppearTimes = new Map();
+
+function getNow() {
+  if (process.env.HERDR_OFFICE_CLOCK) {
+    const val = Number(process.env.HERDR_OFFICE_CLOCK);
+    if (!Number.isNaN(val)) return val;
+  }
+  for (const arg of process.argv.slice(2)) {
+    if (arg.startsWith('--clock=')) {
+      const val = Number(arg.slice(8));
+      if (!Number.isNaN(val)) return val;
+    }
+  }
+  return Date.now();
+}
 
 function formatRunSummary(run) {
   if (!run) return null;
@@ -147,7 +162,13 @@ function scopedPeople() {
 }
 
 function applyJevData(people = roster.people) {
+  const now = getNow();
   for (const person of people) {
+    if (!paneAppearTimes.has(person.id)) {
+      paneAppearTimes.set(person.id, now);
+    }
+    const appearedAt = paneAppearTimes.get(person.id) || 0;
+    person.hiredSparkle = (now - appearedAt) >= 0 && (now - appearedAt) < 2500;
     const data = jevCache.get(person.id);
     if (data) {
       person.jevModel = data.model;
@@ -287,10 +308,10 @@ const GLOBAL_EVENTS = [
   'tab.closed',
 ];
 
-const roster = new Roster();
+const roster = new Roster(() => getNow());
 // Where the office's time went. Fed from the same status changes the roster is
 // already tracking, so it costs nothing on the wire.
-const clocks = new Clocks();
+const clocks = new Clocks(() => getNow());
 let api = null;
 let events = null;
 // The pixel layers, when the pane can take them. Null the whole time in --demo and
@@ -317,15 +338,15 @@ let zoom = ZOOMS.includes(ZOOM_ARG) ? ZOOM_ARG : 'auto';
 let detail = null;
 let message = '';
 let messageUntil = 0;
-let frame = 0;
+let frame = Math.floor(getNow() / ANIM_MS);
 let prevLines = [];
 let refreshTimer = null;
 let stopped = false;
 
 // COLUMNS/LINES only matter when stdout is not a tty (piped --once renders).
 const size = () => ({
-  cols: Math.max(20, process.stdout.columns || Number(process.env.COLUMNS) || 80),
-  rows: Math.max(8, process.stdout.rows || Number(process.env.LINES) || 24),
+  cols: Math.max(20, Number(process.env.COLUMNS) || process.stdout.columns || 80),
+  rows: Math.max(8, Number(process.env.LINES) || process.stdout.rows || 24),
 });
 
 function note(text, ms = 4000) {
@@ -443,7 +464,8 @@ function countOf(people) {
 }
 
 function view() {
-  if (message && Date.now() > messageUntil) message = '';
+  const now = getNow();
+  if (message && now > messageUntil) message = '';
   // Filtering happens here, once, and everything downstream (paging, the compact
   // list, hitboxes, the counts in the header) just sees a shorter floor. A filter
   // that reached into the layout would have needed every one of those to learn
@@ -467,8 +489,8 @@ function view() {
     zoom,
     selectedId,
     detail,
-    frame,
-    now: Date.now(),
+    frame: ONCE ? Math.floor(now / ANIM_MS) : frame,
+    now,
     size: size(),
     message,
     drag,
@@ -1925,16 +1947,17 @@ const DEMO_HEADS = [
 const DEMO_OUTPUT = ['42 passed, 0 failed', '1 failed, 41 passed', 'CONFLICT (content): merge conflict in src/render.mjs', '3 files changed, 41 insertions(+)'];
 
 const DEMO_JEV = [
-  { model: 'Gemini 3.8 Flash (High)', weekly: '7d 73% 14h48m', run: 'triad: stage 2/3' },
-  { model: 'gpt-6.1-sol', weekly: '7d 88% 5d22h', run: null },
+  { model: 'Gemini 3.8 Flash (High)', weekly: '7d 73% 14h48m', run: 'implementer: working' },
+  { model: 'gpt-6.1-sol', weekly: '7d 88% 5d22h', run: 'implementer: failed' },
   { model: 'Fable 5.1', weekly: '7d 94% 3d19h', run: null },
   { model: 'gpt-6.1-sol', weekly: '7d 88% 5d22h', run: null },
-  { model: 'Fable 5.1', weekly: '7d 94% 3d19h', run: null },
+  { model: 'Fable 5.1', weekly: '7d 94% 3d19h', run: 'reviewer: verified' },
   { model: 'Gemini 3.8 Flash (High)', weekly: '7d 73% 14h48m', run: null },
-  { model: 'gpt-6.1-sol', weekly: '7d 88% 5d22h', run: null },
+  { model: 'gpt-6.1-sol', weekly: '7d 88% 5d22h', run: 'triad: stage 1/3 (working)' },
 ];
 
 function demoExtras() {
+  const now = getNow();
   roster.people.forEach((person, i) => {
     const dj = DEMO_JEV[i % DEMO_JEV.length];
     person.jevModel = dj.model;
@@ -1942,13 +1965,16 @@ function demoExtras() {
     person.jevRun = dj.run;
     person.handle = `worker-${i + 1}`;
     person.role = i === 0 ? 'advisor' : i === 1 ? 'implementer' : 'reviewer';
+    if (!paneAppearTimes.has(person.id)) {
+      paneAppearTimes.set(person.id, i === 6 ? now : 0);
+    }
+    const appearedAt = paneAppearTimes.get(person.id) || 0;
+    person.hiredSparkle = (now - appearedAt) >= 0 && (now - appearedAt) < 2500;
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });
     roster.setDirt(person.cwd, DEMO_DIRT[i % DEMO_DIRT.length]);
     if (HEAD) roster.setHead(person.id, DEMO_HEADS[i % DEMO_HEADS.length]);
-    // Every third desk has just had some news, so the demo shows the slab without
-    // the whole floor shouting at once.
     if (person.status !== 'blocked' && i % 3 === 1) {
       const news = eventFromMatch({ matched_line: DEMO_OUTPUT[i % DEMO_OUTPUT.length] });
       if (news) roster.setEvent(person.id, news.label, news.kind);
