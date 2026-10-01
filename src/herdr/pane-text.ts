@@ -71,19 +71,24 @@ export function lastMeaningfulLine(text: string): string {
   }
 
   const chosen = lastActionLine ?? lastFallbackLine ?? "";
-  return chosen.length > 100 ? chosen.slice(0, 100) : chosen;
+  const redacted = redactSecrets(chosen);
+  return redacted.length > 100 ? redacted.slice(0, 100) : redacted;
 }
 
 export function redactSecrets(text: string): string {
   if (!text) return "";
   let result = text;
   result = result.replace(
-    /(\b[a-zA-Z0-9_.-]*(?:password|token|secret|api[_-]?key)[a-zA-Z0-9_.-]*\s*=\s*)(["']?)[^"'\s;&]+(["']?)/gi,
-    "$1$2[REDACTED]$3",
+    /(["']?\b[a-zA-Z0-9_.-]*(?:password|token|secret|api[_-]?key)[a-zA-Z0-9_.-]*["']?\s*[:=]\s*)(["'])(?:\\.|(?!\2)[^\\])*\2/gi,
+    "$1$2[REDACTED]$2",
+  );
+  result = result.replace(
+    /(["']?\b[a-zA-Z0-9_.-]*(?:password|token|secret|api[_-]?key)[a-zA-Z0-9_.-]*["']?\s*[:=]\s*)([^\s"';&,}]+)/gi,
+    "$1[REDACTED]",
   );
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [REDACTED]");
   result = result.replace(/\b(?:sk-[a-zA-Z0-9_-]+|ghp_[a-zA-Z0-9]+|xoxb-[a-zA-Z0-9_-]+)\b/g, "[REDACTED]");
-  result = result.replace(/\b[0-9a-fA-F]{32,}\b/g, "[REDACTED]");
+  result = result.replace(/\b(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{32,}\b/g, "[REDACTED]");
   result = result.replace(
     /\b(?=[A-Za-z0-9_+=~-]*[0-9])(?=[A-Za-z0-9_+=~-]*[a-zA-Z])[A-Za-z0-9_+=~-]{32,}={0,2}\b/g,
     "[REDACTED]",

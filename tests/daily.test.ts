@@ -800,3 +800,107 @@ test("formatDailyMarkdown with plain option omits Resumo do dia header", () => {
   expect(mdPlainBool).not.toContain("Resumo do dia");
   expect(mdPlainBool).toMatch(/^### test-repo \(main\)/);
 });
+
+test("Finding 6: tarefa strips control characters and redacts secrets in daily report, text, and markdown", async () => {
+  const tempDir = mkdtempSync(join(tmpdir(), "finding-6-daily-"));
+  try {
+    const fixedNow = new Date("2026-10-01T12:00:00Z").getTime();
+    const overview = [
+      {
+        pane: "w1:p1",
+        workspace_id: "w1",
+        pane_id: "w1:p1",
+        agent: "codex",
+        handle: "worker-1",
+        agent_status: "idle",
+        cwd: "/repos/proj-secret",
+        model: "gpt-6.1-sol",
+      },
+    ];
+
+    const fakeGit: GitRunner = async (args) => {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return "/repos/proj-secret";
+      if (args[0] === "branch" && args[1] === "--show-current") return "main";
+      if (args[0] === "status") return "";
+      if (args[0] === "log") return "";
+      return "";
+    };
+
+    const paneList = [
+      {
+        pane_id: "w1:p1",
+        terminal_title_stripped: "Task \x00\x1b\x07with password=supersecretpassword123 and \"token\": \"my-secret-token\"",
+      },
+    ];
+
+    const report = await buildDailyReport(
+      {
+        overview,
+        git: fakeGit,
+        runs: [],
+        readPane: async () => "",
+        paneList,
+        now: fixedNow,
+      },
+      {
+        now: fixedNow,
+      },
+    );
+
+    const agent = report.projects[0]?.agents[0];
+    expect(agent).toBeDefined();
+    expect(agent?.tarefa).toBeDefined();
+    expect(agent?.tarefa).not.toContain("supersecretpassword123");
+    expect(agent?.tarefa).not.toContain("my-secret-token");
+    expect(/[\x00-\x1F\x7F]/.test(agent!.tarefa!)).toBe(false);
+    expect(agent?.tarefa).toContain("password=[REDACTED]");
+    expect(agent?.tarefa).toContain('"token": "[REDACTED]"');
+
+    const text = formatDailyText(report);
+    expect(text).not.toContain("supersecretpassword123");
+    expect(text).not.toContain("my-secret-token");
+    expect(text).not.toContain("\x00");
+    expect(text).not.toContain("\x1b");
+    expect(text).not.toContain("\x07");
+    expect(text).toContain("password=[REDACTED]");
+
+    const md = formatDailyMarkdown(report);
+    expect(md).not.toContain("supersecretpassword123");
+    expect(md).not.toContain("my-secret-token");
+    expect(md).not.toContain("\x00");
+    expect(md).not.toContain("\x1b");
+    expect(md).not.toContain("\x07");
+    expect(md).toContain("password=[REDACTED]");
+
+    const savedPath = writeDailyMarkdown(report, tempDir);
+    const content = readFileSync(savedPath, "utf8");
+    expect(content).not.toContain("supersecretpassword123");
+    expect(content).not.toContain("my-secret-token");
+    expect(content).not.toContain("\x00");
+    expect(content).not.toContain("\x1b");
+    expect(content).not.toContain("\x07");
+    expect(content).toContain("password=[REDACTED]");
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Finding 7: lastMeaningfulLine redacts before truncating and masks key: value and JSON secrets", () => {
+  const prefix = "Finished long step in container deployment with session auth with more details ";
+  const token = "4a8f9b2c3d4e5f6a7b8c9d0e1f2a3b4c12345";
+  const fullLine = "• " + prefix + token;
+  const meaningful = lastMeaningfulLine(fullLine);
+  expect(meaningful).not.toContain("4a8f9b2c3d4e5f6a7b8c9");
+  expect(meaningful).toContain("[REDACTED]");
+
+  expect(redactSecrets("password: mysecretpassword123")).toBe("password: [REDACTED]");
+  expect(redactSecrets('"token": "my-secret-token"')).toBe('"token": "[REDACTED]"');
+  expect(redactSecrets("'token': 'my-secret-token'")).toBe("'token': '[REDACTED]'");
+  expect(redactSecrets('{"token": "abc12345", "status": "ok"}')).toBe('{"token": "[REDACTED]", "status": "ok"}');
+  expect(redactSecrets("api_key: secret-api-key")).toBe("api_key: [REDACTED]");
+  expect(redactSecrets("password: ...")).toBe("password: [REDACTED]");
+  expect(redactSecrets('"token": "..."')).toBe('"token": "[REDACTED]"');
+
+  const livePath = "Ran /home/martil/projects/italents/impmotordados/motor-ingestao/.venv/bin/python /home/martil/projec";
+  expect(redactSecrets(livePath)).toBe(livePath);
+});
