@@ -55,6 +55,9 @@ import { readOverview } from "./herdr/overview.js";
 import { buildDailyReport, formatDailyText, formatDailyMarkdown, writeDailyMarkdown } from "./herdr/daily.js";
 import { buildAgentsView, formatAgentsTable } from "./herdr/agents.js";
 import { assertRunId, formatRunHistory, listRunHistory } from "./orchestration/run-history.js";
+import { studio, studioEventPane } from "./herdr/studio.js";
+import { changeEffort } from "./herdr/effort.js";
+import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -93,6 +96,51 @@ program
   .name("herdr-jev")
   .description("Jev-driven multi-model triage and triad orchestration plugin for Herdr")
   .version("0.1.0");
+
+program.command("studio")
+  .description("Keep the current agent with shell/files and automatic review on reported completion")
+  .option("--pane <id>", "Existing source agent pane")
+  .option("--review", "Open or reuse the review pane")
+  .option("--off", "Disable automatic review for this source")
+  .option("--event", "Handle the installed Herdr status event")
+  .action(async (options: { pane?: string; review?: boolean; off?: boolean; event?: boolean }) => {
+    const eventPane = options.event ? studioEventPane(process.env.HERDR_PLUGIN_EVENT_JSON) : undefined;
+    if (options.event && !eventPane) return;
+    const context = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || "{}");
+    const pane = eventPane || options.pane || process.env.HERDR_JEV_SOURCE_PANE_ID || context.focused_pane_id || process.env.HERDR_PANE_ID;
+    if (!pane) throw new Error("Select the source agent pane explicitly with --pane");
+    console.log(JSON.stringify(await studio({ pane, review: options.review, event: options.event, disable: options.off })));
+  });
+
+program.command("effort <pane> <level>")
+  .description("Change idle Codex effort in the same session, verifying the native footer")
+  .action(async (pane: string, level: string) => { console.log(JSON.stringify(await changeEffort(pane, level))); });
+
+const sessions = program.command("sessions").description("Search existing Harness history and focus or resume its source session");
+sessions.command("pick")
+  .option("--project <path>", "Project directory")
+  .option("--search <text>", "Search session content")
+  .option("--all", "Show all projects")
+  .option("--json", "List sessions without opening the picker")
+  .action(async (options: { project?: string; search?: string; all?: boolean; json?: boolean }) => {
+    console.log(JSON.stringify(options.json ? await historyCommand(["list", "--no-index",
+      ...(options.all ? [] : ["--project", options.project || process.cwd()]), ...(options.search ? ["--search", options.search] : [])]) : await sessionPicker(options)));
+  });
+sessions.command("preview <key>").action(async (key: string) => { console.log(await previewSession(key)); });
+
+const pending = program.command("pending").description("Shared pending work with native source sessions in the Harness store");
+pending.command("add <text>").requiredOption("--session <id>", "Verified origin session")
+  .action(async (text: string, options: { session: string }) => {
+    console.log(JSON.stringify(await historyCommand(["work-create", "--session", options.session, "--title", text])));
+  });
+pending.command("list").option("--project <path>").option("--all").option("--json")
+  .action(async (options: { project?: string; all?: boolean; json?: boolean }) => {
+    console.log(JSON.stringify(options.json ? await historyCommand(["work-list", ...(options.all ? [] : ["--project", options.project || process.cwd()])])
+      : await sessionPicker({ ...options, pending: true })));
+  });
+pending.command("done <id>").action(async (id: string) => {
+  console.log(JSON.stringify(await historyCommand(["work-state", "--work", id, "--status", "done"])));
+});
 
 program
   .command("overview")
