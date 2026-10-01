@@ -130,3 +130,79 @@ id = "routines-stop"
 title = "Jev: Routines stop"
 contexts = ["global"]
 command = ["herdr", "plugin", "action", "invoke", "herdr-routines.stop"]
+
+[[panes]]
+id = "studio-shell"
+title = "Jev Studio shell"
+placement = "split"
+command = ["sh", "-c", "exec \"${SHELL:-/bin/bash}\" -i"]
+
+[[panes]]
+id = "session-resume"
+title = "Jev session"
+placement = "tab"
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/companions.sh\" resume"]
+
+[[actions]]
+id = "studio"
+title = "Jev: Studio layout"
+contexts = ["pane"]
+command = ["bash", "herdr-plugin/companions.sh", "studio"]
+
+[[actions]]
+id = "studio-review"
+title = "Jev: Studio review"
+contexts = ["pane"]
+command = ["bash", "herdr-plugin/companions.sh", "review"]
+
+[[actions]]
+id = "studio-off"
+title = "Jev: Studio automatic review off"
+contexts = ["pane"]
+command = ["bash", "herdr-plugin/companions.sh", "studio-off"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "herdr-plugin/companions.sh", "event"]
+
+[[panes]]
+id = "sessions"
+title = "Jev sessions"
+placement = "overlay"
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/companions.sh\" sessions"]
+
+[[panes]]
+id = "pending"
+title = "Jev pending work"
+placement = "overlay"
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/companions.sh\" pending"]
+
+[[actions]]
+id = "sessions"
+title = "Jev: Search and resume sessions"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "sessions"]
+
+[[actions]]
+id = "pending"
+title = "Jev: Pending work and source conversations"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "pending"]
+
+[[actions]]
+id = "remote-status"
+title = "Jev: Remote Telegram status"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "permgps.telegram-agents.status"]
+
+[[actions]]
+id = "remote-doctor"
+title = "Jev: Remote Telegram diagnostics"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "permgps.telegram-agents.doctor"]
+
+[[actions]]
+id = "remote-setup"
+title = "Jev: Remote Telegram setup"
+contexts = ["global"]
+command = ["herdr", "plugin", "action", "invoke", "permgps.telegram-agents.setup"]

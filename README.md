@@ -1,5 +1,7 @@
 # Herdr-Jev
 
+Session search, origin-linked pending work, native Codex effort and the Bercail-inspired Studio layout are documented in [companion features](docs/companions.md). They reuse Harness history, existing file/review panes and Telegram integration.
+
 Latency calibration clears cached answers before every sample while retaining the warmed connection. Peer routing reuses the installed usage collector through AI Harness: fresh Codex account exhaustion excludes Codex from automatic selection and explicit peer startup. Stale, unknown and model-scoped observations do not prove provider availability; native account/model preflight remains necessary. Other providers retain their existing quota checks.
 
 Kiro peers use native Herdr kind `kiro` and executable `kiro-cli chat --trust-all-tools`. Authenticate with `kiro-cli login`, discover native model IDs, then supply `subagent --target kiro --model <verified-id> --tab` under an allowed peer mapping. Kiro remains unconfigured for automatic model selection until a verified role catalog exists; it never inherits a Claude model or scalar effort flag. The shared AI Harness installs the `ai-harness` Kiro agent and its MCP/skill context.
