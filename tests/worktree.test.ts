@@ -47,6 +47,12 @@ describe("subagent worktree helper", () => {
         if (cwd === fakeRepo || cwd === targetDir) return { ok: true, stdout: fakeRepo, stderr: "" };
         return { ok: false, stdout: "", stderr: "" };
       }
+      if (args[0] === "rev-parse" && args[1] === "--path-format=absolute") {
+        if (cwd === fakeRepo || cwd === targetDir) return { ok: true, stdout: fakeRepo + "/.git", stderr: "" };
+      }
+      if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
+        if (cwd === targetDir) return { ok: true, stdout: "wt/myname", stderr: "" };
+      }
       return { ok: false, stdout: "", stderr: "unknown" };
     };
 
