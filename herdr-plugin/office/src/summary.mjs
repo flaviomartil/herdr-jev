@@ -27,6 +27,11 @@ const ASK_WEAK = [/approve/i, /continue\?/i, /press enter/i, /confirm/i, /trust/
 // Keybinding hints and status footers look like questions to a regex but tell
 // you nothing. They also make terrible "last said" lines.
 const UI_NOISE = [
+  /\d+\s+warnings?/i,
+  /f2\s+to\s+view/i,
+  /esc\s+to\s+interrupt/i,
+  /ask\s+[a-z]+\s+to\s+do\s+anything/i,
+  /gpt-.*·/i,
   /\b(?:esc|enter|ctrl|cmd|opt|alt|shift|tab)\b[^.]{0,24}\bto\b/i,
   /\bto (?:confirm|cancel|exit|quit|interrupt|toggle|select|submit|expand|collapse)\b/i,
   /^[?/]\s*(?:for|to)\b/i,
@@ -159,7 +164,7 @@ const SAID = 'last said: ';
 
 // How many of them. Three reads as a paragraph, which is what the tail of an agent's
 // output is; two read as a pair of unrelated remarks.
-const SAID_LINES = 3;
+const SAID_LINES = 2;
 
 // A few lines describing the person, in the order a human would want them: what they
 // are stuck on first, then what they were last saying.

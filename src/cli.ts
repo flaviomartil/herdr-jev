@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { choice, noul, score } from "@typesafe-ai/sdk";
 import { Command } from "commander";
 import { triageTaskWithJev, resolveTypeSafeApiKey } from "./triage/client.js";
 import { planExecution } from "./pipelines/planner.js";
@@ -796,6 +797,28 @@ workers
     await executeWorkerClose(client, plan);
     for (const item of plan) {
       console.log(`Closed ${item.paneId} (${item.status})`);
+    }
+  });
+
+program.command("classify-pane")
+  .description("Classify pane text using Jev")
+  .option("--json", "Output raw JSON")
+  .action(async (options: { json?: boolean }) => {
+    let input = "";
+    for await (const chunk of process.stdin) input += chunk;
+    const data = JSON.parse(input);
+    const client = getGlobalJevClient();
+    const result = await client.ask(
+      { paneText: data.paneText, agent: data.agent, status: data.status },
+      {
+        state: choice("What is the state of the pane?", { working: "working", blocked: "blocked", idle: "idle", done: "done", unknown: "unknown" }),
+        attention: score("What is the attention level?", ["none", "soon", "now"]),
+        blockedReason: choice("What is the blocked reason?", { approval: "approval", question: "question", error: "error", none: "none" }),
+        confidence: score("Confidence score", ["none", "low", "medium", "high", "certain"])
+      }
+    );
+    if (options.json) {
+      console.log(JSON.stringify(result.answers));
     }
   });
 
