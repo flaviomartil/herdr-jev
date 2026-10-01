@@ -360,16 +360,16 @@ program
   .option("--write", "Save Markdown report to disk and print path")
   .action(async (options: { json?: boolean; md?: boolean; since?: string; write?: boolean }) => {
     const report = await buildDailyReport(undefined, { since: options.since });
-    if (options.write) {
-      const savedPath = writeDailyMarkdown(report);
-      console.log(savedPath);
-    }
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
     } else if (options.md) {
       console.log(formatDailyMarkdown(report));
     } else if (!options.write) {
       console.log(formatDailyText(report));
+    }
+    if (options.write) {
+      const savedPath = writeDailyMarkdown(report);
+      console.log(savedPath);
     }
   });
 
