@@ -14,7 +14,7 @@
 //   node office.mjs --no-context  do not read how full anybody's context window is
 import { spawn } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
-import { Roster } from './src/roster.mjs';
+import { Roster, cleanModel } from './src/roster.mjs';
 import { renderFrame, nextZoom, ZOOMS, HIRE_ID } from './src/render.mjs';
 import { cleanOutput, summarize, describeDetection, bubbleText, approvalChoice } from './src/summary.mjs';
 import { parseMouse, nextDrag } from './src/mouse.mjs';
@@ -197,6 +197,23 @@ let floorScope = argv.has('--all') || argv.has('--widen') ? 'all' : 'tab';
 let currentWorkspaceId = '';
 let currentTabId = '';
 const paneAppearTimes = new Map();
+let initialRosterRecorded = false;
+let scopeUserOverridden = false;
+let initialScopeSet = false;
+
+function defaultScopeIfNeeded() {
+  if (initialScopeSet || scopeUserOverridden || argv.has('--all') || argv.has('--widen')) return;
+  if (!roster.people.length) return;
+  const inTab = roster.people.filter((p) => {
+    const matchWs = !currentWorkspaceId || p.workspaceId === currentWorkspaceId;
+    const matchTab = !currentTabId || p.tabId === currentTabId;
+    return matchWs && matchTab;
+  });
+  if (inTab.length < 2) {
+    floorScope = 'workspace';
+  }
+  initialScopeSet = true;
+}
 
 function getNow() {
   if (process.env.HERDR_OFFICE_CLOCK) {
@@ -236,9 +253,15 @@ function initScopeFromEnv() {
 initScopeFromEnv();
 
 function updateScopeFromRoster() {
+  if (!currentWorkspaceId && currentTabId) {
+    const match = roster.people.find((p) => p.tabId === currentTabId);
+    if (match?.workspaceId) currentWorkspaceId = match.workspaceId;
+    else if (currentTabId.includes(':')) currentWorkspaceId = currentTabId.split(':')[0];
+  }
   if (DEMO) {
     if (!currentWorkspaceId) currentWorkspaceId = 'w1';
     if (!currentTabId) currentTabId = 'w1:t1';
+    defaultScopeIfNeeded();
     return;
   }
   const callerId = process.env.HERDR_JEV_SOURCE_PANE_ID || process.env.HERDR_PANE_ID;
@@ -246,6 +269,7 @@ function updateScopeFromRoster() {
   if (caller) {
     if (caller.workspaceId) currentWorkspaceId = caller.workspaceId;
     if (caller.tabId) currentTabId = caller.tabId;
+    defaultScopeIfNeeded();
     return;
   }
   const focused = roster.people.find((p) => p.focused);
@@ -253,6 +277,7 @@ function updateScopeFromRoster() {
     if (!currentWorkspaceId && focused.workspaceId) currentWorkspaceId = focused.workspaceId;
     if (!currentTabId && focused.tabId) currentTabId = focused.tabId;
   }
+  defaultScopeIfNeeded();
 }
 
 function scopedPeople() {
@@ -273,15 +298,23 @@ function scopedPeople() {
 
 function applyJevData(people = roster.people) {
   const now = getNow();
+  if (!initialRosterRecorded && people.length > 0) {
+    for (const person of people) {
+      if (!paneAppearTimes.has(person.id)) {
+        paneAppearTimes.set(person.id, 0);
+      }
+    }
+    initialRosterRecorded = true;
+  }
   for (const person of people) {
     if (!paneAppearTimes.has(person.id)) {
       paneAppearTimes.set(person.id, now);
     }
     const appearedAt = paneAppearTimes.get(person.id) || 0;
-    person.hiredSparkle = (now - appearedAt) >= 0 && (now - appearedAt) < 2500;
+    person.hiredSparkle = appearedAt > 0 && (now - appearedAt) >= 0 && (now - appearedAt) < 2500;
     const data = jevCache.get(person.id);
     if (data) {
-      person.jevModel = data.model;
+      person.jevModel = cleanModel(data.model);
       person.jevQuota = data.weekly;
       person.jevRun = data.run;
       if (data.handle) person.handle = data.handle;
@@ -341,7 +374,7 @@ async function pollJevOverview(force = false) {
             for (const item of items) {
               if (item?.pane) {
                 jevCache.set(item.pane, {
-                  model: item.model || null,
+                  model: cleanModel(item.model),
                   weekly: item.weekly || null,
                   run: item.run ? formatRunSummary(item.run) : null,
                   role: item.role || null,
@@ -2041,6 +2074,7 @@ function onInput(chunk) {
     }
   }
   if (str === 'w' || str === 'W') {
+    scopeUserOverridden = true;
     if (floorScope === 'tab') {
       floorScope = 'workspace';
       note('widened to workspace');
@@ -2206,16 +2240,16 @@ function demoExtras() {
   const now = getNow();
   roster.people.forEach((person, i) => {
     const dj = DEMO_JEV[i % DEMO_JEV.length];
-    person.jevModel = dj.model;
+    person.jevModel = cleanModel(dj.model);
     person.jevQuota = dj.weekly;
     person.jevRun = dj.run;
     person.handle = `worker-${i + 1}`;
     person.role = i === 0 ? 'advisor' : i === 1 ? 'implementer' : 'reviewer';
     if (!paneAppearTimes.has(person.id)) {
-      paneAppearTimes.set(person.id, i === 6 ? now : 0);
+      paneAppearTimes.set(person.id, initialRosterRecorded ? now : 0);
     }
     const appearedAt = paneAppearTimes.get(person.id) || 0;
-    person.hiredSparkle = (now - appearedAt) >= 0 && (now - appearedAt) < 2500;
+    person.hiredSparkle = appearedAt > 0 && (now - appearedAt) >= 0 && (now - appearedAt) < 2500;
     if (person.status === 'blocked') roster.setAsk(person.id, 'apply the patch?', approvalChoice(['apply the patch? (y/n)']));
     if (person.status === 'working') roster.setCommand(person.id, DEMO_COMMANDS[i % DEMO_COMMANDS.length]);
     roster.setBranch(person.cwd, { branch: DEMO_BRANCHES[i % DEMO_BRANCHES.length], repo: person.workspaceName || 'herdr-office' });

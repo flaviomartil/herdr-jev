@@ -1907,6 +1907,15 @@ export function renderFrame(view) {
   // desk on a pane too small to draw one still gets you the list: the alternative is
   // a zoom level that shows nothing at all.
   const roomForDesks = zoom === 'list' ? false : zoom === 'cubicle' ? fits : fits && view.people.length <= perPage * 2;
+  const isNarrow = Boolean(view.isNarrow || (zoom !== 'list' && !roomForDesks));
+  if (isNarrow && out.length >= 2) {
+    const hintText = '  widen the pane or press z';
+    const hintRaw = hintText.length > cols ? hintText.slice(0, cols) : hintText;
+    const hintSpans = [{ from: 2, to: Math.min(28, hintRaw.length), fg: P.dim }];
+    out[1] = paint(hintRaw + ' '.repeat(Math.max(0, cols - width(hintRaw))), hintSpans, { bg: P.carpet });
+    const stripIdx = regions.findIndex((r) => r.kind === 'strip');
+    if (stripIdx !== -1) regions.splice(stripIdx, 1);
+  }
 
   // An office with nobody in it still gets a desk drawn, so "hire somebody" is a
   // thing on the screen rather than a key you have to already know about. Only

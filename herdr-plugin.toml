@@ -47,7 +47,7 @@ id = "office"
 title = "Jev: Office view"
 description = "Floor plan of active agents, desks, and Jev telemetry"
 contexts = ["global"]
-command = ["bash", "herdr-plugin/open-pane.sh", "office"]
+command = ["env", "HERDR_JEV_PLACEMENT=tab", "bash", "herdr-plugin/open-pane.sh", "office"]
 
 [[panes]]
 id = "route"

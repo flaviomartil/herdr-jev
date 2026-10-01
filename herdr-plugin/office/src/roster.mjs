@@ -34,6 +34,12 @@ function paneSortKey(paneId) {
 // builds up: "tests passed" from two minutes ago is not news, it is clutter.
 export const EVENT_MS = 12000;
 
+export function cleanModel(str) {
+  if (typeof str !== 'string') return null;
+  const cleaned = str.replace(/^[\s\u200B\u200C\u200D\uFEFF]+|[\s\u200B\u200C\u200D\uFEFF]+$/g, '').trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
 const eventOf = (entry, now) => (entry && now - entry.at < EVENT_MS ? { label: entry.label, kind: entry.kind } : null);
 
 const UNKNOWN = 9999;
@@ -257,7 +263,7 @@ export class Roster {
     const clean = gauge && Number.isFinite(Number(gauge.used))
       ? {
         used: Math.max(0, Math.min(100, Math.round(Number(gauge.used)))),
-        model: gauge.model || null,
+        model: cleanModel(gauge.model),
         session: gauge.session || null,
       }
       : null;

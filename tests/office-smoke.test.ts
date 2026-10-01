@@ -204,3 +204,79 @@ test("F-08: stalled child in pollJevOverview is killed by timeout and jevPolling
   try { unlinkSync(killLog); } catch {}
 });
 
+test("narrow-width shows hint and wide does not", () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  const narrow = spawnSync("node", [officeScript, "--once", "--demo"], {
+    encoding: "utf8",
+    env: { ...process.env, COLUMNS: "66", LINES: "24" },
+  });
+  expect(narrow.status).toBe(0);
+  expect(narrow.stdout).toContain("widen the pane or press z");
+
+  const wide = spawnSync("node", [officeScript, "--once", "--demo"], {
+    encoding: "utf8",
+    env: { ...process.env, COLUMNS: "136", LINES: "52" },
+  });
+  expect(wide.status).toBe(0);
+  expect(wide.stdout).not.toContain("widen the pane or press z");
+});
+
+test("workspace scope fallback when tab has fewer than 2 primary agents", () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  const single = spawnSync("node", [officeScript, "--once", "--demo"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      COLUMNS: "136",
+      LINES: "52",
+      HERDR_TAB_ID: "w2:t4",
+      HERDR_WORKSPACE_ID: "",
+      HERDR_PANE_ID: "",
+    },
+  });
+  expect(single.status).toBe(0);
+  expect(single.stdout).toContain("[workspace]");
+
+  const multi = spawnSync("node", [officeScript, "--once", "--demo"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      COLUMNS: "136",
+      LINES: "52",
+      HERDR_TAB_ID: "w1:t1",
+      HERDR_WORKSPACE_ID: "",
+      HERDR_PANE_ID: "",
+    },
+  });
+  expect(multi.status).toBe(0);
+  expect(multi.stdout).toContain("[tab]");
+});
+
+test("model trimming removes leading zero-width spaces and whitespace in roster", async () => {
+  const { cleanModel, Roster } = await import("../herdr-plugin/office/src/roster.mjs");
+  expect(cleanModel("  \u200Bgpt-6.1-sol")).toBe("gpt-6.1-sol");
+  expect(cleanModel("\u200B\uFEFF  claude-3-7-sonnet  ")).toBe("claude-3-7-sonnet");
+  expect(cleanModel("   ")).toBeNull();
+
+  const roster = new Roster();
+  roster.setHead("p1", { used: 42, model: "  \u200Bgpt-6.1-sol" });
+  expect(roster.head("p1")?.model).toBe("gpt-6.1-sol");
+});
+
+test("no sparkle on initial roster at launch", () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  const result = spawnSync("node", [officeScript, "--once", "--demo"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      COLUMNS: "136",
+      LINES: "52",
+      HERDR_TAB_ID: "",
+      HERDR_WORKSPACE_ID: "",
+      HERDR_PANE_ID: "",
+    },
+  });
+  expect(result.status).toBe(0);
+  expect(result.stdout).not.toMatch(/[✦✧]/);
+});
+
