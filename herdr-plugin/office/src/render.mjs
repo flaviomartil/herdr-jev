@@ -451,11 +451,15 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     { from: INNER - 1, to: INNER, fg: bezel },
   ];
 
+  const plateBg = selected ? P.accent : P.cubicle;
+  const plateFg = selected ? '#ffffff' : P.ink;
+  const plateDim = selected ? '#ffffff' : P.soft;
+
   const plateL = cells();
-  plateL.add('▌ ', { fg: st.fg });
-  plateL.add(truncate(person.name, 12), { fg: P.ink, bold: true });
+  plateL.add('▌ ', { fg: selected ? P.cubicle : st.fg });
+  plateL.add(truncate(person.name, 12), { fg: plateFg, bold: true });
   if (person.hiredSparkle) plateL.add(' *', { fg: '#ffe6a8', bold: true });
-  else if (person.focused) plateL.add(' *', { fg: P.accent, bold: true });
+  else if (person.focused) plateL.add(' *', { fg: selected ? '#ffffff' : P.accent, bold: true });
 
   const right = truncate(person.kind, 10);
   const maxBadge = INNER - plateL.w - width(right) - 1;
@@ -463,20 +467,20 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   if (person.swarmBadge && maxBadge > 0) {
     plateL.add(' ');
     const badgeText = truncate(` ${person.swarmBadge.text} `, maxBadge);
-    plateL.add(badgeText, { bg: P.accent, fg: P.cubicle, bold: person.swarmBadge.bold });
+    plateL.add(badgeText, { bg: selected ? P.cubicle : P.accent, fg: selected ? P.accent : P.cubicle, bold: person.swarmBadge.bold });
   }
 
   plateL.gap(INNER - width(right));
-  plateL.add(right, { fg: P.dim });
+  plateL.add(right, { fg: plateDim });
 
   const plate = plateL;
 
   const bar = cells();
   const dur = (person.assumedSince ? '~' : '') + formatDuration(now - person.since);
   bar.add('▌ ', { fg: st.fg });
-  bar.add(st.label, { fg: st.fg, bold: alert || person.status === 'blocked' });
+  bar.add(st.label, { fg: P.ink, bold: alert || person.status === 'blocked' });
   bar.gap(INNER - width(dur));
-  bar.add(dur, { fg: P.dim });
+  bar.add(dur, { fg: P.soft });
   bar.gap(INNER);
 
   const task = person.title || person.cwd.split('/').pop() || person.id;
@@ -484,12 +488,12 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
 
   const foot = cells();
   const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
-  const roomForRef = ref && INNER - 2 - width(ref) - 1 >= TASK_MIN;
+  const roomForRef = ref && INNER - 2 - width(ref) >= TASK_MIN;
   foot.add('▌ ', { fg: st.fg });
-  foot.add(truncate(task, roomForRef ? INNER - 2 - width(ref) - 1 : INNER - 2), { fg: P.faint });
+  foot.add(truncate(task, roomForRef ? INNER - 2 - width(ref) : INNER - 2), { fg: P.soft });
   if (roomForRef) {
     foot.gap(INNER - width(ref));
-    foot.add(ref, { fg: P.faint });
+    foot.add(ref, { fg: P.soft });
   }
   foot.gap(INNER);
 
@@ -500,36 +504,22 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   const hair = bubble ? over(body.rows[0], '▘', TAIL_X) : person.hiredSparkle ? sparkRow : body.rows[0];
 
   const runBadge = resolveRunBadge(person, frame);
-  const quotaPct = parseQuotaPercent(person.jevQuota);
-  
-  const deskFront = cells();
-  deskFront.gap(MON_X); // skip to under monitor
-  if (runBadge) {
-    deskFront.add(' ', { bg: P.deskFront }); // pill padding
-    deskFront.add(truncate(runBadge.text, 10), { fg: st.fg, bg: P.deskFront });
-    deskFront.add(' ', { bg: P.deskFront });
-  }
   const quotaStr = person.jevQuota ? String(person.jevQuota) : '';
+  
+  const runRow = cells();
+  runRow.add('▌ ', { fg: st.fg });
+  if (runBadge) {
+    runRow.add(truncate(runBadge.text, INNER - 2 - width(quotaStr) - (quotaStr ? 1 : 0)), { fg: P.ink, bold: runBadge.bold });
+  }
   if (quotaStr) {
-    deskFront.gap(INNER - width(quotaStr));
-    deskFront.add(quotaStr, { fg: P.dim });
+    runRow.gap(INNER - width(quotaStr));
+    runRow.add(quotaStr, { fg: P.soft });
   }
-  deskFront.gap(INNER);
-  const fitFront = deskFront.fit(INNER);
-  let deskFrontText = over(DESK_FRONT, fitFront.text.substring(MON_X), MON_X);
-  const deskFrontSpans = [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }];
-  for (const sp of fitFront.spans) if (sp.from >= MON_X) deskFrontSpans.push(sp);
-  if (quotaPct != null) {
-    const gaugeW = 4;
-    const gaugeX = 2;
-    deskFrontText = over(deskFrontText, formatQuotaGauge(quotaPct, gaugeW), gaugeX);
-    const gaugeFg = quotaPct >= 90 ? '#ef6b43' : quotaPct >= 75 ? '#ffc14d' : '#5ce08a';
-    deskFrontSpans.push({ from: gaugeX, to: gaugeX + gaugeW, fg: gaugeFg });
-  }
+  runRow.gap(INNER);
 
   const rows = [
     edge('╭', '╮', TILE_W, chrome),
-    row(plate.out().text, plate.out().spans),
+    row(plate.out().text, plate.out().spans, plateBg),
     card ? row(card.text, card.spans) : row(' '.repeat(INNER), []),
     bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : row(' '.repeat(INNER), []),
     row(art(hair, bezelTop(person.head?.used)), [
@@ -554,7 +544,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       ],
       P.deskTop,
     ),
-    row(deskFrontText, deskFrontSpans, P.deskFront),
+    row(runRow.out().text, runRow.out().spans),
     row(bar.out().text, bar.out().spans),
     row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),
@@ -590,7 +580,16 @@ function vacantTile({ selected, pending, kind }) {
   bar.add(pending ? `starting ${truncate(kind || 'an agent', 14)}` : 'nobody here yet', { fg: pending ? P.accent : P.dim });
   bar.gap(INNER);
 
-  const hint = pending ? 'give it a moment' : 'enter or click to hire';
+  const hintText = pending ? 'give it a moment' : 'enter or click to hire';
+  const hint = cells();
+  hint.add('▌ ', { fg: P.wall });
+  hint.add(truncate(hintText, INNER - 2), { fg: selected && !pending ? P.soft : P.faint });
+  hint.gap(INNER);
+
+  const emptyRun = cells();
+  emptyRun.add('▌ ', { fg: P.wall });
+  emptyRun.gap(INNER);
+
   const rows = [
     edge('╭', '╮', TILE_W, chrome),
     row(plate.out().text, plate.out().spans),
@@ -604,9 +603,9 @@ function vacantTile({ selected, pending, kind }) {
       { from: MON_X, to: INNER, fg: P.faint },
     ]),
     row(DESK_TOP, [{ from: KEYS_X, to: KEYS_X + 10, fg: P.keys }], P.deskTop),
-    row(DESK_FRONT, [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }], P.deskFront),
+    row(emptyRun.out().text, emptyRun.out().spans),
     row(bar.out().text, bar.out().spans),
-    row(padEnd(hint, INNER), [{ from: 0, to: Infinity, fg: selected && !pending ? P.soft : P.faint }]),
+    row(hint.out().text, hint.out().spans),
     edge('╰', '╯', TILE_W, chrome),
   ];
   if (rows.length !== TILE_H) throw new Error(`the empty desk is ${rows.length} rows, want TILE_H ${TILE_H}`);
@@ -763,7 +762,7 @@ function keyHints(view) {
     ...(selected?.status === 'blocked' ? [['y', 'approve'], ['n', 'deny'], ['s', 'answer in words']] : []),
     ...(selected?.status === 'blocked' && selected?.choice?.always ? [['Y', 'always allow']] : []),
     ...(filtered ? [['esc', 'show everyone']] : []),
-    ['hjkl', 'walk'],
+    ['arrows/tab', 'move'],
     ...(view.detail ? [['esc', 'close']] : vacant ? [] : selected?.swarmBadge ? [['enter/w', 'swarm']] : [['enter', 'what are you up to?']]),
     ...(vacant ? [] : [['a', 'give them a job'], ['A', 'standup']]),
     ...(vacant ? [] : [['+', 'hire']]),

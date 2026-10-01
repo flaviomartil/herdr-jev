@@ -300,14 +300,55 @@ test("width guarantee holds at 100, 120, and 140 columns with panel open", () =>
     const lines = result.stdout.split("\n").filter(line => line.length > 0);
     for (const line of lines) {
       const stripped = line.replace(/\x1b\[[0-9;]*m/g, "");
-      // Some lines might just be empty strings at the end, but valid terminal lines are exactly 'cols' wide
-      // Wait, let's measure with spread to handle surrogate pairs correctly, but string.length is fine for most boxes.
-      // JS string length might differ if there are wide chars, but the grid guarantees ascii + single-width box chars.
-      // So Array.from(stripped).length is safe.
       const len = Array.from(stripped).length;
       if (len !== 0) {
          expect(len).toBe(parseInt(cols, 10));
       }
+    }
+  }
+});
+
+test("desk card alignment check: name plate, state line, and task line share identical anchors", () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  for (const cols of ["120", "140"]) {
+    const result = spawnSync("node", [officeScript, "--once", "--demo"], {
+      encoding: "utf8",
+      env: { ...process.env, COLUMNS: cols, LINES: "45" },
+    });
+    expect(result.status).toBe(0);
+    const plain = result.stdout.replace(/\x1b\[[0-9;]*m/g, "");
+    const lines = plain.split("\n").filter(l => l.length > 0);
+    
+    const cards = [];
+    for (let r = 0; r < lines.length; r++) {
+      const line = lines[r];
+      let offset = 0;
+      while (true) {
+        const idx = line.indexOf("╭───────────────────────────────╮", offset);
+        if (idx === -1) break;
+        const cardLines = [];
+        for (let i = 0; i < 13; i++) {
+          if (r + i < lines.length) {
+            cardLines.push(Array.from(lines[r + i]).slice(idx, idx + 33).join(""));
+          }
+        }
+        if (cardLines.length === 13) {
+          cards.push(cardLines);
+        }
+        offset = idx + 1;
+      }
+    }
+    
+    expect(cards.length).toBeGreaterThan(0);
+    
+    for (const card of cards) {
+      const namePlate = card[1];
+      const stateLine = card[10];
+      const taskLine = card[11];
+      
+      expect(namePlate).toMatch(/^│  ▌ /);
+      expect(stateLine).toMatch(/^│  ▌ /);
+      expect(taskLine).toMatch(/^│  ▌ /);
     }
   }
 });
