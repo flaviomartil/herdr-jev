@@ -1,6 +1,14 @@
 import { expect, test } from "bun:test";
-import { readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { readFileSync, writeFileSync, chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { afterAll } from "bun:test";
 import { join, resolve } from "node:path";
+
+
+const tempDir = mkdtempSync(join(tmpdir(), 'herdr-jev-rate-'));
+afterAll(() => {
+  try { rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+});
 
 test("rate policy a to d", async () => {
   process.env.HERDR_OFFICE_TEST_UNIT = "1";
@@ -21,8 +29,10 @@ test("rate policy a to d", async () => {
     }
   };
 
-  const fakeBin = join(import.meta.dir, "fake-jev-classify.sh");
-  writeFileSync(fakeBin, `#!/bin/sh\necho '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScore":1.87,"attentionConfidence":0.81,"blockedReason":"approval","blockedReasonConfidence":0.48,"activity":"unknown","activityConfidence":0,"jevMs":942,"model":"jev-1.13.0"}'\n`);
+  const fakeBin = join(tempDir, "fake-jev-classify.sh");
+  writeFileSync(fakeBin, `#!/bin/sh
+echo '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScore":1.87,"attentionConfidence":0.81,"blockedReason":"approval","blockedReasonConfidence":0.48,"activity":"unknown","activityConfidence":0,"jevMs":942,"model":"jev-1.13.0"}'
+`);
   chmodSync(fakeBin, "755");
   process.env.HERDR_JEV_BIN = fakeBin;
 
