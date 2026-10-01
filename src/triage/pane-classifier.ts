@@ -40,9 +40,12 @@ export function normalizePaneClassification(raw: any): FlatClassification {
   };
 }
 
+import { redactSecrets } from "../herdr/pane-text.js";
+
 export async function classifyPaneText(input: { paneText: string; agent: string; status: string }, client: ResilientJevClient): Promise<FlatClassification> {
+  const safeText = redactSecrets(input.paneText);
   const result = await client.ask(
-    { paneText: input.paneText, agent: input.agent, status: input.status },
+    { paneText: safeText, agent: input.agent, status: input.status },
     {
       state: choice("Given paneText, the recent terminal output of a coding agent, which state is the agent in now? blocked means waiting for a human approval, answer or stuck on an error; working means actively running tools or producing output; idle means at an empty prompt with nothing pending; done means it reported completion; unknown otherwise", {
         blocked: "waiting for a human approval, answer or stuck on an error",

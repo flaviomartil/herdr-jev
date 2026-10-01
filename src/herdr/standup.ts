@@ -119,10 +119,10 @@ export function substituteVariables(
 ): string {
   const dateStr = vars.date ?? formatStandupDate();
   return text
-    .replace(/\{\{\s*date\s*\}\}/gi, dateStr)
-    .replace(/\{\{\s*project\s*\}\}/gi, vars.project ?? "")
-    .replace(/\{\{\s*branch\s*\}\}/gi, vars.branch ?? "")
-    .replace(/\{\{\s*agent\s*\}\}/gi, vars.agent ?? "");
+    .replace(/\{\{\s*date\s*\}\}/gi, () => dateStr)
+    .replace(/\{\{\s*project\s*\}\}/gi, () => vars.project ?? "")
+    .replace(/\{\{\s*branch\s*\}\}/gi, () => vars.branch ?? "")
+    .replace(/\{\{\s*agent\s*\}\}/gi, () => vars.agent ?? "");
 }
 
 export function capMessageBytes(text: string, maxBytes = 8192): string {
@@ -142,7 +142,7 @@ export function parseStandupFile(
 
   const trimmedStart = normalized.trimStart();
   if (trimmedStart.startsWith("---")) {
-    const match = normalized.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    const match = trimmedStart.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
     if (match) {
       const fm = match[1];
       content = match[2];
@@ -163,7 +163,7 @@ export function parseStandupFile(
           } else if (key === "max") {
             const parsedMax = Number.parseInt(val, 10);
             if (!Number.isNaN(parsedMax) && parsedMax > 0) {
-              max = parsedMax;
+              max = Math.min(parsedMax, 100);
             }
           }
         }
@@ -173,7 +173,7 @@ export function parseStandupFile(
 
   const lines = content.split("\n");
   let globalText = "";
-  const sectionsData: Record<string, string> = {};
+  const sectionsData: Record<string, string> = Object.create(null);
   let currentSectionKey: string | null = null;
   let currentRawSection: string | null = null;
   const sectionLines: string[] = [];
@@ -253,7 +253,7 @@ export function findMatchingSection(
     .map((v) => v.trim().toLowerCase());
 
   for (const candidate of candidates) {
-    if (sections[candidate]) {
+    if (Object.prototype.hasOwnProperty.call(sections, candidate)) {
       return sections[candidate];
     }
   }
@@ -289,6 +289,7 @@ export async function planStandup(
   deps: StandupPlanDeps,
   parsed: ParsedStandup,
 ): Promise<StandupTarget[] & { skipped: StandupSkippedTarget[] }> {
+
   let rows: any[];
   if (deps.overviewRows) {
     rows = deps.overviewRows;
@@ -378,6 +379,7 @@ export async function runStandup(
   targets: StandupTarget[],
   deps: StandupRunDeps = {},
 ): Promise<StandupTargetResult[]> {
+  if (process.env.HERDR_JEV_TEST_GUARD === '1' && !deps.sendPeer) throw new Error('standup_requires_injected_deps_in_tests');
   const results: StandupTargetResult[] = [];
   const herdr = deps.herdr ?? createHerdrClient();
 
@@ -444,6 +446,7 @@ export async function executeStandupCommand(
 ): Promise<any> {
   const standupEnv = resolveStandupEnvironment(deps.env);
 
+
   const fileExists = deps.fileExists ?? existsSync;
   const readFile = deps.readFile ?? ((p: string) => readFileSync(p, "utf-8"));
   const writeFile =
@@ -460,7 +463,7 @@ export async function executeStandupCommand(
   const now = deps.now ? (typeof deps.now === "number" ? new Date(deps.now) : deps.now) : new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   const dateIso = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const stateFilePath = join(stateDir, "standup", `${dateIso}.json`);
+  const stateFilePath = join(stateDir, "standup", `${dateIso}${options.auto ? ".auto" : `.manual-${now.getTime()}`}.json`);
 
   if (options.auto) {
     const exists = fileExists(filePath);
@@ -527,6 +530,9 @@ export async function executeStandupCommand(
   }
 
   if (options.auto) {
+    if (targets.length === 0) {
+      return { date: dateIso, file: filePath, results: [], skipped };
+    }
     try {
       mkdir(join(stateDir, "standup"));
     } catch {}

@@ -5,13 +5,15 @@
 ## CLI Usage
 
 ```bash
-herdr-jev daily [--json] [--md] [--since <ISO date-time>] [--write]
+herdr-jev daily [--json] [--md] [--plain] [--project <name>] [--since <ISO date-time>] [--write]
 ```
 
 ### Options
 
 - `--json`: Output report as structured JSON.
 - `--md`: Output Markdown in Brazilian Portuguese formatted for cards and standups.
+- `--plain`: Output Markdown without the first line `Resumo do dia DD/MM/AAAA` for embedding into other tools.
+- `--project <name>`: Filter by repository name or workspace project label (repeatable, case-insensitive). Keeps only matching project groups.
 - `--since <ISO date-time>`: Scope commits and runs since the specified ISO timestamp (defaults to local midnight).
 - `--write`: Save the Markdown report to `<stateDir>/daily/YYYY-MM-DD.md` (where `stateDir` honors `HERDR_JEV_STATE_DIR` and defaults to `~/.local/state/herdr-jev`), and prints the resulting path as the last output line.
 
@@ -28,7 +30,7 @@ The report aggregates data through injectable dependencies:
    - Emits one section heading per `(repository, branch)`.
 2. **Git Evidence (per repository & branch)**:
    - Commits since local midnight on that branch, excluding commits reachable from the default branch (`git log <default>..HEAD --since=midnight`).
-   - Repository facts printed once under the heading: `N commits hoje (assunto 1; assunto 2; assunto 3)` and `M arquivos não commitados`.
+   - Repository facts printed once under the heading: `N commits hoje (assunto 1; assunto 2; assunto 3)`, `M arquivos não commitados`, and `N agentes no mesmo checkout` when two or more agents share the same working directory (cwd).
 3. **Pane Tasks & Terminal Output**:
    - Extracted from `herdr pane list` (`terminal_title_stripped` or `label`), trimmed to 60 characters. Omitted when empty, equal to the agent name, or when it is simply a launch command starting with `agy `, `codex `, `claude `, or `node `.
    - Reads the last 40 lines of each pane (`herdr pane read <id> --lines 40`), filters out terminal chrome (braille spinners, status bar glyphs, shortcuts, warning banners, collapsed-output hints like `expand)` and `(ctrl+o to expand)`, report headers, update notices, prompt lines), and prefers the last real action bullet (`•` for Codex, `●` for Claude Code and Antigravity).
@@ -43,7 +45,7 @@ When `--md` is passed, output is formatted in Brazilian Portuguese:
 Resumo do dia DD/MM/AAAA
 
 ### <projeto> (<branch>)
-N commits hoje (assunto 1; assunto 2; assunto 3); M arquivos não commitados
+N commits hoje (assunto 1; assunto 2; assunto 3); M arquivos não commitados; N agentes no mesmo checkout
 - <agente> [<tarefa>] <modelo>: <estado>; run: <resumo>; último: <linha>
 Sem atividade: a, b, c
 ```
