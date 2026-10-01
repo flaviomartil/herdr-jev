@@ -33,6 +33,11 @@ export interface StandupTargetResult {
   reason?: string;
 }
 
+export interface StandupSkippedTarget {
+  pane: string;
+  reason: string;
+}
+
 export interface StandupEnvironment {
   configDir: string;
   defaultFile: string;
@@ -70,6 +75,7 @@ export interface StandupPlanDeps {
   overviewRows?: any[];
   callerPaneId?: string;
   now?: Date | number;
+  panes?: string[];
 }
 
 export interface StandupRunDeps {
@@ -84,6 +90,8 @@ export interface StandupCommandOptions {
   yes?: boolean;
   force?: boolean;
   json?: boolean;
+  pane?: string | string[];
+  panes?: string | string[];
 }
 
 export interface StandupCommandDeps extends StandupPlanDeps, StandupRunDeps {
@@ -280,7 +288,7 @@ export function buildAgentMessage(
 export async function planStandup(
   deps: StandupPlanDeps,
   parsed: ParsedStandup,
-): Promise<StandupTarget[]> {
+): Promise<StandupTarget[] & { skipped: StandupSkippedTarget[] }> {
   let rows: any[];
   if (deps.overviewRows) {
     rows = deps.overviewRows;
@@ -302,31 +310,55 @@ export async function planStandup(
   const max = parsed.options?.max ?? 12;
   const PLUGIN_LABELS = new Set(["jev lantern", "jev office", "jev radar"]);
   const targets: StandupTarget[] = [];
+  const skipped: StandupSkippedTarget[] = [];
   const seenPanes = new Set<string>();
-  const seenAgents = new Set<string>();
+
+  const rawPanes = deps.panes;
+  const paneFilter = rawPanes && rawPanes.length > 0
+    ? new Set(rawPanes.flatMap((p) => [String(p).trim(), String(p).trim().toLowerCase()]))
+    : null;
 
   for (const row of rows) {
     const state = (row.state ?? "").trim().toLowerCase();
     if (!allowedStates.has(state)) continue;
     if (state === "working" || state === "blocked") continue;
 
-    if (callerPaneId && row.pane === callerPaneId) continue;
-    if (!row.agent || typeof row.agent !== "string" || !row.agent.trim()) continue;
+    if (!row.pane || seenPanes.has(row.pane)) continue;
+    seenPanes.add(row.pane);
+
+    if (paneFilter && !paneFilter.has(row.pane) && !paneFilter.has(row.pane.toLowerCase())) {
+      skipped.push({ pane: row.pane, reason: "filtered" });
+      continue;
+    }
+
+    if (callerPaneId && row.pane === callerPaneId) {
+      skipped.push({ pane: row.pane, reason: "caller" });
+      continue;
+    }
+
+    if (!row.agent || typeof row.agent !== "string" || !row.agent.trim()) {
+      skipped.push({ pane: row.pane, reason: "no_agent" });
+      continue;
+    }
 
     const isPlugin = [row.project, row.label, row.title, row.agent, row.handle].some(
       (val) => typeof val === "string" && PLUGIN_LABELS.has(val.trim().toLowerCase()),
     );
-    if (isPlugin) continue;
-
-    if (seenPanes.has(row.pane)) continue;
-    const agentKey = row.agent.trim().toLowerCase();
-    if (seenAgents.has(agentKey)) continue;
+    if (isPlugin) {
+      skipped.push({ pane: row.pane, reason: "plugin_pane" });
+      continue;
+    }
 
     const message = buildAgentMessage(parsed, row, deps.now);
-    if (!message.trim()) continue;
+    if (!message.trim()) {
+      skipped.push({ pane: row.pane, reason: "no_text" });
+      continue;
+    }
 
-    seenPanes.add(row.pane);
-    seenAgents.add(agentKey);
+    if (targets.length >= max) {
+      skipped.push({ pane: row.pane, reason: "beyond_max" });
+      continue;
+    }
 
     targets.push({
       pane: row.pane,
@@ -336,11 +368,10 @@ export async function planStandup(
       state: row.state,
       message: capMessageBytes(message, 8192),
     });
-
-    if (targets.length >= max) break;
   }
 
-  return targets;
+  Object.assign(targets, { skipped });
+  return targets as StandupTarget[] & { skipped: StandupSkippedTarget[] };
 }
 
 export async function runStandup(
@@ -375,7 +406,7 @@ export async function runStandup(
     }
 
     try {
-      const sendTarget = target.agent || target.pane;
+      const sendTarget = target.pane;
       if (deps.sendPeer) {
         await deps.sendPeer({ target: sendTarget, text, wait: false }, herdr);
       } else {
@@ -460,11 +491,17 @@ export async function executeStandupCommand(
 
   const rawText = readFile(filePath);
   const parsed = parseStandupFile(rawText);
+  const rawPanes = options.panes ?? options.pane;
+  const panes = rawPanes
+    ? (Array.isArray(rawPanes) ? rawPanes : [rawPanes]).map((p) => String(p).trim()).filter(Boolean)
+    : undefined;
   const planDeps = {
     ...deps,
+    panes: deps.panes ?? panes,
     callerPaneId: deps.callerPaneId ?? standupEnv.callerPaneId,
   };
   const targets = await planStandup(planDeps, parsed);
+  const skipped = (targets as any).skipped ?? [];
 
   const isDryRun = Boolean(options.dryRun) || (!options.yes && !options.auto);
 
@@ -474,12 +511,16 @@ export async function executeStandupCommand(
       file: filePath,
       dryRun: true,
       targets,
+      skipped,
     };
     if (options.json) {
       log(JSON.stringify(planResult, null, 2));
     } else {
       for (const t of targets) {
         log(`${t.pane} ${t.agent} (${t.project}): planned`);
+      }
+      for (const s of skipped) {
+        log(`${s.pane}: skipped (${s.reason})`);
       }
     }
     return planResult;
@@ -520,6 +561,7 @@ export async function executeStandupCommand(
     date: dateIso,
     file: filePath,
     results,
+    skipped,
   };
 
   if (options.json) {
@@ -531,6 +573,9 @@ export async function executeStandupCommand(
       } else {
         log(`${r.pane} ${r.agent} (${r.project}): not sent (${r.reason})`);
       }
+    }
+    for (const s of skipped) {
+      log(`${s.pane}: skipped (${s.reason})`);
     }
   }
 

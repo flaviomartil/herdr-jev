@@ -124,7 +124,6 @@ test("planStandup applies all exclusion filters properly", async () => {
     { pane: "%offline", agent: "agent-7", project: "App", state: "offline" },
     { pane: "%valid-1", agent: "agent-valid-1", project: "App", state: "idle" },
     { pane: "%valid-1", agent: "agent-valid-1", project: "App", state: "idle" },
-    { pane: "%dup-agent", agent: "agent-valid-1", project: "App", state: "idle" },
     { pane: "%valid-2", agent: "agent-valid-2", project: "App", state: "done" },
     { pane: "%valid-3", agent: "agent-valid-3", project: "App", state: "idle" },
     { pane: "%valid-4", agent: "agent-valid-4", project: "App", state: "idle" },
@@ -149,6 +148,17 @@ Daily standup task.`);
   expect(targets[0].agent).toBe("agent-valid-1");
   expect(targets[1].pane).toBe("%valid-2");
   expect(targets[1].agent).toBe("agent-valid-2");
+  expect(targets.skipped).toEqual([
+    { pane: "%caller", reason: "caller" },
+    { pane: "%no-agent", reason: "no_agent" },
+    { pane: "%empty-agent", reason: "no_agent" },
+    { pane: "%lantern", reason: "plugin_pane" },
+    { pane: "%office", reason: "plugin_pane" },
+    { pane: "%radar", reason: "plugin_pane" },
+    { pane: "%radar-lower", reason: "plugin_pane" },
+    { pane: "%valid-3", reason: "beyond_max" },
+    { pane: "%valid-4", reason: "beyond_max" },
+  ]);
 });
 
 test("planStandup works without caller pane when unset", async () => {
@@ -260,14 +270,14 @@ test("runStandup sends sequentially and reports busy peer as not sent", async ()
   const results = await runStandup(targets, {
     sendPeer: async (input) => {
       sendOrder.push(input.target);
-      if (input.target === "charlie") {
+      if (input.target === "%3") {
         throw new Error("Peer is working; read or wait before sending another turn");
       }
       return { ok: true };
     },
   });
 
-  expect(sendOrder).toEqual(["alice", "charlie", "david"]);
+  expect(sendOrder).toEqual(["%1", "%3", "%4"]);
   expect(results.length).toBe(4);
 
   expect(results[0]).toEqual({
@@ -575,3 +585,191 @@ test("executeStandupCommand crash recovery reports already_ran_today unless forc
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("runStandup delivers instructions to target pane id with fake sender", async () => {
+  const sentTargets: string[] = [];
+  const targets = [
+    { pane: "wE1:p5", agent: "codex", project: "impmotordados", state: "idle", message: "Task 1" },
+    { pane: "wEC:p7", agent: "codex", project: "InvoiceConAPI", state: "idle", message: "Task 2" },
+    { pane: "wEC:pF", agent: "codex", project: "InvoiceConAPI", state: "idle", message: "Task 3" },
+  ];
+
+  const results = await runStandup(targets, {
+    sendPeer: async (input) => {
+      sentTargets.push(input.target);
+      return { ok: true };
+    },
+  });
+
+  expect(sentTargets).toEqual(["wE1:p5", "wEC:p7", "wEC:pF"]);
+  expect(results.length).toBe(3);
+  expect(results.every((r) => r.sent)).toBe(true);
+});
+
+test("runStandup never uses agent kind as target", async () => {
+  const sentTargets: string[] = [];
+  const targets = [
+    { pane: "%target-pane-99", agent: "codex", project: "impmotordados", state: "idle", message: "Task 1" },
+    { pane: "%target-pane-100", agent: "claude", project: "InvoiceConAPI", state: "idle", message: "Task 2" },
+  ];
+
+  await runStandup(targets, {
+    sendPeer: async (input) => {
+      sentTargets.push(input.target);
+      return { ok: true };
+    },
+  });
+
+  expect(sentTargets).not.toContain("codex");
+  expect(sentTargets).not.toContain("claude");
+  expect(sentTargets).toEqual(["%target-pane-99", "%target-pane-100"]);
+});
+
+test("planStandup plans multiple agents of same kind across projects with project sections", async () => {
+  const content = `Global instructions.
+
+## impmotordados
+Impmotordados task.
+
+## InvoiceConAPI
+InvoiceConAPI task.`;
+  const parsed = parseStandupFile(content);
+
+  const rows = [
+    { pane: "wE1:p5", agent: "codex", project: "impmotordados", state: "idle" },
+    { pane: "wEC:p7", agent: "codex", project: "InvoiceConAPI", state: "idle" },
+    { pane: "wEC:pF", agent: "codex", project: "InvoiceConAPI", state: "idle" },
+  ];
+
+  const targets = await planStandup({ overviewRows: rows }, parsed);
+
+  expect(targets.length).toBe(3);
+  expect(targets.map((t) => t.pane)).toEqual(["wE1:p5", "wEC:p7", "wEC:pF"]);
+  expect(targets.every((t) => t.agent === "codex")).toBe(true);
+  expect(targets[0].message).toBe("Global instructions.\n\nImpmotordados task.");
+  expect(targets[1].message).toBe("Global instructions.\n\nInvoiceConAPI task.");
+  expect(targets[2].message).toBe("Global instructions.\n\nInvoiceConAPI task.");
+});
+
+test("executeStandupCommand with --pane filters eligible panes in dry-run and lists skipped with filtered reason", async () => {
+  const logs: string[] = [];
+  const rows = [
+    { pane: "wE1:p5", agent: "codex", project: "impmotordados", state: "idle" },
+    { pane: "wEC:p7", agent: "codex", project: "InvoiceConAPI", state: "idle" },
+    { pane: "wEC:pF", agent: "codex", project: "InvoiceConAPI", state: "idle" },
+  ];
+
+  const res = await executeStandupCommand(
+    { dryRun: true, json: true, file: "/tmp/standup.md", pane: ["wE1:p5", "wEC:pF"] },
+    {
+      fileExists: () => true,
+      readFile: () => "Global daily task.",
+      overviewRows: rows,
+      log: (msg) => logs.push(msg),
+    },
+  );
+
+  expect(res.dryRun).toBe(true);
+  expect(res.targets.length).toBe(2);
+  expect(res.targets.map((t: any) => t.pane)).toEqual(["wE1:p5", "wEC:pF"]);
+  expect(res.skipped).toEqual([{ pane: "wEC:p7", reason: "filtered" }]);
+
+  const loggedJson = JSON.parse(logs[0]);
+  expect(loggedJson.targets.map((t: any) => t.pane)).toEqual(["wE1:p5", "wEC:pF"]);
+  expect(loggedJson.skipped).toEqual([{ pane: "wEC:p7", reason: "filtered" }]);
+});
+
+test("executeStandupCommand auto mode respects --pane filter", async () => {
+  const sentCalls: any[] = [];
+  const logs: string[] = [];
+  const rows = [
+    { pane: "%p1", agent: "codex", project: "impmotordados", state: "idle" },
+    { pane: "%p2", agent: "codex", project: "InvoiceConAPI", state: "idle" },
+    { pane: "%p3", agent: "claude", project: "InvoiceConAPI", state: "idle" },
+  ];
+
+  const res = await executeStandupCommand(
+    { auto: true, force: true, file: "/tmp/standup.md", pane: ["%p2"] },
+    {
+      fileExists: () => true,
+      readFile: () => "Global standup instruction.",
+      overviewRows: rows,
+      stateDir: "/tmp/test-state-dir-pane",
+      sendPeer: async (input) => {
+        sentCalls.push(input);
+        return { ok: true };
+      },
+      writeFile: () => {},
+      mkdir: () => {},
+      log: (msg) => logs.push(msg),
+    },
+  );
+
+  expect(res.results.length).toBe(1);
+  expect(res.results[0].pane).toBe("%p2");
+  expect(sentCalls.length).toBe(1);
+  expect(sentCalls[0].target).toBe("%p2");
+  expect(res.skipped).toEqual([
+    { pane: "%p1", reason: "filtered" },
+    { pane: "%p3", reason: "filtered" },
+  ]);
+});
+
+test("--pane option is subject to agent state rules", async () => {
+  const rows = [
+    { pane: "%working-pane", agent: "codex", project: "App", state: "working" },
+    { pane: "%idle-pane", agent: "codex", project: "App", state: "idle" },
+  ];
+
+  const res = await executeStandupCommand(
+    { dryRun: true, json: true, file: "/tmp/standup.md", pane: ["%working-pane"] },
+    {
+      fileExists: () => true,
+      readFile: () => "Global standup instruction.",
+      overviewRows: rows,
+      log: () => {},
+    },
+  );
+
+  expect(res.targets.length).toBe(0);
+});
+
+test("planStandup records all eligible-state skipped reasons", async () => {
+  const content = `---
+max: 1
+---
+## App
+Only app task.`;
+  const parsed = parseStandupFile(content);
+
+  const rows = [
+    { pane: "%caller", agent: "caller-agent", project: "App", state: "idle" },
+    { pane: "%filtered", agent: "filtered-agent", project: "App", state: "idle" },
+    { pane: "%lantern", agent: "agent-1", project: "Jev Lantern", state: "idle" },
+    { pane: "%no-text", agent: "agent-2", project: "OtherProject", state: "idle" },
+    { pane: "%planned", agent: "agent-3", project: "App", state: "idle" },
+    { pane: "%beyond", agent: "agent-4", project: "App", state: "idle" },
+    { pane: "%working", agent: "agent-5", project: "App", state: "working" },
+  ];
+
+  const targets = await planStandup(
+    {
+      overviewRows: rows,
+      callerPaneId: "%caller",
+      panes: ["%caller", "%lantern", "%no-text", "%planned", "%beyond"],
+    },
+    parsed,
+  );
+
+  expect(targets.length).toBe(1);
+  expect(targets[0].pane).toBe("%planned");
+
+  expect(targets.skipped).toEqual([
+    { pane: "%caller", reason: "caller" },
+    { pane: "%filtered", reason: "filtered" },
+    { pane: "%lantern", reason: "plugin_pane" },
+    { pane: "%no-text", reason: "no_text" },
+    { pane: "%beyond", reason: "beyond_max" },
+  ]);
+});
+
