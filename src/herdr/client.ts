@@ -10,7 +10,8 @@ const HERDR_COMPLETION_STATES: readonly HerdrCompletionState[] = ["done", "block
 
 export interface HerdrClient {
   splitCurrent(options?: { direction?: "right" | "down"; paneId?: string; cwd?: string; ratio?: number }): Promise<HerdrCommandResult>;
-  paneLayout?(paneId: string): Promise<HerdrCommandResult>;
+  paneLayout?(paneId?: string): Promise<HerdrCommandResult>;
+  listPanes?(): Promise<HerdrCommandResult>;
   createTab?(options: { label: string; cwd: string; workspaceId?: string }): Promise<HerdrCommandResult>;
   startAgent(input: {
     name: string;
@@ -171,7 +172,10 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
       ]);
     },
     paneLayout(paneId) {
-      return runCommand([herdrBin, "pane", "layout", "--pane", paneId]);
+      return runCommand([herdrBin, "pane", "layout", ...(paneId ? ["--pane", paneId] : ["--current"])]);
+    },
+    listPanes() {
+      return runCommand([herdrBin, "pane", "list"]);
     },
     createTab(options) {
       return runCommand([herdrBin, "tab", "create", "--label", options.label, "--cwd", options.cwd,

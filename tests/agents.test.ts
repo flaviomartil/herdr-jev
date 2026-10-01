@@ -336,3 +336,47 @@ test("formatAgentsTable produces compact formatted text table", () => {
 
   expect(formatAgentsTable([])).toBe("No tracked grid agents.");
 });
+
+test("buildAgentsView drops dead worker panes not in client and persists pruned tracking file", async () => {
+  const root = mkdtempSync(join(tmpdir(), "herdr-jev-prune-"));
+  try {
+    const callerId = "caller-prune";
+    writeGridWorkers(callerId, ["worker-live", "worker-dead"], root);
+    expect(readGridWorkers(callerId, root)).toEqual(["worker-live", "worker-dead"]);
+
+    const fakeGit: GitRunner = async (args) => {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
+        return { ok: true, stdout: "/repos/proj-prune\n", stderr: "" };
+      }
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    const fakeClient = {
+      listPanes: async () => ({
+        ok: true,
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({ panes: [{ id: callerId }, { id: "worker-live" }] }),
+      }),
+    };
+
+    const groups = await buildAgentsView(callerId, {
+      stateDir: root,
+      git: fakeGit,
+      client: fakeClient as any,
+      overviewData: [
+        { pane: "worker-live", state: "working", agent: "codex" },
+      ],
+    });
+
+    expect(groups.length).toBe(1);
+    expect(groups[0].rows.length).toBe(1);
+    expect(groups[0].rows[0].paneId).toBe("worker-live");
+
+    const remainingTracked = readGridWorkers(callerId, root);
+    expect(remainingTracked).toEqual(["worker-live"]);
+    expect(remainingTracked).not.toContain("worker-dead");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
