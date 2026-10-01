@@ -33,13 +33,14 @@ test("AntiGravity preserves supported model and effort and long handles retain t
   const peer = await resolvePeerStage({ source: "codex", target: "antigravity", prompt: "Review design", model: "exact-agy-model", effort: "high" });
   const interactive = buildAgentCommand(peer.client, peer.stage);
   expect(interactive).toContain("exact-agy-model");
-  expect(interactive.slice(-2)).toEqual(["--effort", "high"]);
+  expect(interactive).not.toContain("--effort");
   expect(buildInlineCommand(peer.client, peer.stage, "turn", true)).toContain("exact-agy-model");
   const name = formatHerdrAgentName("codex", "researcher", "very-long-model-name-that-exceeds-name-limit", "unique123");
   expect(name.length).toBeLessThanOrEqual(32);
   expect(name.endsWith("-unique123")).toBe(true);
   expect(name).not.toBe(formatHerdrAgentName("codex", "researcher", "very-long-model-name-that-exceeds-name-limit", "unique456"));
-  expect(buildAgentCommand(peer.client, { ...peer.stage, effort: "xhigh" }).slice(-2)).toEqual(["--effort", "max"]);
+  expect(buildAgentCommand(peer.client, { ...peer.stage, effort: "xhigh" })).not.toContain("--effort");
+  expect(nativeStageEffort("antigravity", "high")).toBeUndefined();
   expect(nativeStageEffort("kimi", "high")).toBeUndefined();
 });
 

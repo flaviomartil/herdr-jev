@@ -416,10 +416,63 @@ export function parseHerdrPaneId(stdout: string): string | undefined {
 
 import { resolveBaseClientKind, resolveClientExecutable } from "../config/aliases.js";
 
+export function resolveAntigravityModel(
+  modelId: string,
+  effort?: ReasoningEffort | string,
+): string {
+  if (!modelId) return modelId;
+  const trimmed = modelId.trim();
+
+  if (trimmed === "claude-opus-4-6-thinking") return "claude-opus-4-6-thinking";
+  if (trimmed === "claude-opus-4-6" || trimmed === "claude-opus-4.6") {
+    return effort === "high" || effort === "xhigh"
+      ? "claude-opus-4-6-thinking"
+      : "claude-opus-4-6";
+  }
+  if (trimmed === "claude-sonnet-4-6" || trimmed === "claude-sonnet-4.6") {
+    return "claude-sonnet-4-6";
+  }
+  if (trimmed.startsWith("gpt-oss")) {
+    return trimmed;
+  }
+
+  let normalized = trimmed.replace(/^gemini-3[-.]8-pro/, "gemini-3.1-pro");
+  normalized = normalized.replace(/^gemini-(\d+)-(\d+)/, "gemini-$1.$2");
+  if (normalized === "gemini-pro") normalized = "gemini-3.1-pro";
+  if (normalized === "gemini-flash") normalized = "gemini-3.8-flash";
+
+  if (
+    normalized.endsWith("-high") ||
+    normalized.endsWith("-medium") ||
+    normalized.endsWith("-low")
+  ) {
+    return normalized;
+  }
+
+  if (normalized.includes("-pro")) {
+    const suffix = effort === "high" || effort === "xhigh" ? "-high" : "-low";
+    return `${normalized}${suffix}`;
+  }
+
+  if (normalized.includes("-flash")) {
+    const isLite = normalized.endsWith("-lite");
+    const base = isLite ? normalized.replace(/-lite$/, "") : normalized;
+    const suffix =
+      effort === "high" || effort === "xhigh"
+        ? "-high"
+        : effort === "low" || isLite
+          ? "-low"
+          : "-medium";
+    return `${base}${suffix}`;
+  }
+
+  return normalized;
+}
+
 export function nativeStageEffort(client: ClientKind, effort: ReasoningEffort): string | undefined {
   const base = resolveBaseClientKind(client);
-  if (!["codex", "claude", "antigravity"].includes(base)) return undefined;
-  return effort === "standard" ? "medium" : base === "antigravity" && effort === "xhigh" ? "max" : effort;
+  if (!["codex", "claude"].includes(base)) return undefined;
+  return effort === "standard" ? "medium" : effort;
 }
 
 function stageFlags(client: ClientKind, stage: StageSpec): string[] {
@@ -431,6 +484,7 @@ function stageFlags(client: ClientKind, stage: StageSpec): string[] {
     if ((base === "claude" || base === "antigravity") && stage.extraFlags[i] === "--effort") { i++; continue; }
     flags.push(stage.extraFlags[i]);
   }
+  if (base === "antigravity") return flags;
   const effort = nativeStageEffort(client, stage.effort)!;
   return [...flags, ...(base === "codex" ? ["-c", `model_reasoning_effort="${effort}"`] : ["--effort", effort])];
 }
@@ -461,7 +515,7 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
       return [bin, "--model", stage.model];
     }
     case "antigravity": {
-      return [bin, "--model", stage.model, ...stage.extraFlags];
+      return [bin, "--model", resolveAntigravityModel(stage.model, stage.effort), ...stage.extraFlags];
     }
     case "kimi": {
       const args = [bin, "-m", stage.model, "--yolo"];
@@ -840,10 +894,11 @@ export function buildInlineCommand(
       return args;
     }
     case "antigravity": {
+      const model = resolveAntigravityModel(stage.model, stage.effort);
       if (nonInteractive) {
-        return [bin, "-p", promptText, "--model", stage.model, ...stage.extraFlags];
+        return [bin, "-p", promptText, "--model", model, ...stage.extraFlags];
       }
-      return [bin, "-i", promptText, "--model", stage.model, ...stage.extraFlags];
+      return [bin, "-i", promptText, "--model", model, ...stage.extraFlags];
     }
     case "cursor": {
       return [bin, "--model", stage.model, promptText];
