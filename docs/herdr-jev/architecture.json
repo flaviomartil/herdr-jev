@@ -1,0 +1,622 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Herdr-Jev Architecture",
+    "output": "architecture.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "full-flow",
+        "label": "Full Orchestration Flow",
+        "focus": [
+          "ui_lantern",
+          "cli_router",
+          "typesafe_jev",
+          "grid_launcher",
+          "agent_claude",
+          "agent_codex",
+          "harness_bridge",
+          "harness_core"
+        ],
+        "note": "End-to-end task journey from operator prompt to verified outcome."
+      },
+      {
+        "id": "ui-panes",
+        "label": "Herdr UI & Plugin Panes",
+        "focus": [
+          "ui_lantern",
+          "ui_actions",
+          "ui_radar",
+          "ui_office",
+          "swarm_data",
+          "cli_router"
+        ],
+        "note": "Lantern assistant, Radar overview, Jev Office floor plan and modal action panes."
+      },
+      {
+        "id": "triage-routing",
+        "label": "Triage & Route Plane",
+        "focus": [
+          "cli_router",
+          "vault_sec",
+          "typesafe_jev",
+          "catalog_quota"
+        ],
+        "note": "TypeSafe System One fast classifier (~260ms) and quota cascade circuit breaker."
+      },
+      {
+        "id": "grid-workers",
+        "label": "Grid Planner & Swarm Layer",
+        "focus": [
+          "grid_launcher",
+          "swarm_data",
+          "run_history",
+          "socket_api",
+          "herdr_host"
+        ],
+        "note": "In-tab grid layout planner, worker tracking lifecycle and swarm telemetry."
+      },
+      {
+        "id": "cross-harness",
+        "label": "Cross-Harness & Review",
+        "focus": [
+          "harness_bridge",
+          "harness_core",
+          "agent_claude",
+          "agent_codex",
+          "agent_antigravity",
+          "agent_kiro"
+        ],
+        "note": "Multi-model Triad execution, independent review gates and peer delegation."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "vault_sec",
+      "type": "security",
+      "label": "KeePassXC Vault",
+      "sublabel": "TypeSafe API Key CLI",
+      "tag": "zero-secret-leak",
+      "pos": [
+        60,
+        60
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "typesafe_jev",
+      "type": "external",
+      "label": "TypeSafe Jev",
+      "sublabel": "System One Triage (~260ms)",
+      "tag": "fast-decision",
+      "pos": [
+        300,
+        60
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "herdr_host",
+      "type": "external",
+      "label": "Herdr Multiplexer",
+      "sublabel": "Daemon Socket & Panes",
+      "tag": "multiplexer",
+      "pos": [
+        540,
+        60
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "harness_core",
+      "type": "cloud",
+      "label": "AI Harness Core",
+      "sublabel": "Review, Tasks & Dagr",
+      "tag": "control-plane",
+      "pos": [
+        780,
+        60
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "ui_lantern",
+      "type": "frontend",
+      "label": "Lantern Assistant",
+      "sublabel": "In-Tab Chat & Routing",
+      "tag": "assistant-tab",
+      "pos": [
+        60,
+        200
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "ui_actions",
+      "type": "frontend",
+      "label": "Modal Action Panes",
+      "sublabel": "Route, Triad, Status, Models",
+      "tag": "modal-actions",
+      "pos": [
+        60,
+        340
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "ui_radar",
+      "type": "frontend",
+      "label": "Radar Overview",
+      "sublabel": "Agents, Status & Quota",
+      "tag": "overview-pane",
+      "pos": [
+        60,
+        480
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "ui_office",
+      "type": "frontend",
+      "label": "Jev Office & Swarm",
+      "sublabel": "Floor Plan & Desk Roster",
+      "tag": "office-pane",
+      "pos": [
+        60,
+        620
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "cli_router",
+      "type": "backend",
+      "label": "CLI & Dispatcher",
+      "sublabel": "triage, plan, route, runs",
+      "tag": "cli-router",
+      "pos": [
+        300,
+        200
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "socket_api",
+      "type": "messagebus",
+      "label": "Herdr Socket API",
+      "sublabel": "Unix Socket IPC",
+      "tag": "socket-ipc",
+      "pos": [
+        540,
+        200
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "harness_bridge",
+      "type": "backend",
+      "label": "AI Harness Bridge",
+      "sublabel": "external-run & Review",
+      "tag": "harness-bridge",
+      "pos": [
+        780,
+        200
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "grid_launcher",
+      "type": "backend",
+      "label": "Grid Planner & Launcher",
+      "sublabel": "In-Tab Grid & Workers",
+      "tag": "grid-planner",
+      "pos": [
+        540,
+        340
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "catalog_quota",
+      "type": "database",
+      "label": "Catalog & Quota",
+      "sublabel": "Cascades & Breaker",
+      "tag": "circuit-breaker",
+      "pos": [
+        540,
+        480
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "swarm_data",
+      "type": "backend",
+      "label": "Swarm Data Layer",
+      "sublabel": "Agents View & Git Diffs",
+      "tag": "swarm-layer",
+      "pos": [
+        300,
+        480
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "run_history",
+      "type": "database",
+      "label": "Run History Store",
+      "sublabel": "runs list/get/retry & Dagr",
+      "tag": "run-store",
+      "pos": [
+        300,
+        620
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "agent_claude",
+      "type": "backend",
+      "brand": "claude",
+      "label": "Claude Code",
+      "sublabel": "Fable / Sonnet / Opus",
+      "tag": "cross-harness",
+      "pos": [
+        1020,
+        200
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "agent_codex",
+      "type": "backend",
+      "brand": "openai",
+      "label": "Codex CLI",
+      "sublabel": "Astra / Luna / Sol",
+      "tag": "cross-harness",
+      "pos": [
+        1020,
+        340
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "agent_antigravity",
+      "type": "backend",
+      "brand": "google-gemini",
+      "label": "AntiGravity",
+      "sublabel": "Opus 4.6 / Flash 3.8",
+      "tag": "cross-harness",
+      "pos": [
+        1020,
+        480
+      ],
+      "size": [
+        160,
+        60
+      ]
+    },
+    {
+      "id": "agent_kiro",
+      "type": "backend",
+      "label": "Kiro CLI",
+      "sublabel": "chat trust-tools",
+      "tag": "cross-harness",
+      "pos": [
+        1020,
+        620
+      ],
+      "size": [
+        160,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Herdr UI Panes",
+      "wraps": [
+        "ui_lantern",
+        "ui_actions",
+        "ui_radar",
+        "ui_office"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "External Services",
+      "wraps": [
+        "vault_sec",
+        "typesafe_jev",
+        "herdr_host",
+        "harness_core"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Herdr-Jev Core",
+      "wraps": [
+        "cli_router",
+        "socket_api",
+        "harness_bridge",
+        "grid_launcher",
+        "catalog_quota",
+        "swarm_data",
+        "run_history"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Agent Harnesses",
+      "wraps": [
+        "agent_claude",
+        "agent_codex",
+        "agent_antigravity",
+        "agent_kiro"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "vault-to-jev",
+      "from": "vault_sec",
+      "to": "typesafe_jev",
+      "label": "api key",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-to-jev",
+      "from": "cli_router",
+      "to": "typesafe_jev",
+      "label": "triage",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -15
+    },
+    {
+      "id": "socket-to-host",
+      "from": "socket_api",
+      "to": "herdr_host",
+      "label": "socket IPC",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -15
+    },
+    {
+      "id": "bridge-to-core",
+      "from": "harness_bridge",
+      "to": "harness_core",
+      "label": "external-run",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelDy": -15
+    },
+    {
+      "id": "lantern-to-cli",
+      "from": "ui_lantern",
+      "to": "cli_router",
+      "label": "prompt",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "actions-to-cli",
+      "from": "ui_actions",
+      "to": "cli_router",
+      "label": "action",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "radar-to-swarm",
+      "from": "ui_radar",
+      "to": "swarm_data",
+      "label": "poll",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "office-to-swarm",
+      "from": "ui_office",
+      "to": "swarm_data",
+      "label": "roster",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "swarm-to-history",
+      "from": "swarm_data",
+      "to": "run_history",
+      "label": "runs",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "cli-to-socket",
+      "from": "cli_router",
+      "to": "socket_api",
+      "label": "dispatch",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "socket-to-bridge",
+      "from": "socket_api",
+      "to": "harness_bridge",
+      "label": "delegation",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "socket-to-launcher",
+      "from": "socket_api",
+      "to": "grid_launcher",
+      "label": "plan",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "launcher-to-catalog",
+      "from": "grid_launcher",
+      "to": "catalog_quota",
+      "label": "cascades",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "launcher-to-swarm",
+      "from": "grid_launcher",
+      "to": "swarm_data",
+      "label": "workers",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "bridge-to-claude",
+      "from": "harness_bridge",
+      "to": "agent_claude",
+      "label": "triad plan",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "grid-to-codex",
+      "from": "grid_launcher",
+      "to": "agent_codex",
+      "label": "tile worker",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "claude-to-codex",
+      "from": "agent_claude",
+      "to": "agent_codex",
+      "label": "triad",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "codex-to-antigravity",
+      "from": "agent_codex",
+      "to": "agent_antigravity",
+      "label": "peer",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    },
+    {
+      "id": "antigravity-to-kiro",
+      "from": "agent_antigravity",
+      "to": "agent_kiro",
+      "label": "peer",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 30
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "System One Semantic Triage",
+      "items": [
+        "TypeSafe Jev classifies complexity, effort & research need in ~260ms",
+        "Bimodal quantile scoring (0.60 quantile) prevents model underprovisioning",
+        "Deterministic local fallback with zero-overhead on network partition"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "In-Tab Grid Planner & Tracking",
+      "items": [
+        "In-tab grid layout tiles delegated workers balanced without changing focus",
+        "Tracks caller and worker pane lifecycles across interactive sessions",
+        "Automated worker cleanup with workers list and workers close --all-idle"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Swarm Data Layer & Jev Office",
+      "items": [
+        "Aggregates live agent status, git commit delta, and uncommitted diffs",
+        "Powers Radar overview dashboard and Jev Office floor plan with dynamic desks",
+        "Broadcast and targeted peer messaging via herdr-jev peer-message --all"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "AI Harness Bridge & Review Gates",
+      "items": [
+        "Bridge executes external-run lifecycle (create, claim, ack, observe, settle)",
+        "Deterministic checks verify repository state before independent review",
+        "Read-only reviewer via review-judge produces tamper-proof verdict"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Cross-Harness Peering & Quota",
+      "items": [
+        "Cross-harness delegation matrix links Claude, Codex, AntiGravity & Kiro",
+        "Automated model cascades trigger on 429 exhaustion via quota detect",
+        "Dagr run.json sanitized state projections with immutable digest receipts"
+      ]
+    }
+  ]
+}
