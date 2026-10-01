@@ -232,6 +232,8 @@ test("workspace scope fallback when tab has fewer than 2 primary agents", () => 
       HERDR_TAB_ID: "w2:t4",
       HERDR_WORKSPACE_ID: "",
       HERDR_PANE_ID: "",
+      HERDR_PLUGIN_CONTEXT_JSON: "",
+      HERDR_JEV_SOURCE_PANE_ID: "",
     },
   });
   expect(single.status).toBe(0);
@@ -246,6 +248,8 @@ test("workspace scope fallback when tab has fewer than 2 primary agents", () => 
       HERDR_TAB_ID: "w1:t1",
       HERDR_WORKSPACE_ID: "",
       HERDR_PANE_ID: "",
+      HERDR_PLUGIN_CONTEXT_JSON: "",
+      HERDR_JEV_SOURCE_PANE_ID: "",
     },
   });
   expect(multi.status).toBe(0);
