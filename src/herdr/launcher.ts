@@ -421,11 +421,11 @@ export function resolveClaudeModel(modelId: string): string {
   if (!modelId) return modelId;
   const trimmed = modelId.trim();
 
-  if (trimmed === "fable-5" || trimmed === "fable-5.1") return "claude-fable-5-1";
+  if (trimmed === "fable-5" || trimmed === "fable-5.1" || trimmed === "claude-fable-5") return "claude-fable-5-1";
   if (trimmed === "sonnet-5" || trimmed === "claude-sonnet-5" || trimmed === "sonnet-5.5") return "claude-sonnet-5-5";
-  if (trimmed === "opus-5" || trimmed === "opus-5.5") return "claude-opus-5-5";
-  if (trimmed === "haiku-4.5") return "claude-haiku-4-5-20251001";
-  if (trimmed === "opus" || trimmed === "sonnet" || trimmed === "haiku" || trimmed === "fable") return trimmed;
+  if (trimmed === "opus-5" || trimmed === "claude-opus-5" || trimmed === "opus-5.5") return "claude-opus-5-5";
+  if (trimmed === "haiku-4.5" || trimmed === "haiku-4-5" || trimmed === "claude-haiku-4-5") return "claude-haiku-4-5-20251001";
+
   if (trimmed.startsWith("claude-") && /\d$/.test(trimmed)) return trimmed;
 
   return trimmed;
@@ -730,17 +730,15 @@ async function launchStageInHerdrAttempt(input: {
   // 3. Send initial prompt/handoff immediately into the split pane
   if (herdr.readAgent) {
     const screen = await herdr.readAgent(agentName);
-    if (!screen.ok || requiresTrustConfirmation(screen)) {
-      if (screen.ok) {
-        return { ok: false, ackStatus: "blocked", completionState: "blocked", paneCreated: true, promptPending: true, trustRequired: true, hint: "confirm trust in the pane, then send the task with peer-message", agentName, paneId, commandText, error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.", direction: splitDirection };
-      }
-      return { ok: false, ackStatus: "unknown", completionState: "unknown", paneCreated: true, promptPending: true, agentName, paneId, commandText, error: "Agent readiness could not be inspected", direction: splitDirection };
+    if (screen.ok && requiresTrustConfirmation(screen)) {
+      return { ok: false, ackStatus: "blocked", completionState: "blocked", paneCreated: true, promptPending: true, trustRequired: true, hint: "confirm trust in the pane, then send the task with peer-message", agentName, paneId, commandText, error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.", direction: splitDirection };
     }
   }
   let promptDelivered = false;
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
     const baseClient = resolveBaseClientKind(effectiveClient);
-    const readyTimeoutMs = parseInt(process.env.HERDR_JEV_READY_TIMEOUT_MS || "45000", 10);
+    const parsedTimeout = parseInt(process.env.HERDR_JEV_READY_TIMEOUT_MS || "45000", 10);
+    const readyTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 45000;
     const readyDeadline = clock.now() + readyTimeoutMs;
     let isReady = false;
 
@@ -826,9 +824,10 @@ async function launchStageInHerdrAttempt(input: {
         ]);
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
-          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-          const promptPrefix = input.handoffPrompt.trim().slice(0, Math.min(input.handoffPrompt.trim().length, 32));
-          if (state === "idle" && !cleanText.includes(promptPrefix)) {
+          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\s+/g, " ");
+          const normalizedPrompt = input.handoffPrompt.replace(/\s+/g, " ").trim();
+          const firstLinePrefix = normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 16));
+          if (state === "idle" && !cleanText.includes(firstLinePrefix)) {
             await clock.sleep(2000);
             prompted = await herdr.prompt({
               target: agentName,
@@ -859,7 +858,7 @@ async function launchStageInHerdrAttempt(input: {
     const trimmedPrompt = input.handoffPrompt.trim();
     const promptPrefix = trimmedPrompt.slice(0, Math.min(trimmedPrompt.length, 32));
     const timeoutMs = input.deliveryTimeoutMs ?? 8000;
-    const deadline = Date.now() + timeoutMs;
+    const deadline = clock.now() + timeoutMs;
     while (!promptDelivered) {
       if (herdr.readAgent || herdr.readPane) {
         const readResult = herdr.readAgent
@@ -868,8 +867,7 @@ async function launchStageInHerdrAttempt(input: {
         if (readResult && readResult.ok) {
           const output = `${readResult.stdout}\n${readResult.stderr}`;
           const cleanOutput = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-          const observed = readHerdrObservedState(readResult);
-          if (output.includes(promptPrefix) || cleanOutput.includes(promptPrefix) || (observed !== null && observed !== "idle" && observed !== "unknown")) {
+          if (output.includes(promptPrefix) || cleanOutput.includes(promptPrefix)) {
             promptDelivered = true;
             break;
           }
@@ -1047,6 +1045,19 @@ export function runAgentInline(input: {
   const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, input.nonInteractive);
   const commandText = args.join(" ");
 
+  if (process.env.HERDR_JEV_TEST_GUARD === "1") {
+    let isTempBin = false;
+    try {
+      const { realpathSync } = require("node:fs");
+      const { tmpdir } = require("node:os");
+      const { sep } = require("node:path");
+      isTempBin = realpathSync(args[0]).startsWith(realpathSync(tmpdir()) + sep);
+    } catch {}
+    if (!isTempBin) {
+      return { ok: false, exitCode: 126, error: "blocked_by_test_guard", commandText };
+    }
+  }
+
   try {
     const result = spawnSync(args[0], args.slice(1), {
       stdio: "inherit",
@@ -1086,6 +1097,19 @@ export function runAgentCaptured(input: {
   const effectiveClient = input.stage.client ?? input.client;
   const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, true);
   const commandText = args.join(" ");
+
+  if (process.env.HERDR_JEV_TEST_GUARD === "1") {
+    let isTempBin = false;
+    try {
+      const { realpathSync } = require("node:fs");
+      const { tmpdir } = require("node:os");
+      const { sep } = require("node:path");
+      isTempBin = realpathSync(args[0]).startsWith(realpathSync(tmpdir()) + sep);
+    } catch {}
+    if (!isTempBin) {
+      return { ok: false, output: "", exitCode: 126, error: "blocked_by_test_guard", commandText };
+    }
+  }
 
   try {
     const result = spawnSync(args[0], args.slice(1), {

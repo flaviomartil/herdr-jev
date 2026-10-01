@@ -55,14 +55,21 @@ export function createProcessCommandAdapter(
         resolve({ ok: false, code: 1, stdout: "", stderr: "missing command" });
         return;
       }
-      if (process.env.HERDR_JEV_TEST_GUARD === '1' && !command.startsWith(tmpdir()) && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
-        const cmdPath = args.join(" ");
-        const isReadOnly = 
-          /^agent (get|list|read)\b/.test(cmdPath) || 
-          /^pane (get|list|read|layout|current)\b/.test(cmdPath);
-        if (!isReadOnly) {
-          resolve({ ok: false, code: 126, stdout: "", stderr: "blocked_by_test_guard" });
-          return;
+      if (process.env.HERDR_JEV_TEST_GUARD === '1' && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
+        let isTempBin = false;
+        try {
+          const { realpathSync } = require("node:fs");
+          const { tmpdir } = require("node:os");
+          const { sep } = require("node:path");
+          isTempBin = realpathSync(command).startsWith(realpathSync(tmpdir()) + sep);
+        } catch {}
+        if (!isTempBin) {
+          const cmdPath = args.join(" ");
+          const isReadOnly = /^(?:agent|pane) (?:get|list|read|layout|current)\b/.test(cmdPath);
+          if (!isReadOnly) {
+            resolve({ ok: false, code: 126, stdout: "", stderr: "blocked_by_test_guard" });
+            return;
+          }
         }
       }
       const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
@@ -150,10 +157,13 @@ export function classifyHerdrCommandFailure(result: HerdrCommandResult): "reject
 
 export function requiresTrustConfirmation(result: HerdrCommandResult): boolean {
   const clean = result.stdout.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\s+/g, " ");
+  if (/[❯>]\s*\d+\./.test(clean)) return true;
   return /Trust and continue/i.test(clean) ||
          (/Yes, I trust (?:this|the) (?:folder|directory|files)/i.test(clean) && /enter (?:to )?confirm|press enter/i.test(clean)) ||
          /Do you trust this folder\?/i.test(clean) ||
-         /Do you trust the contents of this project\?/i.test(clean);
+         /Do you trust the contents of this project\?/i.test(clean) ||
+         /trust the files in this folder/i.test(clean) ||
+         /Yes, proceed/i.test(clean);
 }
 
 function waitResult(result: HerdrCommandResult): HerdrCommandResult {
@@ -210,7 +220,8 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
       ]);
     },
     prompt(input) {
-      const argv = [herdrBin, "agent", "prompt", input.target, input.text];
+      const safeText = input.text.startsWith("-") ? ` ${input.text}` : input.text;
+      const argv = [herdrBin, "agent", "prompt", input.target, safeText];
       if (input.wait === true) {
         if (input.waitForStart) {
           argv.push("--wait", ...buildStateArgs(["working", "blocked", "unknown"], input.timeoutMs ?? 10000));
