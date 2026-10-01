@@ -2,13 +2,12 @@ import { personSprite, poseFrames, POSES } from './src/people.mjs';
 
 const args = process.argv.slice(2);
 const plain = args.includes('--plain');
+const allFrames = args.includes('--all-frames');
 const colors256 = args.includes('--colors') && args[args.indexOf('--colors') + 1] === '256';
 const colorsOpt = colors256 ? 256 : 'true';
 
-const frameArgIndex = args.indexOf('--frame');
-const frameOpt = frameArgIndex >= 0 ? parseInt(args[frameArgIndex + 1], 10) : null;
-
 const states = ['working', 'idle', 'blocked', 'done', 'unknown', 'vacant'];
+const identities = ['1', '2', '3']; // Different hairs/colors
 
 function renderAnsi(text, spans, colors) {
   if (!spans || spans.length === 0) return text;
@@ -58,17 +57,13 @@ function renderAnsi(text, spans, colors) {
 if (plain) {
   for (const state of states) {
     console.log(state);
-    const framesCount = frameOpt !== null ? 1 : poseFrames(state);
-    const startFrame = frameOpt !== null ? frameOpt : 0;
+    const framesCount = allFrames ? poseFrames(state) : 1;
     
-    // Print side by side
     const frames = [];
     for (let i = 0; i < framesCount; i++) {
-      const f = startFrame + i;
-      frames.push(POSES[state][f % POSES[state].length]);
+      frames.push(POSES[state][i % POSES[state].length]);
     }
     
-    // 12 pixel rows
     for (let r = 0; r < 12; r++) {
       let rowOut = '';
       for (let i = 0; i < framesCount; i++) {
@@ -79,20 +74,33 @@ if (plain) {
     console.log();
   }
 } else {
-  for (const state of states) {
-    console.log(`\x1b[1m${state}\x1b[0m`);
-    const framesCount = frameOpt !== null ? 1 : poseFrames(state);
-    const startFrame = frameOpt !== null ? frameOpt : 0;
-    
-    const spritesRows = [];
-    for (let i = 0; i < framesCount; i++) {
-      const sprite = personSprite({ state, frame: startFrame + i, id: "preview", kind: "codex", colors: colorsOpt });
-      spritesRows.push(sprite);
+  // 1. Poses side by side, frame 0 (unless --all-frames)
+  if (allFrames) {
+    for (const state of states) {
+      console.log(`\x1b[1m${state}\x1b[0m`);
+      const framesCount = poseFrames(state);
+      const spritesRows = [];
+      for (let i = 0; i < framesCount; i++) {
+        spritesRows.push(personSprite({ state, frame: i, id: "preview", kind: "codex", colors: colorsOpt }));
+      }
+      for (let r = 0; r < 6; r++) {
+        let rowOut = '';
+        for (let i = 0; i < framesCount; i++) {
+          const sprite = spritesRows[i];
+          if (sprite && sprite[r]) {
+            rowOut += renderAnsi(sprite[r].text, sprite[r].spans, colorsOpt) + '    ';
+          }
+        }
+        console.log(rowOut);
+      }
+      console.log();
     }
-    
+  } else {
+    // Poses side by side in one row with labels underneath
+    const spritesRows = states.map(state => personSprite({ state, frame: 0, id: "preview", kind: "codex", colors: colorsOpt }));
     for (let r = 0; r < 6; r++) {
       let rowOut = '';
-      for (let i = 0; i < framesCount; i++) {
+      for (let i = 0; i < states.length; i++) {
         const sprite = spritesRows[i];
         if (sprite && sprite[r]) {
           rowOut += renderAnsi(sprite[r].text, sprite[r].spans, colorsOpt) + '    ';
@@ -100,6 +108,21 @@ if (plain) {
       }
       console.log(rowOut);
     }
+    console.log(states.map(s => s.padEnd(15)).join(''));
     console.log();
+    
+    // 2. Second row with three identities side by side
+    const idSprites = identities.map(id => personSprite({ state: 'working', frame: 0, id, kind: "codex", colors: colorsOpt }));
+    for (let r = 0; r < 6; r++) {
+      let rowOut = '';
+      for (let i = 0; i < identities.length; i++) {
+        const sprite = idSprites[i];
+        if (sprite && sprite[r]) {
+          rowOut += renderAnsi(sprite[r].text, sprite[r].spans, colorsOpt) + '    ';
+        }
+      }
+      console.log(rowOut);
+    }
+    console.log(identities.map(id => `id: ${id}`.padEnd(15)).join(''));
   }
 }
