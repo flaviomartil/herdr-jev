@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, unlinkSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { Command } from "commander";
 
 test("office smoke runs once with demo data and exits cleanly", () => {
   const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
@@ -97,3 +99,108 @@ test("classification helper separates primaries and subagents", async () => {
   const badgeEmpty = aggregateSwarmBadge([]);
   expect(badgeEmpty).toBeNull();
 });
+
+test("F-01: demo compose never spawns child process", async () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  const marker = resolve(import.meta.dir, `../.test-demo-marker-${Date.now()}.tmp`);
+  const mockBin = resolve(import.meta.dir, `../.test-mock-bin-${Date.now()}.mjs`);
+  try { unlinkSync(marker); } catch {}
+  writeFileSync(mockBin, `#!/usr/bin/env node\nimport fs from "fs";\nfs.writeFileSync("${marker}", "SPAWNED");\nprocess.exit(0);\n`);
+  chmodSync(mockBin, 0o755);
+
+  const proc = spawn("node", [officeScript, "--demo"], {
+    env: { ...process.env, HERDR_JEV_BIN: mockBin, COLUMNS: "120", LINES: "40" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let output = "";
+  proc.stdout?.on("data", (d) => { output += d.toString("utf8"); });
+
+  await new Promise((r) => setTimeout(r, 200));
+  proc.stdin?.write("s");
+  await new Promise((r) => setTimeout(r, 200));
+  proc.stdin?.write("reply in demo mode\r");
+  await new Promise((r) => setTimeout(r, 200));
+  proc.stdin?.write("q");
+  await new Promise((r) => setTimeout(r, 200));
+  proc.kill("SIGTERM");
+
+  try { unlinkSync(mockBin); } catch {}
+  const markerCreated = existsSync(marker);
+  try { unlinkSync(marker); } catch {}
+
+  expect(markerCreated).toBe(false);
+  expect(output).toContain("demo mode: would send");
+});
+
+test("F-03: argv contains '--' before the prompt for subagent and peer-message", () => {
+  const officeContent = readFileSync(resolve(import.meta.dir, "../herdr-plugin/office/office.mjs"), "utf8");
+  expect(officeContent).toContain("args.push('--', text)");
+  expect(officeContent).toContain("['peer-message', '--', handle, text]");
+
+  const peerProgram = new Command();
+  let receivedAgent = "";
+  let receivedText = "";
+  peerProgram.command("peer-message [agent] [text]").action((agent: string, text: string) => {
+    receivedAgent = agent;
+    receivedText = text;
+  });
+  peerProgram.parse(["node", "cli", "peer-message", "--", "worker-1", "--fix-issue"]);
+  expect(receivedAgent).toBe("worker-1");
+  expect(receivedText).toBe("--fix-issue");
+
+  const subProgram = new Command();
+  let receivedPrompt = "";
+  subProgram.command("subagent <prompt>").option("-r, --role <role>").action((prompt: string) => {
+    receivedPrompt = prompt;
+  });
+  subProgram.parse(["node", "cli", "subagent", "--role", "implementer", "--", "--fix-issue"]);
+  expect(receivedPrompt).toBe("--fix-issue");
+});
+
+test("F-04: parseQuotaPercent rejects '7d 14h' and parses valid percent strings", async () => {
+  const { parseQuotaPercent } = await import("../herdr-plugin/office/src/render.mjs");
+  expect(parseQuotaPercent("7d 14h")).toBeNull();
+  expect(parseQuotaPercent("50%")).toBe(50);
+  expect(parseQuotaPercent("0%")).toBe(0);
+  expect(parseQuotaPercent("100%")).toBe(100);
+  expect(parseQuotaPercent("75")).toBe(75);
+  expect(parseQuotaPercent("150")).toBeNull();
+  expect(parseQuotaPercent("150%")).toBeNull();
+  expect(parseQuotaPercent("-5%")).toBeNull();
+  expect(parseQuotaPercent(null)).toBeNull();
+  expect(parseQuotaPercent(undefined)).toBeNull();
+  expect(parseQuotaPercent(80)).toBe(80);
+});
+
+test("F-08: stalled child in pollJevOverview is killed by timeout and jevPolling is reset", () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  const mockScript = resolve(import.meta.dir, `../.test-stalled-${Date.now()}.mjs`);
+  const killLog = resolve(import.meta.dir, `../.test-kill-log-${Date.now()}.tmp`);
+
+  writeFileSync(
+    mockScript,
+    `#!/usr/bin/env node\nimport fs from "fs";\nconst killLog = process.env.KILL_LOG;\nfs.writeFileSync(killLog, "STARTED\\n");\nprocess.on("SIGTERM", () => {\n  fs.writeFileSync(killLog, "KILLED\\n");\n  process.exit(0);\n});\nsetInterval(() => {}, 1000);\n`,
+  );
+  chmodSync(mockScript, 0o755);
+
+  const res = spawnSync("node", [officeScript], {
+    env: {
+      ...process.env,
+      HERDR_OFFICE_TEST_POLL: "1",
+      HERDR_JEV_TIMEOUT_MS: "300",
+      HERDR_JEV_BIN: mockScript,
+      KILL_LOG: killLog,
+    },
+    encoding: "utf8",
+  });
+
+  expect(res.status).toBe(0);
+  expect(res.stdout).toContain('"polled":true');
+  const logged = readFileSync(killLog, "utf8").trim();
+  expect(logged).toBe("KILLED");
+
+  try { unlinkSync(mockScript); } catch {}
+  try { unlinkSync(killLog); } catch {}
+});
+
