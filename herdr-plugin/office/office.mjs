@@ -1618,21 +1618,25 @@ async function openHire() {
   const hireCwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
   let defaultWorktree = false;
   if (!process.argv.includes('--no-git')) {
-    try {
-      const res = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: hireCwd, encoding: 'utf8' });
-      if (res.status === 0) {
-        const hireToplevel = res.stdout.trim();
-        for (const p of roster.people) {
-          if (p.cwd && !p.focused) {
-            const pRes = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: p.cwd, encoding: 'utf8' });
-            if (pRes.status === 0 && pRes.stdout.trim() === hireToplevel) {
-              defaultWorktree = true;
-              break;
-            }
+    const getToplevel = (cwd) => new Promise((resolve) => {
+      const p = spawn('git', ['rev-parse', '--show-toplevel'], { cwd, shell: false });
+      let out = '';
+      p.stdout.on('data', d => out += d.toString());
+      p.on('close', code => resolve(code === 0 ? out.trim() : null));
+      p.on('error', () => resolve(null));
+    });
+    const hireToplevel = await getToplevel(hireCwd);
+    if (hireToplevel) {
+      for (const p of roster.people) {
+        if (p.cwd && !p.focused) {
+          const pToplevel = await getToplevel(p.cwd);
+          if (pToplevel === hireToplevel) {
+            defaultWorktree = true;
+            break;
           }
         }
       }
-    } catch {}
+    }
   }
   hire = { kinds: [], index: 0, pending: null, error: null, worktree: defaultWorktree, branch: '', editing: false };
   prevLines = [];

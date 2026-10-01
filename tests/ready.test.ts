@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import { launchStageInHerdr, type StageSpec } from "../src/herdr/launcher.js";
 import type { HerdrCommandResult, HerdrClient } from "../src/herdr/client.js";
 
@@ -9,21 +9,15 @@ function commandResult(ok: boolean, stdout = "", stderr = ""): HerdrCommandResul
 }
 
 describe("launcher prompt readiness and retry", () => {
-  let originalSetTimeout = global.setTimeout;
-  let originalDateNow = Date.now;
-
-  afterEach(() => {
-    global.setTimeout = originalSetTimeout;
-    Date.now = originalDateNow;
-  });
-
-  it("waits for readiness, times out if text never appears, retries once on agent_prompt_stalled", async () => {
+  it("waits for readiness, times out if text never appears, retries once on agent_prompt_stalled, no retry if text visible", async () => {
     let mockNow = 1000000;
-    Date.now = () => mockNow;
-    global.setTimeout = ((cb: Function, ms: number) => {
-      mockNow += ms;
-      queueMicrotask(() => cb());
-    }) as any;
+    const fakeClock = {
+      now: () => mockNow,
+      sleep: async (ms: number) => {
+        mockNow += ms;
+        await Promise.resolve(); // yield to microtask queue
+      }
+    };
 
     process.env.HERDR_ENV = "1";
     process.env.HERDR_JEV_READY_TIMEOUT_MS = "5000";
@@ -36,6 +30,12 @@ describe("launcher prompt readiness and retry", () => {
       startAgent: async () => commandResult(true),
       closePane: async () => commandResult(true),
       getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => {
+        readCount++;
+        if (promptCalls > 0) return commandResult(true, "some text\n>\nhello");
+        if (readCount >= 3) return commandResult(true, "some text\n>\nmore text");
+        return commandResult(true, "booting...");
+      },
       readAgent: async () => {
         readCount++;
         if (promptCalls > 0) return commandResult(true, "some text\n>\nhello");
@@ -46,9 +46,9 @@ describe("launcher prompt readiness and retry", () => {
     };
 
     let res = await launchStageInHerdr({
-      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello",
-    });
-    expect(res.ok).toBe(true);
+      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock
+    } as any);
+    if(!res.ok) console.log(res); expect(res.ok).toBe(true);
     expect(readCount).toBeGreaterThanOrEqual(3);
     expect(promptCalls).toBe(1);
 
@@ -60,13 +60,14 @@ describe("launcher prompt readiness and retry", () => {
       startAgent: async () => commandResult(true),
       closePane: async () => commandResult(true),
       getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => { readCount++; return commandResult(true, "never ready text"); },
       readAgent: async () => { readCount++; return commandResult(true, "never ready text"); },
       prompt: async () => { promptCalls++; return commandResult(true); },
     };
 
     res = await launchStageInHerdr({
-      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello",
-    });
+      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock
+    } as any);
     expect(res.ok).toBe(false);
     expect(res.ackStatus).toBe("unknown");
     expect(res.error).toContain("timed out");
@@ -80,6 +81,12 @@ describe("launcher prompt readiness and retry", () => {
       startAgent: async () => commandResult(true),
       closePane: async () => commandResult(true),
       getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => {
+        readCount++;
+        if (promptCalls === 0) return commandResult(true, "\n>\n");
+        if (promptCalls === 1) return commandResult(true, "\n>\n");
+        return commandResult(true, "\n>\nhello");
+      },
       readAgent: async () => {
         readCount++;
         if (promptCalls === 0) return commandResult(true, "\n>\n");
@@ -94,8 +101,8 @@ describe("launcher prompt readiness and retry", () => {
     };
 
     res = await launchStageInHerdr({
-      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello",
-    });
+      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock
+    } as any);
     expect(res.ok).toBe(true);
     expect(promptCalls).toBe(2);
 
@@ -107,6 +114,11 @@ describe("launcher prompt readiness and retry", () => {
       startAgent: async () => commandResult(true),
       closePane: async () => commandResult(true),
       getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => {
+        readCount++;
+        if (promptCalls === 0) return commandResult(true, "\n>\n");
+        return commandResult(true, "\n>\nhello");
+      },
       readAgent: async () => {
         readCount++;
         if (promptCalls === 0) return commandResult(true, "\n>\n");
@@ -119,8 +131,8 @@ describe("launcher prompt readiness and retry", () => {
     };
 
     res = await launchStageInHerdr({
-      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello",
-    });
+      client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock
+    } as any);
     expect(res.ok).toBe(false);
     expect(promptCalls).toBe(1);
   });
