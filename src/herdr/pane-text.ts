@@ -56,6 +56,13 @@ export function lastMeaningfulLine(text: string): string {
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
 
+    if (i > 0) {
+      const prevLine = lines[i - 1].trim();
+      if (prevLine && redactSecrets(prevLine) !== prevLine) {
+        continue;
+      }
+    }
+
     const isAction = /^[•●]/.test(line);
     const stripped = line.replace(/^[•●·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
     if (!stripped) continue;
@@ -86,11 +93,26 @@ export function redactSecrets(text: string): string {
     /(["']?\b[a-zA-Z0-9_.-]*(?:password|token|secret|api[_-]?key)[a-zA-Z0-9_.-]*["']?\s*[:=]\s*)([^\s"';&,}]+)/gi,
     "$1[REDACTED]",
   );
+  result = result.replace(
+    /(["']?\b(?:--)?(?:password|token|secret|api[_-]?key)\b["']?\s+)(["'])(?:\\.|(?!\2)[^\\])*\2/gi,
+    "$1$2[REDACTED]$2",
+  );
+  result = result.replace(
+    /(["']?\b(?:--)?(?:password|token|secret|api[_-]?key)\b["']?\s+)([^\s"';&,}]+)/gi,
+    "$1[REDACTED]",
+  );
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [REDACTED]");
+  result = result.replace(/\bBasic\s+[^\s"';&,}]+/gi, "Basic [REDACTED]");
   result = result.replace(/\b(?:sk-[a-zA-Z0-9_-]+|ghp_[a-zA-Z0-9]+|xoxb-[a-zA-Z0-9_-]+)\b/g, "[REDACTED]");
+  result = result.replace(/\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g, "[REDACTED]");
+  result = result.replace(/([a-zA-Z0-9+.-]+:\/\/)?([a-zA-Z0-9_.~%-]+):([^\s@/]+)@/g, "$1$2:[REDACTED]@");
   result = result.replace(/\b(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{32,}\b/g, "[REDACTED]");
   result = result.replace(
-    /\b(?=[A-Za-z0-9_+=~-]*[0-9])(?=[A-Za-z0-9_+=~-]*[a-zA-Z])[A-Za-z0-9_+=~-]{32,}={0,2}\b/g,
+    /\b(?=[A-Za-z0-9_+=~-]*[0-9])(?=[A-Za-z0-9_+=~-]*[a-zA-Z])[A-Za-z0-9_+=~-]{32,}={0,2}(?![A-Za-z0-9_+=~-])/g,
+    "[REDACTED]",
+  );
+  result = result.replace(
+    /(?<![/A-Za-z0-9_.-])(?!\/)(?=[A-Za-z0-9+\/=]*[0-9])(?=[A-Za-z0-9+\/=]*[a-zA-Z])[A-Za-z0-9+\/]{32,}={0,2}(?![/A-Za-z0-9_.-=])/g,
     "[REDACTED]",
   );
   return result;

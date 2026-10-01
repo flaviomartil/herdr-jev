@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, readFileSync, statSync } from "node:fs";
 import {
   parseStandupFile,
   planStandup,
@@ -805,3 +805,113 @@ test("executeStandupCommand throws before sending if sendPeer is missing (guard 
 
   expect(threw).toBe(true);
 });
+
+test("Finding 4: parseStandupFile handles empty front matter and strictly closed delimiters", () => {
+  const emptyFm = "---\n---\nGlobal daily message.";
+  const parsedEmpty = parseStandupFile(emptyFm);
+  expect(parsedEmpty.global).toBe("Global daily message.");
+  expect(parsedEmpty.options.states).toEqual(["idle", "done"]);
+  expect(parsedEmpty.options.max).toBe(12);
+
+  const looseTerminator = "---\nmax: 5\n----\nGlobal message.";
+  const parsedLoose = parseStandupFile(looseTerminator);
+  expect(parsedLoose.options.max).toBe(12);
+  expect(parsedLoose.global).toContain("Global message.");
+});
+
+test("Finding 5: executeStandupCommand auto mode with force propagates claim write failure", async () => {
+  let threw = false;
+  try {
+    await executeStandupCommand(
+      { auto: true, force: true, file: "/tmp/standup.md" },
+      {
+        fileExists: () => true,
+        readFile: () => "Daily standup message.",
+        overviewRows: [
+          { pane: "%1", agent: "agent-1", project: "API", state: "idle" },
+        ],
+        sendPeer: async () => ({ ok: true }),
+        writeFile: () => {
+          throw new Error("disk full");
+        },
+        mkdir: () => {},
+        log: () => {},
+      },
+    );
+  } catch (err: any) {
+    threw = true;
+    expect(err.message).toBe("disk full");
+  }
+  expect(threw).toBe(true);
+});
+
+test("Finding 6: capMessageBytes backs off to character boundary and avoids splitting multi-byte UTF-8", () => {
+  const euro = "€";
+  const text = "a".repeat(8191) + euro;
+  const capped = capMessageBytes(text, 8192);
+  expect(Buffer.byteLength(capped, "utf-8")).toBeLessThanOrEqual(8192);
+  expect(capped.includes("\uFFFD")).toBe(false);
+  expect(capped).toBe("a".repeat(8191));
+});
+
+test("Finding 7: standup redacts and truncates failure reason and sets 0700 and 0600 modes on state files", async () => {
+  const tempDir = join("/tmp", `standup-modes-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const standupFile = join(tempDir, "standup.md");
+  mkdirSync(tempDir, { recursive: true });
+  writeFileSync(standupFile, "Daily task.", "utf-8");
+
+  try {
+    const secretMsg = "Message acknowledgement uncertain; inspect the existing peer before retrying: password=supersecretpassword123 " + "x".repeat(120);
+    const result = await executeStandupCommand(
+      { auto: true, force: true, file: standupFile },
+      {
+        stateDir: tempDir,
+        overviewRows: [
+          { pane: "%1", agent: "agent-1", project: "API", state: "idle" },
+        ],
+        sendPeer: async () => {
+          throw new Error(secretMsg);
+        },
+        log: () => {},
+      },
+    );
+
+    expect(result.results.length).toBe(1);
+    expect(result.results[0].sent).toBe(false);
+    expect(result.results[0].reason).not.toContain("supersecretpassword123");
+    expect(result.results[0].reason).toContain("password=[REDACTED]");
+    expect(result.results[0].reason.length).toBeLessThanOrEqual(100);
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    const dateIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const stateFile = join(tempDir, "standup", `${dateIso}.auto.json`);
+    const stat = statSync(stateFile);
+    expect(stat.mode & 0o777).toBe(0o600);
+    const dirStat = statSync(join(tempDir, "standup"));
+    expect(dirStat.mode & 0o777).toBe(0o700);
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("Finding 8: executeStandupCommand auto mode with zero targets logs the result object", async () => {
+  const logs: string[] = [];
+  const result = await executeStandupCommand(
+    { auto: true, file: "/tmp/standup.md" },
+    {
+      fileExists: (p) => p.includes("standup.md"),
+      readFile: () => "Daily standup message.",
+      overviewRows: [],
+      sendPeer: async () => ({ ok: true }),
+      log: (msg) => logs.push(msg),
+    },
+  );
+
+  expect(logs.length).toBe(1);
+  const parsed = JSON.parse(logs[0]);
+  expect(parsed.results).toEqual([]);
+  expect(parsed.file).toBe("/tmp/standup.md");
+  expect(result.results).toEqual([]);
+});
+

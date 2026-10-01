@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { readOverview } from "./overview.js";
 import { converseWithPeer } from "./peer.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
+import { resolveStateDir } from "./state-dir.js";
+import { redactSecrets } from "./pane-text.js";
 
 export interface StandupOptions {
   states: string[];
@@ -55,8 +57,7 @@ export function resolveStandupEnvironment(env: NodeJS.ProcessEnv = process.env):
     ? defaultConfigDir
     : (env.HERDR_PLUGIN_CONFIG_DIR || defaultConfigDir);
 
-  const stateDir = env.HERDR_JEV_STATE_DIR ||
-    (!isForeignPlugin && env.HERDR_PLUGIN_STATE_DIR ? env.HERDR_PLUGIN_STATE_DIR : defaultStateDir);
+  const stateDir = resolveStateDir(env);
 
   const callerPaneId = env.HERDR_JEV_SOURCE_PANE_ID ||
     (!isForeignPlugin ? env.HERDR_PANE_ID : undefined);
@@ -128,7 +129,11 @@ export function substituteVariables(
 export function capMessageBytes(text: string, maxBytes = 8192): string {
   const buf = Buffer.from(text, "utf-8");
   if (buf.length <= maxBytes) return text;
-  return buf.subarray(0, maxBytes).toString("utf-8");
+  let end = maxBytes;
+  while (end > 0 && (buf[end] & 0xC0) === 0x80) {
+    end--;
+  }
+  return buf.subarray(0, end).toString("utf-8");
 }
 
 export function parseStandupFile(
@@ -142,11 +147,11 @@ export function parseStandupFile(
 
   const trimmedStart = normalized.trimStart();
   if (trimmedStart.startsWith("---")) {
-    const match = trimmedStart.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    const match = trimmedStart.match(/^---\n(?:([\s\S]*?)\n)?---[ \t]*(?:\n|$)([\s\S]*)$/);
     if (match) {
-      const fm = match[1];
+      const fm = match[1] ?? "";
       content = match[2];
-      const lines = fm.split("\n");
+      const lines = fm ? fm.split("\n") : [];
       for (const line of lines) {
         const colonIdx = line.indexOf(":");
         if (colonIdx > 0) {
@@ -427,6 +432,10 @@ export async function runStandup(
       if (match) {
         reason = match[1];
       }
+      reason = redactSecrets(reason);
+      if (reason.length > 100) {
+        reason = reason.slice(0, 100);
+      }
       results.push({
         pane: target.pane,
         agent: target.agent,
@@ -451,8 +460,9 @@ export async function executeStandupCommand(
   const readFile = deps.readFile ?? ((p: string) => readFileSync(p, "utf-8"));
   const writeFile =
     deps.writeFile ??
-    ((p: string, c: string, opt?: any) => writeFileSync(p, c, opt ?? "utf-8"));
-  const mkdir = deps.mkdir ?? ((p: string) => mkdirSync(p, { recursive: true }));
+    ((p: string, c: string, opt?: any) =>
+      writeFileSync(p, c, typeof opt === "string" ? { encoding: opt, mode: 0o600 } : { mode: 0o600, ...opt }));
+  const mkdir = deps.mkdir ?? ((p: string, opt?: any) => mkdirSync(p, { recursive: true, mode: 0o700, ...opt }));
   const log = deps.log ?? console.log;
 
   const configDir = deps.configDir ?? standupEnv.configDir;
@@ -531,16 +541,18 @@ export async function executeStandupCommand(
 
   if (options.auto) {
     if (targets.length === 0) {
-      return { date: dateIso, file: filePath, results: [], skipped };
+      const resultObj = { date: dateIso, file: filePath, results: [], skipped };
+      log(options.json ? JSON.stringify(resultObj, null, 2) : JSON.stringify(resultObj));
+      return resultObj;
     }
     try {
-      mkdir(join(stateDir, "standup"));
+      mkdir(join(stateDir, "standup"), { recursive: true, mode: 0o700 });
     } catch {}
 
     const claimPayload = JSON.stringify({ status: "running", date: dateIso }, null, 2);
     if (!options.force) {
       try {
-        writeFile(stateFilePath, claimPayload, { flag: "wx" });
+        writeFile(stateFilePath, claimPayload, { flag: "wx", mode: 0o600 });
       } catch (err: any) {
         if (err?.code === "EEXIST" || fileExists(stateFilePath)) {
           const skipped = { skipped: "already_ran_today" };
@@ -550,17 +562,15 @@ export async function executeStandupCommand(
         throw err;
       }
     } else {
-      try {
-        writeFile(stateFilePath, claimPayload, "utf-8");
-      } catch {}
+      writeFile(stateFilePath, claimPayload, { encoding: "utf-8", mode: 0o600 });
     }
   }
 
   const results = await runStandup(targets, deps);
 
   try {
-    mkdir(join(stateDir, "standup"));
-    writeFile(stateFilePath, JSON.stringify(results, null, 2), "utf-8");
+    mkdir(join(stateDir, "standup"), { recursive: true, mode: 0o700 });
+    writeFile(stateFilePath, JSON.stringify(results, null, 2), { encoding: "utf-8", mode: 0o600 });
   } catch {}
 
   const resultObj = {

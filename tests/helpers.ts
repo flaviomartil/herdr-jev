@@ -31,13 +31,20 @@ export function createFakeHerdr(dir: string): string {
   const fakeHerdr = join(dir, "herdr");
   const script = `#!/usr/bin/env node
 const args = process.argv.slice(2);
-let prev = null;
+let afterDashDash = false;
 for (const arg of args) {
-  if (prev === "--" && !arg.startsWith("--")) {
+  if (arg === "--") {
+    afterDashDash = true;
+    continue;
+  }
+  if (afterDashDash && !arg.startsWith("--")) {
     console.error("usage error: unexpected -- before positional");
     process.exit(2);
   }
-  prev = arg;
+  if (!afterDashDash && arg.startsWith("-") && args[0] === "agent" && args[1] === "prompt" && arg === args[args.length - 1]) {
+    console.error("usage error: text looks like a flag");
+    process.exit(2);
+  }
 }
 if (args[0] === "pane" && args[1] === "get") {
   const paneId = args[args.length - 1];
