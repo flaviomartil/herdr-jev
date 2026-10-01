@@ -69,6 +69,8 @@ Keybindings registered in Herdr:
 - `prefix+s`: `herdr-jev.status` (Jev: Status)
 - `prefix+o`: `herdr-jev.office` (Jev: Office)
 
+The Jev classification layer in Jev Office is enabled by default (`HERDR_JEV_OFFICE_JEV=0` disables).
+
 **Jev Office Hotkeys:** Use `arrows/tab` to move between desks, `enter` to interact or inspect an agent's task, and `+` to hire a new subagent. Use `y`/`n`/`s` to approve, deny, or answer blocked agents.
 
 ---
@@ -134,6 +136,7 @@ Herdr-Jev supports fine-grained configuration via environment variables (or a `.
 | `AI_HARNESS_ROOT` | Filesystem path | Auto-discover | Path to `ai-harness-core` repository for auto-improvements. |
 | `HERDR_BIN_PATH` | Binary name / path | `herdr` | Path to Herdr multiplexer executable in system PATH. |
 | `HERDR_PLUGIN_ID` | String | `herdr-jev` | Registered plugin ID inside Herdr runtime. |
+| `HERDR_JEV_OFFICE_JEV` | `0`, `1`, `false`, `true`, `off` | `1` (Enabled) | Jev classification layer for Jev Office (enabled by default; `HERDR_JEV_OFFICE_JEV=0` disables). |
 | `HERDR_JEV_<CLIENT>_<ROLE>` | Model name string | `config/models.json` | Dynamic model override (e.g. `HERDR_JEV_CLAUDE_ADVISOR=fable-6`). |
 
 ---

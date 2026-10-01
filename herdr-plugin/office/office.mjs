@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { classifyPane } from "./src/jev-classify.mjs";
+import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
 // Herdr Office: your agents, drawn as people at desks.
 //
 // Runs as a Herdr plugin pane entrypoint (see herdr-plugin.toml) but works
@@ -2430,8 +2430,7 @@ if (process.env.HERDR_OFFICE_TEST_POLL !== '1') {
 
 
 async function pollJevClassify() {
-  if (process.env.HERDR_JEV_OFFICE_JEV !== '1') return;
-  if (DEMO) return;
+  if (!jevClassificationEnabled()) return;
   if (jevPolling) return;
 
   const due = roster.people.filter(p => !classifyCache.has(`${p.id}:${p.revision}`));

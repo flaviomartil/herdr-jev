@@ -4,8 +4,26 @@ import { summarize } from './summary.mjs';
 const cache = new Map();
 let inflight = null;
 
+export function jevClassificationEnabled(env = process.env, argv = process.argv) {
+  if (Array.isArray(env)) {
+    argv = env;
+    env = process.env;
+  }
+  if (argv?.includes?.('--demo')) {
+    return false;
+  }
+  const raw = env?.HERDR_JEV_OFFICE_JEV;
+  if (raw !== undefined) {
+    const val = String(raw).trim().toLowerCase();
+    if (val === '0' || val === 'false' || val === 'off') {
+      return false;
+    }
+  }
+  return true;
+}
+
 export async function classifyPane(paneId, revision, person, outputLines) {
-  if (process.env.HERDR_JEV_OFFICE_JEV !== '1' || process.argv.includes('--demo')) {
+  if (!jevClassificationEnabled()) {
     return { summary: summarize(person, outputLines), state: null, attention: null };
   }
 
