@@ -64,11 +64,11 @@ export async function classifyPane(paneId, revision, person, outputLines) {
           const ans = JSON.parse(stdout);
           const result = {
             summary: defaultSummary,
-            state: ans.state?.choice === 'unknown' ? null : ans.state?.choice,
+            state: ans.stateConfidence >= 0.7 && ans.state !== 'unknown' ? ans.state : null,
             attention: ans.attention,
-            confidence: ans.state?.confidence ?? 0,
-            confidence: ans.confidence,
-            blockedReason: ans.blockedReason?.choice
+            confidence: ans.stateConfidence ?? 0,
+            blockedReason: ans.blockedReason,
+            activity: ans.activityConfidence >= 0.6 ? ans.activity : undefined
           };
           cache.set(key, result);
           resolve(result);

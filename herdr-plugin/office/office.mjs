@@ -336,6 +336,7 @@ function applyJevData(people = roster.people) {
       person.jevAttention = cls.attention;
       person.jevConfidence = cls.confidence;
       person.jevBlockedReason = cls.blockedReason;
+      person.jevActivity = cls.activity;
     }
     person.swarmBadge = aggregateSwarmBadge(subs);
   }
