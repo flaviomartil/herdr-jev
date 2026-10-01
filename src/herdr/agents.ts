@@ -340,15 +340,26 @@ export async function setupWorktree(options: { worktree?: boolean | string; name
   }
   const repoDir = toplevelRes.stdout.trim();
   const slug = (typeof options.worktree === "string" && options.worktree) ? options.worktree : (options.name || Math.random().toString(36).substring(2, 8));
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(slug)) {
+    return { worktreePath: null, worktreeBranch: null, error: `Error: Invalid worktree slug` };
+  }
   if (slug.startsWith("codex/")) {
     return { worktreePath: null, worktreeBranch: null, error: `Error: Worktree branch name cannot start with codex/` };
   }
   const branchName = `wt/${slug}`;
   const targetDir = `${repoDir}-wt-${slug}`;
-  const targetToplevelRes = await gitRunner(["rev-parse", "--show-toplevel"], targetDir);
-  if (targetToplevelRes.ok) {
-    if (targetToplevelRes.stdout.trim() === repoDir) {
-      return { worktreePath: targetDir, worktreeBranch: branchName };
+  if (require("node:path").dirname(targetDir) !== require("node:path").dirname(repoDir)) {
+    return { worktreePath: null, worktreeBranch: null, error: `Error: targetDir must be a sibling of repoDir` };
+  }
+  const targetCommonDirRes = await gitRunner(["rev-parse", "--path-format=absolute", "--git-common-dir"], targetDir);
+  if (targetCommonDirRes.ok) {
+    const commonDirRes = await gitRunner(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
+    if (commonDirRes.ok && targetCommonDirRes.stdout.trim() === commonDirRes.stdout.trim()) {
+      const targetBranchRes = await gitRunner(["rev-parse", "--abbrev-ref", "HEAD"], targetDir);
+      if (targetBranchRes.ok && targetBranchRes.stdout.trim() === branchName) {
+        return { worktreePath: targetDir, worktreeBranch: branchName };
+      }
+      return { worktreePath: null, worktreeBranch: null, error: `Error: Directory ${targetDir} is a worktree but not on branch ${branchName}` };
     } else {
       return { worktreePath: null, worktreeBranch: null, error: `Error: Directory ${targetDir} already exists but is not a worktree of ${repoDir}` };
     }
