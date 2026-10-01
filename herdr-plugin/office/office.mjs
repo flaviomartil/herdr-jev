@@ -364,8 +364,9 @@ function applyJevData(people = roster.people) {
              notifyPending.push({
                args: [
                  'notify', '--pane', person.id, '--project', project, '--task', taskTitle,
-                 '--attention', person.jevAttention || 'none', '--reason', person.jevBlockedReason || 'none',
+                 '--attention', person.status === 'blocked' ? 'now' : (person.jevAttention || 'none'), '--reason', person.jevBlockedReason || 'none',
                  '--confidence', (person.jevConfidence || 0).toString(), '--native-status', person.status || 'unknown',
+                 '--jev-state', person.jevState || 'unknown', '--reason-confidence', (person.jevBlockedReasonConfidence || 0).toString(),
                  '--agent', person.kind || 'unknown', '--json'
                ],
                onResult: (res) => {
@@ -707,13 +708,13 @@ function quit(code = 0, msg) {
   // the last tick of SAVE_MS would otherwise be the one part of the day that the
   // office watched and then forgot, and quitting is exactly when it happens.
   closeTheBooks();
-  if (!DEMO && process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
-    try {
-      spawnSync(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
-    } catch (e) {}
-  }
   events?.close();
   leaveTerminal();
+  if (!DEMO && process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
+    try {
+      spawnSync(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore', timeout: 2000 });
+    } catch (e) {}
+  }
   if (msg) process.stderr.write(`${msg}\n`);
   // The socket stays open just long enough to give the window title back and take
   // the office's pixels down with it, then goes regardless. Half a second is the
@@ -1114,6 +1115,14 @@ async function refresh() {
     const raw = agentList.agents || [];
     const { primaries } = classifyPanes(raw, jevAgentsCache);
     const newlyBlocked = roster.update(primaries);
+    
+    const validIds = new Set(roster.people.map((p) => p.id));
+    for (const map of [classifyTimestamps, classifyHashes, paneRevisions, notifyState, paneAppearTimes]) {
+      for (const key of map.keys()) {
+        if (!validIds.has(key)) map.delete(key);
+      }
+    }
+    
     applyJevData();
     updateScopeFromRoster();
     clocks.observe(roster.people);
@@ -1125,7 +1134,7 @@ async function refresh() {
     refreshCommands();
     refreshBranches();
     refreshDirt();
-    pollJevClassify();
+    pollJevClassify().catch(() => {});
     syncTitle();
     nudge();
     if (NOTIFY) {
@@ -1615,7 +1624,30 @@ async function openHire() {
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
-  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
+  const hireCwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
+  let defaultWorktree = false;
+  if (!process.argv.includes('--no-git')) {
+    const getToplevel = (cwd) => new Promise((resolve) => {
+      const p = spawn('git', ['rev-parse', '--show-toplevel'], { cwd, shell: false });
+      let out = '';
+      p.stdout.on('data', d => out += d.toString());
+      p.on('close', code => resolve(code === 0 ? out.trim() : null));
+      p.on('error', () => resolve(null));
+    });
+    const hireToplevel = await getToplevel(hireCwd);
+    if (hireToplevel) {
+      for (const p of roster.people) {
+        if (p.cwd && !p.focused) {
+          const pToplevel = await getToplevel(p.cwd);
+          if (pToplevel === hireToplevel) {
+            defaultWorktree = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  hire = { kinds: [], index: 0, pending: null, error: null, worktree: defaultWorktree, branch: '', editing: false };
   prevLines = [];
   draw();
   try {
@@ -1670,7 +1702,6 @@ function editBranch(on) {
   else hire = { ...hire, editing: false, branch: hire.was || defaultBranch(hire.kinds[hire.index]) };
 }
 
-// `agent.start` waits for the agent to reach its own prompt, which can take the
 // better part of a minute, and every request on the main socket is queued behind
 // the one in front of it. So a hire gets its own connection: the office keeps
 // polling and animating while somebody is being shown to their desk.
@@ -1678,6 +1709,7 @@ async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
   const wantsWorktree = hire.worktree;
   const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
+  if (wantsWorktree) args.push('--worktree', branch);
   if (DEMO) {
     note(wantsWorktree
       ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`
@@ -1691,6 +1723,7 @@ async function startHire(kind) {
   const cwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
   const promptText = `Implement task with ${kind}`;
   const args = ['subagent', '--role', 'implementer'];
+  if (wantsWorktree) args.push('--worktree', branch);
   if (caller) args.push('--source-pane', caller);
   if (cwd) args.push('--cwd', cwd);
   args.push('--', promptText);
@@ -2490,7 +2523,16 @@ if (process.env.HERDR_OFFICE_TEST_POLL !== '1' && process.env.HERDR_OFFICE_TEST_
 
 
 
+let lastReleaseStaleTime = 0;
 async function pollJevClassify() {
+  if (process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
+    const now = Date.now();
+    if (!lastReleaseStaleTime || now - lastReleaseStaleTime > 5 * 60 * 1000) {
+      lastReleaseStaleTime = now;
+      notifyPending.push({ args: ['notify', '--release-stale'] });
+    }
+  }
+
   if (!jevClassificationEnabled() && notifyPending.length === 0) return;
   if (jevPolling) return;
   jevPolling = true;
@@ -2500,9 +2542,6 @@ async function pollJevClassify() {
       while (notifyPending.length > 0) {
         const task = notifyPending.shift();
         await new Promise(resolve => {
-          const child = spawn(herdrJevBin, task.args, { stdio: ['ignore', 'pipe', 'ignore'] });
-          let out = '';
-          child.stdout?.on('data', d => { out += d; });
           let done = false;
           const complete = () => {
             if (done) return;
@@ -2513,7 +2552,16 @@ async function pollJevClassify() {
           const timer = setTimeout(() => {
             try { child.kill(); } catch (e) {}
             complete();
-          }, 5000);
+          }, 12000);
+          
+          let child;
+          try {
+            child = spawn(herdrJevBin, task.args, { stdio: ['ignore', 'pipe', 'ignore'] });
+          } catch (e) {
+            return complete();
+          }
+          let out = '';
+          child.stdout?.on('data', d => { out += d; });
           child.on('error', complete);
           child.on('close', () => {
             if (task.onResult) {
@@ -2584,6 +2632,11 @@ async function pollJevClassify() {
       
       classifyCountMinute++;
       const result = await classifyPane(person.id, person.revision, person, outputLines);
+      
+      if (result.isFallback) {
+        classifyTimestamps.set(person.id, Date.now());
+        continue;
+      }
       
       classifyCache.delete(key);
       classifyCache.set(key, result);
