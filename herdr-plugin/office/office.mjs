@@ -13,7 +13,8 @@ import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
 //   node office.mjs --no-graphics  text only, no pixel charts
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
-import { spawn } from 'node:child_process';
+import { createHash } from "node:crypto";
+import { spawn, spawnSync } from 'node:child_process';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster, cleanModel } from './src/roster.mjs';
 import { renderFrame, nextZoom, ZOOMS, HIRE_ID } from './src/render.mjs';
@@ -101,6 +102,13 @@ const herdrJevBin = process.env.HERDR_JEV_BIN || 'herdr-jev';
 const JEV_POLL_MS = 3000;
 let jevCache = new Map();
 let classifyCache = new Map();
+let classifyTimestamps = new Map();
+let classifyHashes = new Map();
+let paneRevisions = new Map();
+let classifyCountMinute = 0;
+let classifyMinuteStart = Date.now();
+let notifyState = new Map();
+let notifyPending = [];
 let lastJevPoll = 0;
 let swarmPanel = null;
 let jevAgentsCache = new Map();
@@ -330,14 +338,56 @@ function applyJevData(people = roster.people) {
     }
     const subs = getSubagentsFor(person.id);
     person.swarm = subs;
-    const cls = classifyCache.get(`${person.id}:${person.revision}`);
+    const hashKey = classifyHashes.get(person.id);
+    const cls = hashKey ? classifyCache.get(hashKey) : null;
     if (cls) {
       person.jevState = cls.state;
       person.jevAttention = cls.attention;
       person.jevConfidence = cls.confidence;
       person.jevBlockedReason = cls.blockedReason;
+      person.jevActivity = cls.activity;
     }
     person.swarmBadge = aggregateSwarmBadge(subs);
+    
+    if (!DEMO && person.kind !== 'human' && !person.isSubagent) {
+      const state = notifyState.get(person.id) || { rev: -1, attention: '', status: '', escalatedRev: -1 };
+      const attentionNow = person.jevAttention === 'now';
+      const blockedNow = person.status === 'blocked';
+      const attentionChanged = attentionNow && state.attention !== 'now';
+      const blockedChanged = blockedNow && state.status !== 'blocked';
+      
+      if ((attentionChanged || blockedChanged) && !person.focused) {
+         if (state.rev !== person.revision) {
+             state.rev = person.revision;
+             const project = person.cwd ? person.cwd.split('/').pop() : 'Project';
+             const taskTitle = (person.title || '').substring(0, 80);
+             notifyPending.push({
+               args: [
+                 'notify', '--pane', person.id, '--project', project, '--task', taskTitle,
+                 '--attention', person.jevAttention || 'none', '--reason', person.jevBlockedReason || 'none',
+                 '--confidence', (person.jevConfidence || 0).toString(), '--native-status', person.status || 'unknown',
+                 '--agent', person.kind || 'unknown', '--json'
+               ],
+               onResult: (res) => {
+                 if (res && res.channels && res.channels.includes('escalation')) {
+                   state.escalatedRev = person.revision;
+                 }
+               }
+             });
+         }
+      }
+      
+      if (process.env.HERDR_JEV_ESCALATE_BLOCKED && state.escalatedRev !== -1 && state.escalatedRev !== person.revision) {
+         notifyPending.push({
+           args: ['notify', '--release', '--pane', person.id, '--agent', person.kind || 'unknown', '--json']
+         });
+         state.escalatedRev = -1;
+      }
+      
+      state.attention = person.jevAttention || '';
+      state.status = person.status || '';
+      notifyState.set(person.id, state);
+    }
   }
 }
 
@@ -657,6 +707,11 @@ function quit(code = 0, msg) {
   // the last tick of SAVE_MS would otherwise be the one part of the day that the
   // office watched and then forgot, and quitting is exactly when it happens.
   closeTheBooks();
+  if (!DEMO && process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
+    try {
+      spawnSync(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
+    } catch (e) {}
+  }
   events?.close();
   leaveTerminal();
   if (msg) process.stderr.write(`${msg}\n`);
@@ -1341,8 +1396,8 @@ function move(dx, dy) {
 }
 
 function nextRaisedHand() {
-  const raised = floorPeople().filter((p) => p.status === 'blocked').sort((a, b) => {
-    const score = (p) => p.jevAttention === 'now' ? 2 : (p.jevAttention === 'soon' ? 1 : 0);
+  const raised = floorPeople().filter((p) => p.status === 'blocked' || p.jevAttention === 'now' || (p.jevAttention === 'soon' && (p.status === 'idle' || p.status === 'done'))).sort((a, b) => {
+    const score = (p) => p.jevAttention === 'now' ? 2 : (p.jevAttention === 'soon' && (p.status === 'idle' || p.status === 'done') ? 1 : 0);
     return score(b) - score(a);
   });
   if (!raised.length) {
@@ -2312,8 +2367,14 @@ if (process.env.HERDR_OFFICE_TEST_POLL === '1') {
   });
 }
 
+if (process.env.HERDR_OFFICE_TEST_UNIT === '1') {
+  clearInterval(anim);
+  clearInterval(poll);
+}
+
 async function main() {
   if (!DEMO) {
+    spawn(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
     try {
       api = await new ApiClient().open();
     } catch (err) {
@@ -2422,7 +2483,7 @@ process.on('SIGINT', () => quit(0));
 process.on('SIGTERM', () => quit(0));
 process.on('uncaughtException', (err) => quit(1, `herdr-office crashed: ${err.stack}`));
 
-if (process.env.HERDR_OFFICE_TEST_POLL !== '1') {
+if (process.env.HERDR_OFFICE_TEST_POLL !== '1' && process.env.HERDR_OFFICE_TEST_UNIT !== '1') {
   main();
 }
 
@@ -2430,19 +2491,79 @@ if (process.env.HERDR_OFFICE_TEST_POLL !== '1') {
 
 
 async function pollJevClassify() {
-  if (!jevClassificationEnabled()) return;
+  if (!jevClassificationEnabled() && notifyPending.length === 0) return;
   if (jevPolling) return;
-
-  const due = roster.people.filter(p => !classifyCache.has(`${p.id}:${p.revision}`));
-  if (due.length === 0) return;
-
   jevPolling = true;
-  try {
-    for (const person of due) {
-      if (jevPolling === false) break; // if someone else cleared it?
-      const key = `${person.id}:${person.revision}`;
-      if (classifyCache.has(key)) continue;
 
+  try {
+    if (notifyPending.length > 0) {
+      while (notifyPending.length > 0) {
+        const task = notifyPending.shift();
+        await new Promise(resolve => {
+          const child = spawn(herdrJevBin, task.args, { stdio: ['ignore', 'pipe', 'ignore'] });
+          let out = '';
+          child.stdout?.on('data', d => { out += d; });
+          let done = false;
+          const complete = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            resolve();
+          };
+          const timer = setTimeout(() => {
+            try { child.kill(); } catch (e) {}
+            complete();
+          }, 5000);
+          child.on('error', complete);
+          child.on('close', () => {
+            if (task.onResult) {
+              try { task.onResult(JSON.parse(out)); } catch (e) {}
+            }
+            complete();
+          });
+        });
+      }
+    }
+    
+    if (!jevClassificationEnabled()) return;
+
+    const now = Date.now();
+    if (now - classifyMinuteStart > 60000) {
+      classifyMinuteStart = now;
+      classifyCountMinute = 0;
+    }
+
+    const toClassify = [];
+    for (const person of roster.people) {
+      if (!person.id) continue;
+      const isWorking = person.status === 'working';
+      
+      let tracker = paneRevisions.get(person.id);
+      if (!tracker || tracker.rev !== person.revision) {
+        tracker = { rev: person.revision, stableTicks: 0, lastClassifiedRev: tracker?.lastClassifiedRev || -1 };
+        paneRevisions.set(person.id, tracker);
+      } else {
+        tracker.stableTicks++;
+      }
+      
+      if (tracker.lastClassifiedRev === person.revision) continue;
+      if (!isWorking && tracker.stableTicks < 2) continue;
+      const lastTime = classifyTimestamps.get(person.id) || 0;
+      if (isWorking && now - lastTime < 60000) continue;
+      
+      toClassify.push(person);
+    }
+    
+    toClassify.sort((a, b) => {
+      const aW = a.status === 'working' ? 1 : 0;
+      const bW = b.status === 'working' ? 1 : 0;
+      return aW - bW;
+    });
+
+    for (const person of toClassify) {
+      if (jevPolling === false) break;
+      if (classifyCountMinute >= 20) break;
+      
       let outputLines = [];
       try {
         const res = await api.request('agent.read', { target: person.id, source: 'visible' });
@@ -2450,12 +2571,51 @@ async function pollJevClassify() {
       } catch {
         continue;
       }
-
+      
+      const text = outputLines.slice(-30).join('\n');
+      const key = `${createHash('sha1').update(text).digest('hex')}:${person.status}`;
+      
+      if (classifyCache.has(key)) {
+        classifyHashes.set(person.id, key);
+        const tracker = paneRevisions.get(person.id);
+        if (tracker) tracker.lastClassifiedRev = person.revision;
+        continue;
+      }
+      
+      classifyCountMinute++;
       const result = await classifyPane(person.id, person.revision, person, outputLines);
+      
+      classifyCache.delete(key);
       classifyCache.set(key, result);
+      if (classifyCache.size > 200) {
+        classifyCache.delete(classifyCache.keys().next().value);
+      }
+      classifyHashes.set(person.id, key);
+      classifyTimestamps.set(person.id, Date.now());
+      const tracker = paneRevisions.get(person.id);
+      if (tracker) tracker.lastClassifiedRev = person.revision;
     }
   } finally {
     jevPolling = false;
     draw();
   }
 }
+
+export const _testHooks = {
+  pollJevClassify,
+  get classifyCache() { return classifyCache; },
+  get classifyHashes() { return classifyHashes; },
+  get classifyCountMinute() { return classifyCountMinute; },
+  set classifyCountMinute(v) { classifyCountMinute = v; },
+  get classifyMinuteStart() { return classifyMinuteStart; },
+  set classifyMinuteStart(v) { classifyMinuteStart = v; },
+  get paneRevisions() { return paneRevisions; },
+  get classifyTimestamps() { return classifyTimestamps; },
+  get notifyPending() { return notifyPending; },
+  get notifyState() { return notifyState; },
+  get roster() { return roster; },
+  set api(v) { api = v; },
+  get jevPolling() { return jevPolling; },
+  set jevPolling(v) { jevPolling = v; },
+  applyJevData
+};

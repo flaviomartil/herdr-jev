@@ -46,6 +46,14 @@ const CHROME_ROWS = 4; // header bar + spacer, spacer + key bar
 // pane ids are `<workspace>:<pane>`, and none of them start with a plus.
 export const HIRE_ID = '+hire';
 
+
+function formatShortActivity(act) {
+  if (!act || act === 'unknown') return null;
+  if (act === 'waiting_approval') return 'approval?';
+  if (act === 'waiting_answer') return 'answer?';
+  return act;
+}
+
 const PHRASE = { blocked: 'need you', working: 'working', done: 'done', idle: 'idle', unknown: 'unsure' };
 const ORDER = ['blocked', 'working', 'done', 'idle', 'unknown'];
 
@@ -435,8 +443,10 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // A working desk whose foreground command herdr could name shows the command
   // instead of the generic scrolling code: same two rows, same twelve cells, but
   // now the monitor says `npm test` and the bar underneath chugs.
-  const scr = person.status === 'working' && person.command
-    ? runningScreen(formatCommand(person.command, person.kind), frame)
+  const shortAct = formatShortActivity(person.jevActivity);
+  const monitorLabel = shortAct ? shortAct : formatCommand(person.command, person.kind);
+  const scr = person.status === 'working' && monitorLabel
+    ? runningScreen(monitorLabel, frame)
     : screen(person.status, frame);
   // Amber pulse so a raised hand catches the eye from across the room.
   const alert = person.status === 'blocked' && frame % 4 < 2;
@@ -486,7 +496,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   if (person.hiredSparkle) plateL.add(' *', { fg: '#ffe6a8', bold: true });
   else if (person.focused) plateL.add(' *', { fg: selected ? '#ffffff' : P.accent, bold: true });
   if (person.jevAttention === 'now') plateL.add(' !', { fg: '#ffb000', bold: true });
-  else if (person.jevAttention === 'soon') plateL.add(' ·', { fg: P.dim });
+  else if (person.jevAttention === 'soon' && (person.status === 'idle' || person.status === 'done')) plateL.add(' ·', { fg: P.dim });
 
   const right = truncate(person.kind, 10);
   const maxBadge = INNER - plateL.w - width(right) - 1;
@@ -1566,7 +1576,9 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
     // "for at least 0s" is just noise on someone we only just laid eyes on.
     const held = view.now - person.since;
     const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held)}`;
-    let statusLine = st.label + dwell;
+    const longAct = person.jevActivity && person.jevActivity !== 'unknown' ? person.jevActivity.replace(/_/g, ' ') : null;
+    const activityLabel = longAct ? `${st.label} · ${longAct}` : formatCommand(person.command, person.kind);
+    let statusLine = (activityLabel || st.label) + dwell;
     if (view.shift && view.shift.onShift >= 1000) {
       const shift = view.shift;
       const parts = [`${formatDuration(shift.onShift)} on shift`];
