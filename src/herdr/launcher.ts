@@ -750,7 +750,7 @@ async function launchStageInHerdrAttempt(input: {
           herdr.getAgent(agentName),
           herdr.readAgent(agentName)
         ]);
-        if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
+        if (screenRes && screenRes.ok) {
           if (requiresTrustConfirmation(screenRes)) {
             return {
               ok: false,
@@ -769,6 +769,8 @@ async function launchStageInHerdrAttempt(input: {
               direction: splitDirection,
             };
           }
+        }
+        if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
           if (state === "idle") {
             const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");

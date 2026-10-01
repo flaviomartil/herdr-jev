@@ -189,5 +189,59 @@ describe("launcher prompt readiness and retry", () => {
     expect(res.ackStatus).toBe("blocked");
     expect(res.trustRequired).toBe(true);
   });
+
+  it("polls for the trust dialog on every tick and returns immediately on appearance", async () => {
+    let tickCount = 0;
+    const fakeClock = { 
+      now: () => 1000000 + tickCount * 500, 
+      sleep: async () => { tickCount++; } 
+    };
+    
+    let readAgentCount = 0;
+    const client = {
+      splitCurrent: async () => commandResult(true, '{"result":{"pane":{"pane_id":"pane-42"}}}'),
+      startAgent: async () => commandResult(true),
+      closePane: async () => commandResult(true),
+      getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"starting"}}}'),
+      readAgent: async () => {
+        readAgentCount++;
+        if (readAgentCount === 3) {
+          return commandResult(true, "Do you trust the contents\nof this project?\n\n> Yes, I trust this\nfolder");
+        }
+        return commandResult(true, "Loading...");
+      },
+      prompt: async () => commandResult(true),
+    };
+    const res = await launchStageInHerdr({ client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock } as any);
+    expect(res.ok).toBe(false);
+    expect(res.ackStatus).toBe("blocked");
+    expect(res.trustRequired).toBe(true);
+    // It should exit exactly on the 3rd readAgent call.
+    expect(readAgentCount).toBe(3);
+    // Which means it slept exactly 2 times (initial check + tick 1 + tick 2). Wait: 
+    // initial check (1) -> loop start -> getAgent/readAgent (2) -> sleep -> loop start -> getAgent/readAgent (3) -> detected!
+    expect(tickCount).toBe(1);
+  });
+
+  it("detects 27-column agy trust dialog from fixture and returns trustRequired", async () => {
+    const fixturePath = require("path").join(process.cwd(), "tests/fixtures/agy-trust-dialog-27cols.txt");
+    const stdout = require("fs").readFileSync(fixturePath, "utf-8");
+    const fakeClock = { now: () => 1000000, sleep: async () => {} };
+    const client = {
+      splitCurrent: async () => commandResult(true, '{"result":{"pane":{"pane_id":"pane-42"}}}'),
+      startAgent: async () => commandResult(true),
+      closePane: async () => commandResult(true),
+      getAgent: async () => commandResult(true, '{"result":{"agent":{"agent_status":"idle"}}}'),
+      readPane: async () => commandResult(true, stdout),
+      readAgent: async () => commandResult(true, stdout),
+      prompt: async () => commandResult(true),
+    };
+    const res = await launchStageInHerdr({ client: "antigravity", stage, layout: "split", herdr: client, handoffPrompt: "hello", clock: fakeClock } as any);
+    expect(res.ok).toBe(false);
+    expect(res.ackStatus).toBe("blocked");
+    expect(res.trustRequired).toBe(true);
+  });
 });
+
+
 
