@@ -9,13 +9,14 @@ import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
 
 export interface LaunchResult {
   ok: boolean;
-  ackStatus?: "acknowledged" | "rejected" | "unknown" | "not_attempted";
+  ackStatus?: "acknowledged" | "rejected" | "unknown" | "not_attempted" | "blocked";
   completionState?: HerdrObservedState | "not_requested";
   completionObserved?: boolean;
   workEvidence?: "not_checked";
   error?: string;
   paneCreated?: boolean;
   promptPending?: boolean;
+  trustRequired?: boolean;
   promptDelivered?: boolean;
   hint?: string;
   agentName?: string;
@@ -730,8 +731,10 @@ async function launchStageInHerdrAttempt(input: {
   if (herdr.readAgent) {
     const screen = await herdr.readAgent(agentName);
     if (!screen.ok || requiresTrustConfirmation(screen)) {
-      return { ok: false, ackStatus: screen.ok ? "rejected" : "unknown", completionState: screen.ok ? "blocked" : "unknown", paneCreated: true, promptPending: true, agentName, paneId, commandText,
-        error: screen.ok ? "Agent requires repository trust confirmation; resolve it in the pane before dispatching work." : "Agent readiness could not be inspected" };
+      if (screen.ok) {
+        return { ok: false, ackStatus: "blocked", completionState: "blocked", paneCreated: true, promptPending: true, trustRequired: true, hint: "confirm trust in the pane, then send the task with peer-message", agentName, paneId, commandText, error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.", direction: splitDirection };
+      }
+      return { ok: false, ackStatus: "unknown", completionState: "unknown", paneCreated: true, promptPending: true, agentName, paneId, commandText, error: "Agent readiness could not be inspected", direction: splitDirection };
     }
   }
   let promptDelivered = false;
@@ -748,6 +751,24 @@ async function launchStageInHerdrAttempt(input: {
           herdr.readAgent(agentName)
         ]);
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
+          if (requiresTrustConfirmation(screenRes)) {
+            return {
+              ok: false,
+              ackStatus: "blocked",
+              completionState: "blocked",
+              completionObserved: false,
+              workEvidence: "not_checked",
+              promptPending: true,
+              trustRequired: true,
+              hint: "confirm trust in the pane, then send the task with peer-message",
+              error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.",
+              paneCreated: true,
+              agentName,
+              paneId,
+              commandText,
+              direction: splitDirection,
+            };
+          }
           const state = readHerdrObservedState(agentRes);
           if (state === "idle") {
             const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
