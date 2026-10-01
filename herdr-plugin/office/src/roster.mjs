@@ -350,6 +350,7 @@ export class Roster {
           head: this.heads.get(id)?.gauge || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
+          revision: a.pane_revision || a.revision || 0,
         };
       })
       .sort((x, y) => seatKey(x, this.seats).localeCompare(seatKey(y, this.seats)));

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { classifyPane } from "./src/jev-classify.mjs";
 // Herdr Office: your agents, drawn as people at desks.
 //
 // Runs as a Herdr plugin pane entrypoint (see herdr-plugin.toml) but works
@@ -93,6 +94,7 @@ const OWN_PANE = process.env.HERDR_PANE_ID || '';
 const herdrJevBin = process.env.HERDR_JEV_BIN || 'herdr-jev';
 const JEV_POLL_MS = 3000;
 let jevCache = new Map();
+let classifyCache = new Map();
 let lastJevPoll = 0;
 let swarmPanel = null;
 let jevAgentsCache = new Map();
@@ -322,6 +324,13 @@ function applyJevData(people = roster.people) {
     }
     const subs = getSubagentsFor(person.id);
     person.swarm = subs;
+    const cls = classifyCache.get(`${person.id}:${person.revision}`);
+    if (cls) {
+      person.jevState = cls.state;
+      person.jevAttention = cls.attention;
+      person.jevConfidence = cls.confidence;
+      person.jevBlockedReason = cls.blockedReason;
+    }
     person.swarmBadge = aggregateSwarmBadge(subs);
   }
 }
@@ -1055,6 +1064,7 @@ async function refresh() {
     refreshCommands();
     refreshBranches();
     refreshDirt();
+    pollJevClassify();
     syncTitle();
     nudge();
     if (NOTIFY) {
@@ -1325,7 +1335,10 @@ function move(dx, dy) {
 }
 
 function nextRaisedHand() {
-  const raised = floorPeople().filter((p) => p.status === 'blocked');
+  const raised = floorPeople().filter((p) => p.status === 'blocked').sort((a, b) => {
+    const score = (p) => p.jevAttention === 'now' ? 2 : (p.jevAttention === 'soon' ? 1 : 0);
+    return score(b) - score(a);
+  });
   if (!raised.length) {
     note(terms(filter).length ? 'nobody matching that has a hand up' : 'nobody has a hand up');
     return;
@@ -2397,4 +2410,39 @@ process.on('uncaughtException', (err) => quit(1, `herdr-office crashed: ${err.st
 
 if (process.env.HERDR_OFFICE_TEST_POLL !== '1') {
   main();
+}
+
+
+
+
+async function pollJevClassify() {
+  if (process.env.HERDR_JEV_OFFICE_JEV !== '1') return;
+  if (DEMO) return;
+  if (jevPolling) return;
+
+  const due = roster.people.filter(p => !classifyCache.has(`${p.id}:${p.revision}`));
+  if (due.length === 0) return;
+
+  jevPolling = true;
+  try {
+    for (const person of due) {
+      if (jevPolling === false) break; // if someone else cleared it?
+      const key = `${person.id}:${person.revision}`;
+      if (classifyCache.has(key)) continue;
+
+      let outputLines = [];
+      try {
+        const res = await api.request('agent.read', { target: person.id, source: 'visible' });
+        outputLines = cleanOutput(res?.read?.text ?? '');
+      } catch {
+        continue;
+      }
+
+      const result = await classifyPane(person.id, person.revision, person, outputLines);
+      classifyCache.set(key, result);
+    }
+  } finally {
+    jevPolling = false;
+    draw();
+  }
 }

@@ -404,7 +404,8 @@ function resolveRunBadge(person, frame) {
 }
 
 function tile(person, { selected, frame, now, lifted = false, dropTarget = false, wall = P.wall }) {
-  const st = status(person.status);
+  const jevState = person.jevConfidence >= 0.7 && person.jevState && person.jevState !== "unknown" ? person.jevState : person.status;
+  const st = status(jevState);
   const who = identity(person.id);
   const body = pose(person.status, frame);
   // A working desk whose foreground command herdr could name shows the command
@@ -460,6 +461,8 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   plateL.add(truncate(person.name, 12), { fg: plateFg, bold: true });
   if (person.hiredSparkle) plateL.add(' *', { fg: '#ffe6a8', bold: true });
   else if (person.focused) plateL.add(' *', { fg: selected ? '#ffffff' : P.accent, bold: true });
+  if (person.jevAttention === 'now') plateL.add(' !', { fg: '#ffb000', bold: true });
+  else if (person.jevAttention === 'soon') plateL.add(' ·', { fg: P.dim });
 
   const right = truncate(person.kind, 10);
   const maxBadge = INNER - plateL.w - width(right) - 1;
@@ -1514,7 +1517,7 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   // Where the panel floats on the carpet. Needed up here, not just at the end,
   // because the answer buttons have to report screen coordinates.
   const left = Math.max(0, Math.floor((size.cols - PW) / 2));
-  const st = person ? status(person.status) : status('unknown');
+  const st = person ? status(person.jevConfidence >= 0.7 && person.jevState && person.jevState !== "unknown" ? person.jevState : person.status) : status('unknown');
   const chrome = { borderFg: person ? st.fg : P.wall, bold: false };
   const row = (inner, spans = []) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg: P.cubicle });
   const body = [];
