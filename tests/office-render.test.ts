@@ -6,7 +6,11 @@ import { rmSync, mkdirSync, writeFileSync } from 'fs';
 const OFFICE_SCRIPT = join(import.meta.dir, '..', 'herdr-plugin', 'office', 'office.mjs');
 const FIXTURES_DIR = join(import.meta.dir, 'fixtures', 'office');
 const CLOCK = 1700000000000;
-const STATE_DIR = join(import.meta.dir, '..', '.tmp-office-state');
+
+import { tmpdir } from 'os';
+import { mkdtempSync } from 'fs';
+const STATE_DIR = mkdtempSync(join(tmpdir(), 'office-test-'));
+
 
 beforeAll(() => {
   rmSync(STATE_DIR, { recursive: true, force: true });
@@ -27,7 +31,7 @@ afterAll(() => {
 
 function runOffice(args: string[], columns: number) {
   const res = spawnSync('node', [OFFICE_SCRIPT, '--once', `--clock=${CLOCK}`, ...args], {
-    env: { ...process.env, COLUMNS: String(columns), HERDR_JEV_STATE_DIR: STATE_DIR, NO_COLOR: '1' }
+    env: { ...process.env, COLUMNS: String(columns), HERDR_JEV_STATE_DIR: STATE_DIR, NO_COLOR: '1', HERDR_SOCKET_PATH: '/fake/sock', HERDR_ENV: 'live', HERDR_PANE_ID: 'w1:p1', HERDR_TAB_ID: 't1', HERDR_WORKSPACE_ID: 'w1', HERDR_PLUGIN_CONTEXT_JSON: '{}' }
   });
   if (res.status !== 0) throw new Error(res.stderr.toString());
   return res.stdout.toString('utf8');
@@ -80,10 +84,10 @@ test('reduced motion (two frames at different clocks are identical)', () => {
   // If reduced motion is on, the clock tick does not show seconds, so a small time delta produces identical output
   for (const w of widths) {
     const res1 = spawnSync('node', [OFFICE_SCRIPT, '--once', `--clock=${CLOCK}`, '--roster', join(FIXTURES_DIR, 'blocked.json'), '--reduced-motion'], {
-      env: { ...process.env, COLUMNS: String(w), HERDR_JEV_STATE_DIR: STATE_DIR, NO_COLOR: '1' }
+      env: { ...process.env, COLUMNS: String(w), HERDR_JEV_STATE_DIR: STATE_DIR, NO_COLOR: '1', HERDR_SOCKET_PATH: '/fake/sock', HERDR_ENV: 'live', HERDR_PANE_ID: 'w1:p1', HERDR_TAB_ID: 't1', HERDR_WORKSPACE_ID: 'w1', HERDR_PLUGIN_CONTEXT_JSON: '{}' }
     }).stdout.toString('utf8');
     const res2 = spawnSync('node', [OFFICE_SCRIPT, '--once', `--clock=${CLOCK + 1000}`, '--roster', join(FIXTURES_DIR, 'blocked.json'), '--reduced-motion'], {
-      env: { ...process.env, COLUMNS: String(w), HERDR_JEV_STATE_DIR: STATE_DIR, NO_COLOR: '1' }
+      env: { ...process.env, COLUMNS: String(w), HERDR_JEV_STATE_DIR: STATE_DIR, NO_COLOR: '1', HERDR_SOCKET_PATH: '/fake/sock', HERDR_ENV: 'live', HERDR_PANE_ID: 'w1:p1', HERDR_TAB_ID: 't1', HERDR_WORKSPACE_ID: 'w1', HERDR_PLUGIN_CONTEXT_JSON: '{}' }
     }).stdout.toString('utf8');
     expect(res1).toEqual(res2);
   }

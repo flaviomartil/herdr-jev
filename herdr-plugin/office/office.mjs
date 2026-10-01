@@ -49,6 +49,17 @@ const ONCE = argv.has('--once');
 const argvList = process.argv.slice(2);
 const ROSTER_ARG = argvList.includes('--roster') ? argvList[argvList.indexOf('--roster') + 1] : null;
 const STATE_ARG = argvList.includes('--state') ? argvList[argvList.indexOf('--state') + 1] : null;
+
+if (ROSTER_ARG) {
+  delete process.env.HERDR_SOCKET_PATH;
+  delete process.env.HERDR_ENV;
+  delete process.env.HERDR_PANE_ID;
+  delete process.env.HERDR_TAB_ID;
+  delete process.env.HERDR_WORKSPACE_ID;
+  delete process.env.HERDR_PLUGIN_CONTEXT_JSON;
+  delete process.env.HERDR_JEV_SOURCE_PANE_ID;
+}
+
 let panelArg = null;
 let detailArg = null;
 for (let i = 0; i < process.argv.length; i++) {
@@ -143,7 +154,7 @@ function recordDepartedAgent(person, shift, now) {
     // ignore
   }
 }
-let endedView = false;
+let endedView = argv.has('--ended') || (argvList.includes('--view') && argvList[argvList.indexOf('--view') + 1] === 'ended');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
 // action's arguments should not leave somebody with a blank pane and no explanation.
@@ -167,7 +178,7 @@ let lastJevPoll = 0;
 let swarmPanel = null;
 let jevAgentsCache = new Map();
 let jevPolling = false;
-let disconnectedSince = 0;
+let disconnectedSince = STATE_ARG === 'disconnected' ? Date.now() - 5000 : 0;
 
 function getSubagentsFor(primaryId) {
   if (DEMO) {
@@ -801,9 +812,18 @@ function quit(code = 0, msg) {
 // The header counts what is on the floor, which with a filter on is the filtered
 // set. Counting the whole room under a filtered floor plan would have the header
 // and the desks under it disagreeing about how many people are stuck.
-function countOf(people) {
-  const tally = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
-  for (const p of people) tally[p.status] = (tally[p.status] ?? 0) + 1;
+function countOf(people, now) {
+  const tally = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0, longestWait: 0 };
+  for (const p of people) {
+    tally[p.status] = (tally[p.status] ?? 0) + 1;
+    if ((p.status === 'blocked' || p.jevAttention === 'now') && p.jevWaitingSince) {
+      const wait = now - p.jevWaitingSince;
+      if (wait > tally.longestWait) tally.longestWait = wait;
+    } else if (p.status === 'blocked' && p.since) {
+      const wait = now - p.since;
+      if (wait > tally.longestWait) tally.longestWait = wait;
+    }
+  }
   return tally;
 }
 
@@ -825,7 +845,7 @@ function view() {
     // its view rather than holding a clock it can ask questions of.
     shift: detail ? clocks.desk(detail.id) : null,
     stats: clocks.office(),
-    counts: countOf(people),
+    counts: countOf(people, now),
     total: roster.people.length,
     filter,
     filtering,
@@ -2530,11 +2550,10 @@ async function main() {
       try {
         const fixture = JSON.parse(readFileSync(ROSTER_ARG, 'utf8'));
         const raw = STATE_ARG === 'empty' ? [] : (fixture.agents || []);
+        if (fixture.ended) endedLog = fixture.ended;
         const { primaries } = classifyPanes(raw, new Map());
         roster.update(primaries);
-        if (STATE_ARG === 'disconnected') disconnectedSince = getNow() - 5000;
-        if (argv.has('--ended')) endedView = true;
-        updateScopeFromRoster();
+                updateScopeFromRoster();
         clocks.observe(roster.people);
       } catch (err) {
         process.stderr.write(`could not load --roster ${ROSTER_ARG}: ${err.message}\n`);
