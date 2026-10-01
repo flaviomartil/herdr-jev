@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -15,6 +15,18 @@ import {
   gridStatePath,
   type GridWorkerRecord,
 } from "../src/herdr/launcher.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
+
+let testEnv: { stateDir: string; cleanup: () => void };
+
+beforeEach(() => {
+  testEnv = createTestStateDir();
+});
+
+afterEach(() => {
+  testEnv?.cleanup();
+  assertNoRealHomeStateLeaks();
+});
 
 test("buildAgentsView groups agents by git toplevel basename", async () => {
   const workers: GridWorkerRecord[] = [
