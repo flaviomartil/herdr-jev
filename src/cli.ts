@@ -28,6 +28,7 @@ import { checkHarnessStatus, externalRun, readUsageQuota } from "./harness/bridg
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
 import { resolveHerdrContext } from "./herdr/context.js";
 import { resolvePeerStage, converseWithPeer } from "./herdr/peer.js";
+import { executeStandupCommand } from "./herdr/standup.js";
 import {
   loadBaseCatalog,
   loadUserOverrides,
@@ -483,6 +484,25 @@ program.command("peer-read <agent>")
   .option("--lines <n>", "Terminal snapshot line limit", "2000")
   .option("--timeout-ms <ms>", "Peer wait deadline", "900000")
   .action(async (agent: string, options: { wait?: boolean; lines: string; timeoutMs: string }) => console.log(await converseWithPeer({ target: agent, wait: options.wait, lines: Number(options.lines), timeoutMs: Number(options.timeoutMs) })));
+
+program.command("standup")
+  .description("Send the instruction of the day to eligible idle agents")
+  .option("--file <path>", "Path to standup markdown file")
+  .option("--auto", "Run unattended with skip guards and idempotency")
+  .option("--dry-run", "Print plan without sending")
+  .option("--yes", "Send instructions without confirmation")
+  .option("--force", "Run even if already ran today")
+  .option("--json", "Output result in JSON format")
+  .action(async (options: {
+    file?: string;
+    auto?: boolean;
+    dryRun?: boolean;
+    yes?: boolean;
+    force?: boolean;
+    json?: boolean;
+  }) => {
+    await executeStandupCommand(options);
+  });
 
 // Models Subcommand
 const modelsCommand = program.command("models").description("Manage client models and fallback cascades");
