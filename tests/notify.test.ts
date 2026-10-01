@@ -1,7 +1,19 @@
 import { expect, test } from "bun:test";
 import { handleNotifyCommand } from "../src/herdr/notify.ts";
 import { join } from "node:path";
-import { writeFileSync, existsSync, rmSync, mkdirSync, readFileSync } from "node:fs";
+import { writeFileSync, existsSync, rmSync, mkdirSync, readFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { beforeAll, afterAll } from "bun:test";
+
+
+let stateDir: string;
+beforeAll(() => {
+  stateDir = mkdtempSync(join(tmpdir(), 'herdr-jev-notify-'));
+  process.env.HERDR_JEV_STATE_DIR = stateDir;
+});
+afterAll(() => {
+  try { rmSync(stateDir, { recursive: true, force: true }); } catch (e) {}
+});
 
 test("notify skips when attention is not now", async () => {
   const runner = async () => ({ ok: true, stdout: "" });
@@ -25,9 +37,7 @@ test("notify uses cooldowns per pane", async () => {
   process.env.HERDR_JEV_NOTIFY = "1";
   const runner = async () => ({ ok: true, stdout: "" });
   
-  const stateDir = join(import.meta.dir, "temp-notify");
   mkdirSync(join(stateDir, "notify"), { recursive: true });
-  process.env.HERDR_JEV_STATE_DIR = stateDir;
   
   const now = Date.now();
   writeFileSync(join(stateDir, "notify", "test-pane-1.json"), JSON.stringify({ time: now - 5000 }));
@@ -52,7 +62,7 @@ test("notify uses cooldowns per pane", async () => {
 test("notify escalation blocked requires valid agent", async () => {
   process.env.HERDR_JEV_NOTIFY = "1";
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
-  try { rmSync(process.env.HERDR_JEV_STATE_DIR!, { recursive: true }); } catch (e) {}
+  try { rmSync(stateDir, { recursive: true, force: true }); } catch (e) {}
   
   let runnerArgs: string[] = [];
   const runner = async (args: readonly string[]) => {
@@ -81,7 +91,7 @@ test("notify release missing makes no herdr call", async () => {
   let calls = 0;
   const runner = async () => { calls++; return { ok: true, stdout: "" }; };
   
-  const stateDir = process.env.HERDR_JEV_STATE_DIR!;
+  
   const notifyDir = join(stateDir, "notify");
   mkdirSync(notifyDir, { recursive: true });
   writeFileSync(join(notifyDir, "escalations.json"), JSON.stringify([]));
@@ -102,7 +112,7 @@ test("notify release stale uses pane get", async () => {
     return { ok: true, stdout: "" };
   };
   
-  const stateDir = process.env.HERDR_JEV_STATE_DIR!;
+  
   const notifyDir = join(stateDir, "notify");
   const escFile = join(notifyDir, "escalations.json");
   writeFileSync(escFile, JSON.stringify([
@@ -125,7 +135,7 @@ test("notify release all with records", async () => {
     return { ok: true, stdout: "" };
   };
   
-  const stateDir = process.env.HERDR_JEV_STATE_DIR!;
+  
   const notifyDir = join(stateDir, "notify");
   const escFile = join(notifyDir, "escalations.json");
   writeFileSync(escFile, JSON.stringify([
@@ -146,7 +156,7 @@ test("notify release all without records", async () => {
   let calls = 0;
   const runner = async () => { calls++; return { ok: true, stdout: "" }; };
   
-  const stateDir = process.env.HERDR_JEV_STATE_DIR!;
+  
   const notifyDir = join(stateDir, "notify");
   const escFile = join(notifyDir, "escalations.json");
   writeFileSync(escFile, JSON.stringify([]));
