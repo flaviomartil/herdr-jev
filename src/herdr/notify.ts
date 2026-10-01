@@ -12,10 +12,11 @@ export interface NotifyOptions {
   confidence?: number;
   nativeStatus?: string;
   agent?: string;
+  task?: string;
   release?: boolean;
   releaseStale?: boolean;
   dryRun?: boolean;
-  now?: number; // for testing
+  now?: number;
 }
 
 function getStateDir() {
@@ -35,14 +36,14 @@ function getReasonText(reason: string) {
   }
 }
 
-export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[] }> {
+export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[]; dryRun?: boolean; wouldSend?: string[] }> {
   if (opts.releaseStale) {
     return handleReleaseStale(runner, opts.now || Date.now());
   }
   
   if (opts.release) {
     if (!opts.pane) return { sent: false, skippedReason: "no pane specified for release", channels: [] };
-    return handleRelease(opts.pane, opts.agent || "unknown", runner);
+    return handleRelease(opts.pane, runner);
   }
 
   const enabled = process.env.HERDR_JEV_NOTIFY;
@@ -54,7 +55,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     return { sent: false, skippedReason: "attention not now", channels: [] };
   }
 
-  if (!opts.pane || !opts.name || !opts.project || !opts.reason) {
+  if (!opts.pane || !opts.project || !opts.reason) {
     return { sent: false, skippedReason: "missing required arguments", channels: [] };
   }
 
@@ -79,73 +80,98 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   }
 
   const reasonText = getReasonText(opts.reason);
-  const title = `${opts.name} precisa de você`;
-  const body = `${opts.project}: ${reasonText}`;
+  const title = `${opts.agent || 'agent'} em ${opts.project} precisa de você`;
+  const body = opts.task ? `${opts.task.slice(0, 80)}: ${reasonText}` : reasonText;
   const channels: string[] = [];
 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
 
   if (!opts.dryRun) {
-    // Channel 1: herdr notification
+    writeFileSync(stateFile, JSON.stringify({ time: now }));
+
     await runner([herdrBin, "notification", "show", title, "--body", body, "--sound", "request"]);
     channels.push("herdr");
 
-    // Channel 2: hook
     const hook = process.env.HERDR_JEV_NOTIFY_HOOK;
-    if (hook && existsSync(hook)) {
-      const child = spawn(hook, [title, body, opts.pane, opts.reason], { stdio: "ignore", detached: true });
-      const timer = setTimeout(() => {
-        try { child.kill(); } catch (e) {}
-      }, 5000);
-      timer.unref?.();
-      child.on("close", () => clearTimeout(timer));
-      child.unref();
+    if (hook) {
+      await new Promise<void>((resolve) => {
+        const child = spawn(hook, [title, body, opts.pane!, opts.reason!], { stdio: "ignore" });
+        let done = false;
+        const complete = () => {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          try { child.kill(); } catch (e) {}
+          complete();
+        }, 5000);
+        child.on("error", complete);
+        child.on("close", complete);
+      });
       channels.push("hook");
     }
-
-    // Persist cooldown
-    writeFileSync(stateFile, JSON.stringify({ time: now }));
+  } else {
+    channels.push("herdr");
+    if (process.env.HERDR_JEV_NOTIFY_HOOK) {
+      channels.push("hook");
+    }
   }
 
-  // Escalation
   if (process.env.HERDR_JEV_ESCALATE_BLOCKED === "1") {
     if (
       (opts.reason === "approval" || opts.reason === "question" || opts.reason === "error") &&
       (opts.confidence !== undefined && opts.confidence >= 0.85) &&
-      (opts.nativeStatus === "idle" || opts.nativeStatus === "done" || opts.nativeStatus === "unknown")
+      (opts.nativeStatus === "idle" || opts.nativeStatus === "done" || opts.nativeStatus === "unknown") &&
+      opts.agent && opts.agent !== "unknown"
     ) {
       if (!opts.dryRun) {
-        await runner([herdrBin, "pane", "report-agent", "--source", "herdr-jev", "--agent", opts.agent || "unknown", "--state", "blocked", "--message", reasonText, opts.pane]);
+        await runner([herdrBin, "pane", "report-agent", "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText, opts.pane]);
         const escalationsFile = join(notifyDir, "escalations.json");
         let escalations: any[] = [];
         if (existsSync(escalationsFile)) {
           try { escalations = JSON.parse(readFileSync(escalationsFile, "utf-8")); } catch (e) {}
         }
-        // Remove old entries for same pane
         escalations = escalations.filter((e: any) => e.pane !== opts.pane);
-        escalations.push({ pane: opts.pane, agent: opts.agent || "unknown", time: now });
+        escalations.push({ pane: opts.pane, agent: opts.agent, time: now });
         writeFileSync(escalationsFile, JSON.stringify(escalations));
       }
       channels.push("escalation");
     }
   }
 
+  if (opts.dryRun) {
+    return { sent: false, dryRun: true, wouldSend: channels, channels: [] };
+  }
   return { sent: true, channels };
 }
 
-async function handleRelease(pane: string, agent: string, runner: RunCommand): Promise<{ sent: boolean; channels: string[] }> {
-  const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", agent, pane]);
-  
+async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[] }> {
   const notifyDir = join(getStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
-  if (existsSync(escalationsFile)) {
-    try {
-      let escalations = JSON.parse(readFileSync(escalationsFile, "utf-8"));
-      escalations = escalations.filter((e: any) => e.pane !== pane);
-      writeFileSync(escalationsFile, JSON.stringify(escalations));
-    } catch (e) {}
+  if (!existsSync(escalationsFile)) {
+    return { sent: false, skippedReason: "no escalation", channels: [] };
   }
+
+  let escalations: any[] = [];
+  try {
+    escalations = JSON.parse(readFileSync(escalationsFile, "utf-8"));
+  } catch (e) {
+    return { sent: false, skippedReason: "no escalation", channels: [] };
+  }
+
+  const record = escalations.find((e: any) => e.pane === pane);
+  if (!record) {
+    return { sent: false, skippedReason: "no escalation", channels: [] };
+  }
+
+  const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
+  await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", record.agent, pane]);
+  
+  escalations = escalations.filter((e: any) => e.pane !== pane);
+  writeFileSync(escalationsFile, JSON.stringify(escalations));
+
   return { sent: true, channels: ["release"] };
 }
 
@@ -164,9 +190,15 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
       let shouldRelease = age > 15 * 60 * 1000;
       
       if (!shouldRelease) {
-        const res = await runner([herdrBin, "pane", "layout", esc.pane]);
+        const res = await runner([herdrBin, "pane", "get", esc.pane, "--json"]);
         if (!res.ok) {
           shouldRelease = true;
+        } else {
+          try {
+            JSON.parse(res.stdout);
+          } catch (e) {
+            shouldRelease = true;
+          }
         }
       }
 
