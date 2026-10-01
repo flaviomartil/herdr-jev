@@ -149,12 +149,11 @@ export function classifyHerdrCommandFailure(result: HerdrCommandResult): "reject
 }
 
 export function requiresTrustConfirmation(result: HerdrCommandResult): boolean {
-  const clean = result.stdout.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-  return /^\s*(?:[❯>]\s*)?\d+[.)]\s*Trust and continue\s*$/im.test(clean)
-    || (/^\s*(?:[❯>]\s*)?(?:\d+[.)]\s*)?Yes, I trust (?:this|the) (?:folder|directory|files)\s*$/im.test(clean)
-      && /Enter to confirm|Press enter/i.test(clean))
-    || /Do you trust this folder\?/i.test(clean)
-    || /Trust and continue/i.test(clean);
+  const clean = result.stdout.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\s+/g, " ");
+  return /Trust and continue/i.test(clean) ||
+         (/Yes, I trust (?:this|the) (?:folder|directory|files)/i.test(clean) && /enter (?:to )?confirm|press enter/i.test(clean)) ||
+         /Do you trust this folder\?/i.test(clean) ||
+         /Do you trust the contents of this project\?/i.test(clean);
 }
 
 function waitResult(result: HerdrCommandResult): HerdrCommandResult {
