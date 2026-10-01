@@ -345,6 +345,7 @@ function applyJevData(people = roster.people) {
       person.jevAttention = cls.attention;
       person.jevConfidence = cls.confidence;
       person.jevBlockedReason = cls.blockedReason;
+      person.jevBlockedReasonConfidence = cls.blockedReasonConfidence;
       person.jevActivity = cls.activity;
     }
     person.swarmBadge = aggregateSwarmBadge(subs);
@@ -359,30 +360,28 @@ function applyJevData(people = roster.people) {
       if ((attentionChanged || blockedChanged) && !person.focused) {
          if (state.rev !== person.revision) {
              state.rev = person.revision;
-             const project = person.cwd ? person.cwd.split('/').pop() : 'Project';
-             const taskTitle = (person.title || '').substring(0, 80);
-             notifyPending.push({
-               args: [
-                 'notify', '--pane', person.id, '--project', project, '--task', taskTitle,
-                 '--attention', person.status === 'blocked' ? 'now' : (person.jevAttention || 'none'), '--reason', person.jevBlockedReason || 'none',
-                 '--confidence', (person.jevConfidence || 0).toString(), '--native-status', person.status || 'unknown',
-                 '--jev-state', person.jevState || 'unknown', '--reason-confidence', (person.jevBlockedReasonConfidence || 0).toString(),
-                 '--agent', person.kind || 'unknown', '--json'
-               ],
-               onResult: (res) => {
-                 if (res && res.channels && res.channels.includes('escalation')) {
-                   state.escalatedRev = person.revision;
+             import('./src/notify-args.mjs').then(({ buildNotifyArgs }) => {
+               notifyPending.push({
+                 args: buildNotifyArgs(person),
+                 onResult: (res) => {
+                   if (res && res.channels && res.channels.includes('escalation')) {
+                     state.escalatedRev = person.revision;
+                   }
                  }
-               }
+               });
              });
          }
       }
       
-      if (process.env.HERDR_JEV_ESCALATE_BLOCKED && state.escalatedRev !== -1 && state.escalatedRev !== person.revision) {
+      if (process.env.HERDR_JEV_ESCALATE_BLOCKED === '1' && state.escalatedRev !== -1 && state.escalatedRev !== person.revision) {
          notifyPending.push({
-           args: ['notify', '--release', '--pane', person.id, '--agent', person.kind || 'unknown', '--json']
+           args: ['notify', '--release', '--pane', person.id, '--agent', person.kind || 'unknown', '--json'],
+           onResult: (res) => {
+             if (res && (res.sent || res.skippedReason === 'no escalation')) {
+               state.escalatedRev = -1;
+             }
+           }
          });
-         state.escalatedRev = -1;
       }
       
       state.attention = person.jevAttention || '';
@@ -711,9 +710,13 @@ function quit(code = 0, msg) {
   events?.close();
   leaveTerminal();
   if (!DEMO && process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
-    try {
-      spawnSync(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore', timeout: 2000 });
-    } catch (e) {}
+    for (const [paneId, state] of notifyState.entries()) {
+      if (state.escalatedRev !== -1) {
+        try {
+          spawnSync(herdrJevBin, ['notify', '--release', '--pane', paneId], { stdio: 'ignore', timeout: 2000 });
+        } catch (e) {}
+      }
+    }
   }
   if (msg) process.stderr.write(`${msg}\n`);
   // The socket stays open just long enough to give the window title back and take
