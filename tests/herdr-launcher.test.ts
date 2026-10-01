@@ -26,20 +26,24 @@ function fakeHerdr(promptResult: HerdrCommandResult, completionResult = commandR
   let promptCalls = 0;
   let closeCalls = 0;
   let waitCalls = 0;
+  let lastPrompt = "";
   return {
     get promptCalls() { return promptCalls; },
     get closeCalls() { return closeCalls; },
     get waitCalls() { return waitCalls; },
     splitCurrent: async () => commandResult(true, JSON.stringify({ result: { pane: { pane_id: "pane-42" } } })),
     startAgent: async () => commandResult(true),
-    prompt: async () => {
+    prompt: async (input) => {
       promptCalls += 1;
+      lastPrompt = input.text;
       return promptResult;
     },
     waitFor: async () => {
       waitCalls += 1;
       return completionResult;
     },
+    readAgent: async () => commandResult(true, lastPrompt || "task synthetic handoff ready"),
+    readPane: async () => commandResult(true, lastPrompt || "task synthetic handoff ready"),
     closePane: async () => {
       closeCalls += 1;
       return commandResult(true);
@@ -245,6 +249,56 @@ describe("Herdr launch acknowledgement", () => {
     expect(timeoutResult.ok).toBe(true);
     expect(timeoutResult.completionState).toBe("timeout");
     expect(timeoutResult.completionObserved).toBe(false);
+  });
+
+  it("sets promptDelivered true when pane output contains prompt prefix", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.readAgent = async () => commandResult(true, "prefix of task running in terminal...");
+    const result = await launchStageInHerdr({
+      client: "cursor",
+      stage,
+      handoffPrompt: "prefix of task",
+      herdr,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ackStatus).toBe("acknowledged");
+    expect(result.promptDelivered).toBe(true);
+  });
+
+  it("sets promptDelivered true when agent status left idle", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.readAgent = async () => commandResult(true, "unrelated banner");
+    herdr.getAgent = async () => commandResult(true, JSON.stringify({ result: { agent: { agent_status: "working" } } }));
+    const result = await launchStageInHerdr({
+      client: "cursor",
+      stage,
+      handoffPrompt: "different prompt",
+      herdr,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ackStatus).toBe("acknowledged");
+    expect(result.promptDelivered).toBe(true);
+  });
+
+  it("returns ackStatus unknown with promptPending true and hint when prompt not confirmed, never resending prompt", async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.readAgent = async () => commandResult(true, "idle screen with banner");
+    herdr.getAgent = async () => commandResult(true, JSON.stringify({ result: { agent: { agent_status: "idle" } } }));
+    const result = await launchStageInHerdr({
+      client: "cursor",
+      stage,
+      handoffPrompt: "expected prompt text",
+      deliveryTimeoutMs: 10,
+      herdr,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ackStatus).toBe("unknown");
+    expect(result.promptPending).toBe(true);
+    expect(result.hint).toBe("prompt not observed; use peer-message");
+    expect(herdr.promptCalls).toBe(1);
   });
 });
 

@@ -16,6 +16,8 @@ export interface LaunchResult {
   error?: string;
   paneCreated?: boolean;
   promptPending?: boolean;
+  promptDelivered?: boolean;
+  hint?: string;
   agentName?: string;
   paneId?: string;
   commandText?: string;
@@ -416,6 +418,7 @@ async function launchStageInHerdrAttempt(input: {
   triage?: TriageDecision;
   waitForCompletion?: boolean;
   completionTimeoutMs?: number;
+  deliveryTimeoutMs?: number;
   agentName?: string;
   layout?: "split" | "tab";
   reuseExisting?: boolean;
@@ -535,6 +538,7 @@ async function launchStageInHerdrAttempt(input: {
         error: screen.ok ? "Agent requires repository trust confirmation; resolve it in the pane before dispatching work." : "Agent readiness could not be inspected" };
     }
   }
+  let promptDelivered = false;
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
     const prompted = await herdr.prompt({
       target: agentName,
@@ -557,6 +561,52 @@ async function launchStageInHerdrAttempt(input: {
         direction: splitDirection,
       };
     }
+    const trimmedPrompt = input.handoffPrompt.trim();
+    const promptPrefix = trimmedPrompt.slice(0, Math.min(trimmedPrompt.length, 32));
+    const timeoutMs = input.deliveryTimeoutMs ?? 8000;
+    const deadline = Date.now() + timeoutMs;
+    while (!promptDelivered) {
+      if (herdr.readAgent || herdr.readPane) {
+        const readResult = herdr.readAgent
+          ? await herdr.readAgent(agentName)
+          : await herdr.readPane!(paneId);
+        if (readResult && readResult.ok) {
+          const output = `${readResult.stdout}\n${readResult.stderr}`;
+          const cleanOutput = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+          const observed = readHerdrObservedState(readResult);
+          if (output.includes(promptPrefix) || cleanOutput.includes(promptPrefix) || (observed !== null && observed !== "idle" && observed !== "unknown")) {
+            promptDelivered = true;
+            break;
+          }
+        }
+      }
+      if (herdr.getAgent) {
+        const agentResult = await herdr.getAgent(agentName);
+        if (agentResult && agentResult.ok) {
+          const observed = readHerdrObservedState(agentResult);
+          if (observed !== null && observed !== "idle" && observed !== "unknown") {
+            promptDelivered = true;
+            break;
+          }
+        }
+      }
+      if (Date.now() >= deadline) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
+    }
+    if (!promptDelivered) {
+      return {
+        ok: false,
+        ackStatus: "unknown",
+        promptPending: true,
+        hint: "prompt not observed; use peer-message",
+        error: "prompt not observed; use peer-message",
+        paneCreated: true,
+        agentName,
+        paneId,
+        commandText,
+        direction: splitDirection,
+      };
+    }
   }
 
   if (input.waitForCompletion) {
@@ -569,6 +619,7 @@ async function launchStageInHerdrAttempt(input: {
       completionObserved: completionState === "done" || completionState === "blocked" || completionState === "unknown",
       workEvidence: "not_checked",
       paneCreated: true,
+      promptDelivered: promptDelivered || undefined,
       agentName,
       paneId,
       commandText,
@@ -583,6 +634,7 @@ async function launchStageInHerdrAttempt(input: {
     completionObserved: false,
     workEvidence: "not_checked",
     paneCreated: true,
+    promptDelivered: promptDelivered || undefined,
     agentName,
     paneId,
     commandText,

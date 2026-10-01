@@ -11,16 +11,83 @@ export async function resolveHerdrContext(input: {
   const env = options.env ?? process.env;
   let pluginContext: any;
   try { pluginContext = JSON.parse(env.HERDR_PLUGIN_CONTEXT_JSON ?? "{}"); } catch {}
-  const sourcePaneId = input.sourcePaneId ?? env.HERDR_JEV_SOURCE_PANE_ID ?? pluginContext?.focused_pane_id ?? env.HERDR_PANE_ID;
+  const configuredPaneId = input.sourcePaneId || env.HERDR_JEV_SOURCE_PANE_ID;
+  let sourcePaneId = configuredPaneId || pluginContext?.focused_pane_id || env.HERDR_PANE_ID;
   if (env.HERDR_ENV === "1" && !sourcePaneId) throw new Error("Caller pane unavailable; pass --source-pane or sourcePaneId explicitly");
   const runCommand = options.runCommand ?? createProcessCommandAdapter();
   let agent: any;
-  if (env.HERDR_ENV === "1" && sourcePaneId) {
-    const result = await runCommand([env.HERDR_BIN_PATH || "herdr", "agent", "get", sourcePaneId]);
-    if (result.ok) {
-      try { agent = JSON.parse(result.stdout).result?.agent; } catch {}
+  if (env.HERDR_ENV === "1") {
+    const triedIds: string[] = [];
+    const tryPane = async (id: string | undefined): Promise<any | undefined> => {
+      if (!id || triedIds.includes(id)) return undefined;
+      triedIds.push(id);
+      const res = await runCommand([env.HERDR_BIN_PATH || "herdr", "agent", "get", id]);
+      if (res.ok) {
+        try {
+          const parsed = JSON.parse(res.stdout);
+          const a = parsed.result?.agent ?? parsed.agent;
+          if (a && (!a.pane_id || a.pane_id === id)) return a;
+        } catch {}
+      }
+      return undefined;
+    };
+    if (configuredPaneId) {
+      agent = await tryPane(configuredPaneId);
+      if (agent) sourcePaneId = configuredPaneId;
     }
-    if (!agent || (agent.pane_id && agent.pane_id !== sourcePaneId)) throw new Error(`Cannot resolve source pane ${sourcePaneId}; select the actual caller pane`);
+    if (!agent && pluginContext?.focused_pane_id) {
+      agent = await tryPane(pluginContext.focused_pane_id);
+      if (agent) sourcePaneId = pluginContext.focused_pane_id;
+    }
+    if (!agent) {
+      const currentRes = await runCommand([env.HERDR_BIN_PATH || "herdr", "pane", "current"]);
+      let currentId: string | undefined;
+      if (currentRes.ok) {
+        try {
+          const parsed = JSON.parse(currentRes.stdout);
+          currentId = parsed.result?.pane?.pane_id ?? parsed.result?.pane_id ?? parsed.pane?.pane_id ?? parsed.pane_id ?? parsed.result?.agent?.pane_id ?? parsed.agent?.pane_id ?? parsed.result?.id ?? parsed.id;
+        } catch {}
+        if (!currentId) {
+          const trimmed = currentRes.stdout.trim();
+          if (/^[a-zA-Z0-9:_-]+$/.test(trimmed)) currentId = trimmed;
+        }
+      }
+      if (!currentId && env.HERDR_PANE_ID) currentId = env.HERDR_PANE_ID;
+      if (currentId) {
+        agent = await tryPane(currentId);
+        if (agent) sourcePaneId = currentId;
+      }
+    }
+    if (!agent) {
+      let listRes = await runCommand([env.HERDR_BIN_PATH || "herdr", "agent", "list"]);
+      if (!listRes.ok) listRes = await runCommand([env.HERDR_BIN_PATH || "herdr", "api", "snapshot"]);
+      if (listRes.ok) {
+        let agents: any[] = [];
+        try {
+          const parsed = JSON.parse(listRes.stdout);
+          agents = parsed.result?.agents ?? parsed.result?.snapshot?.agents ?? parsed.snapshot?.agents ?? parsed.agents ?? [];
+        } catch {}
+        if (Array.isArray(agents)) {
+          const targetCwd = pluginContext?.focused_pane_cwd ?? process.cwd();
+          const targetClient = (input.client === "agy" ? "antigravity" : input.client) ?? "claude";
+          const aliases = loadClientAliases();
+          const match = agents.find((a: any) => {
+            const aCwd = a.foreground_cwd || a.cwd;
+            const aClient = a.agent === "agy" ? "antigravity" : a.agent;
+            const cwdMatches = Boolean(aCwd && targetCwd && aCwd.replace(/\/+$/, "") === targetCwd.replace(/\/+$/, ""));
+            const clientMatches = aClient === targetClient || aliases[targetClient] === aClient || a.agent === targetClient;
+            return Boolean(a.pane_id && cwdMatches && clientMatches);
+          });
+          if (match?.pane_id) {
+            agent = await tryPane(match.pane_id);
+            if (agent) sourcePaneId = match.pane_id;
+          }
+        }
+      }
+    }
+    if (!agent) {
+      throw new Error(`Cannot resolve source pane (tried ${triedIds.join(", ")}); select the actual caller pane`);
+    }
   }
   const observedClient = agent?.agent === "agy" ? "antigravity" : agent?.agent;
   const requestedClient = input.client === "agy" ? "antigravity" : input.client;
