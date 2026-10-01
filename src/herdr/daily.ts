@@ -6,6 +6,7 @@ import { listRunHistory, runStateSummary, type RunHistoryEntry } from "../orches
 import { lastMeaningfulLine, redactSecrets } from "./pane-text.js";
 import { defaultGitRunner, type GitRunner } from "./agents.js";
 import { createProcessCommandAdapter, type HerdrClient, type RunCommand } from "./client.js";
+import { resolveStateDir } from "./state-dir.js";
 
 export interface DailyAgentItem {
   project: string;
@@ -293,7 +294,7 @@ export async function buildDailyReport(
             repoName,
             branch,
             commitsCount: commits.length,
-            commitSubjects: commits.slice(0, 3).map(sanitizeText),
+            commitSubjects: commits.slice(0, 3).map((s) => sanitizeText(redactSecrets(s))),
             uncommittedCount,
           };
         })(),
@@ -631,7 +632,7 @@ export function writeDailyMarkdown(
   stateDir?: string,
   options?: boolean | { plain?: boolean },
 ): string {
-  const dir = stateDir ?? process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev");
+  const dir = stateDir ?? resolveStateDir();
   const dailyDir = join(dir, "daily");
   mkdirSync(dailyDir, { recursive: true, mode: 0o700 });
   const date = report.date;
