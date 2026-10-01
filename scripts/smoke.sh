@@ -4,6 +4,14 @@ set -u
 FAILED=0
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLI="$REPO_DIR/src/cli.ts"
+CLI_BIN="${HERDR_JEV_CLI:-}"
+run_cli() {
+  if [ -n "$CLI_BIN" ]; then
+    $CLI_BIN "$@"
+  else
+    bun "$CLI" "$@"
+  fi
+}
 
 TMP_STATE_DIR="$(mktemp -d -t herdr-jev-smoke-state-XXXXXX)"
 export HERDR_JEV_STATE_DIR="$TMP_STATE_DIR"
@@ -75,7 +83,7 @@ else
 fi
 
 if [ $HERDR_REACHABLE -eq 1 ]; then
-  OVERVIEW_OUT=$(bun "$CLI" overview --json 2>/dev/null || true)
+  OVERVIEW_OUT=$(run_cli overview --json 2>/dev/null || true)
   if node -e '
     try {
       const raw = process.argv[1];
@@ -104,7 +112,7 @@ else
 fi
 
 if [ $HERDR_REACHABLE -eq 1 ]; then
-  AGENTS_OUT=$(bun "$CLI" agents --json 2>/dev/null || true)
+  AGENTS_OUT=$(run_cli agents --json 2>/dev/null || true)
   if node -e '
     try {
       const raw = process.argv[1];
@@ -127,7 +135,7 @@ else
   echo "skip agents --json"
 fi
 
-RUNS_OUT=$(bun "$CLI" runs list --json --limit 1 2>/dev/null || true)
+RUNS_OUT=$(run_cli runs list --json --limit 1 2>/dev/null || true)
 if node -e '
   try {
     const raw = process.argv[1];
@@ -150,8 +158,8 @@ else
 fi
 
 if [ $HERDR_REACHABLE -eq 1 ]; then
-  DAILY_JSON_OUT=$(bun "$CLI" daily --json 2>/dev/null || true)
-  DAILY_MD_OUT=$(bun "$CLI" daily --md 2>/dev/null || true)
+  DAILY_JSON_OUT=$(run_cli daily --json 2>/dev/null || true)
+  DAILY_MD_OUT=$(run_cli daily --md 2>/dev/null || true)
   if node -e '
     try {
       const jsonRaw = process.argv[1];
@@ -190,7 +198,7 @@ if [ $HERDR_REACHABLE -eq 1 ]; then
   TMP_STANDUP_FILE="$(mktemp -t standup-smoke-XXXXXX.md)"
   echo "Smoke standup prompt" > "$TMP_STANDUP_FILE"
   STANDUP_BEFORE_FILES=$(ls -A "$TMP_STATE_DIR" 2>/dev/null || true)
-  STANDUP_OUT=$(bun "$CLI" standup --file "$TMP_STANDUP_FILE" --dry-run --json 2>/dev/null || true)
+  STANDUP_OUT=$(run_cli standup --file "$TMP_STANDUP_FILE" --dry-run --json 2>/dev/null || true)
   STANDUP_AFTER_FILES=$(ls -A "$TMP_STATE_DIR" 2>/dev/null || true)
   rm -f "$TMP_STANDUP_FILE"
 
@@ -220,7 +228,7 @@ else
   echo "skip standup --dry-run --json"
 fi
 
-STANDUP_AUTO_OUT=$(bun "$CLI" standup --auto --file "/nonexistent/standup-path-smoke-999.md" 2>/dev/null || true)
+STANDUP_AUTO_OUT=$(run_cli standup --auto --file "/nonexistent/standup-path-smoke-999.md" 2>/dev/null || true)
 STANDUP_AUTO_EXIT=$?
 if [ $STANDUP_AUTO_EXIT -eq 0 ] && node -e '
   try {
@@ -242,7 +250,7 @@ else
 fi
 
 NOTIFY_DRY_BEFORE=$(ls -A "$TMP_STATE_DIR" 2>/dev/null || true)
-NOTIFY_DRY_OUT=$(bun "$CLI" notify --dry-run --json 2>/dev/null || true)
+NOTIFY_DRY_OUT=$(run_cli notify --dry-run --json 2>/dev/null || true)
 NOTIFY_DRY_AFTER=$(ls -A "$TMP_STATE_DIR" 2>/dev/null || true)
 
 if [ "$NOTIFY_DRY_BEFORE" = "$NOTIFY_DRY_AFTER" ] && node -e '
@@ -264,7 +272,7 @@ else
   FAILED=1
 fi
 
-NOTIFY_REL_OUT=$(bun "$CLI" notify --release --pane "nonexistent-smoke-pane-999" --json 2>/dev/null || true)
+NOTIFY_REL_OUT=$(run_cli notify --release --pane "nonexistent-smoke-pane-999" --json 2>/dev/null || true)
 if node -e '
   try {
     const raw = process.argv[1];
@@ -316,9 +324,20 @@ else
   FAILED=1
 fi
 
+if grep -q "blocked_by_test_guard" "$REPO_DIR/src/herdr/client.ts" 2>/dev/null; then
+  if grep -q "HERDR_JEV_TEST_GUARD" "$REPO_DIR/tests/preload.ts" 2>/dev/null; then
+    echo "ok test guard present"
+  else
+    echo "FAIL test guard present: tests/preload.ts missing HERDR_JEV_TEST_GUARD"
+    FAILED=1
+  fi
+else
+  echo "skip test guard present"
+fi
+
 if [ "${SMOKE_LIVE_JEV:-0}" = "1" ]; then
   JEV_SAMPLE='{"paneText":"Waiting for approval to run command: rm -rf /tmp/test","agent":"codex","status":"working"}'
-  CLASSIFY_OUT=$(echo "$JEV_SAMPLE" | bun "$CLI" classify-pane --json 2>/dev/null || true)
+  CLASSIFY_OUT=$(echo "$JEV_SAMPLE" | run_cli classify-pane --json 2>/dev/null || true)
   if node -e '
     try {
       const raw = process.argv[1];
