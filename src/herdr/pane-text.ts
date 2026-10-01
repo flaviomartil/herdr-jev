@@ -20,22 +20,52 @@ const CHROME_LINE_PATTERNS: readonly RegExp[] = [
   /\bctrl\+[a-z]\b/i,
   /\btype to (?:steer|reply)\b/i,
   /tokens?\s*(?:used|left)/i,
+  /^\s*[└─│├┌┐┘┴┬┼═]?\s*Tip:\s*/i,
+  /\bTip:\s*Use\s+/i,
+  /^[⏵▶]\s*bypass permissions/i,
+  /\bbypass permissions\b/i,
+  /\b\d+\s*shells\s*-\s*←\s*\d+\s*agents/i,
+  /^\s*[\u2800-\u28FF]+\s*Running command/i,
+  /\bRunning command\.\.\./i,
+  /^\s*⏱/i,
+  /\b\d+d\s*[↑↓]?\d+%/i,
+  /\bUpdate installed\b/i,
+  /\bRestart to update\b/i,
+  /^\s*Worked for\s+\d+/i,
+  /^[\s\u2800-\u28FF]+$/,
+  /[\u2800-\u28FF]/,
+  /[⏱⏵▶⚡⚙↑↓▲▼←→]/,
 ];
 
 export function lastMeaningfulLine(text: string): string {
   if (!text) return "";
   const cleaned = text.replace(ANSI_PATTERN, "");
   const lines = cleaned.split(/\r?\n/);
+
+  let lastActionLine: string | null = null;
+  let lastFallbackLine: string | null = null;
+
   for (let i = lines.length - 1; i >= 0; i--) {
     let line = lines[i].trim();
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
-    line = line.replace(/^[•·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
-    if (!line) continue;
-    if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
-    return line.length > 100 ? line.slice(0, 100) : line;
+
+    const isAction = /^[•●]/.test(line);
+    const stripped = line.replace(/^[•●·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
+    if (!stripped) continue;
+    if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(stripped))) continue;
+
+    if (isAction && !lastActionLine) {
+      lastActionLine = stripped;
+      break;
+    }
+    if (!lastFallbackLine) {
+      lastFallbackLine = stripped;
+    }
   }
-  return "";
+
+  const chosen = lastActionLine ?? lastFallbackLine ?? "";
+  return chosen.length > 100 ? chosen.slice(0, 100) : chosen;
 }
 
 export function redactSecrets(text: string): string {

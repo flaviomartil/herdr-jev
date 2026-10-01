@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { cleanModel, matchRunForPane, readOverview } from "./overview.js";
 import { listRunHistory, runStateSummary, type RunHistoryEntry } from "../orchestration/run-history.js";
@@ -21,11 +21,15 @@ export interface DailyAgentItem {
   runSummary: string | null;
   lastLine: string | null;
   paneId: string;
+  tarefa?: string | null;
 }
 
 export interface DailyProjectGroup {
   project: string;
   branch: string | null;
+  commitsCount?: number;
+  commitSubjects?: string[];
+  uncommittedCount?: number;
   agents: DailyAgentItem[];
 }
 
@@ -48,6 +52,8 @@ export interface DailyReportDeps {
   listRunHistory?: (stateDir?: string) => RunHistoryEntry[];
   stateDir?: string;
   readPane?: (paneId: string, lines?: number) => Promise<string | { ok: boolean; stdout: string }>;
+  paneList?: readonly any[];
+  listPanes?: () => Promise<any[] | { ok: boolean; stdout: string }>;
   herdrClient?: HerdrClient;
   runCommand?: RunCommand;
   now?: number;
@@ -58,6 +64,21 @@ function sanitizeText(text: string): string {
     .replace(/[\u2013\u2014]/g, "-")
     .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1F100}-\u{1F64F}\u{1F680}-\u{1F6FF}]/gu, "")
     .replace(/[•·]/g, "-");
+}
+
+function cleanGitLine(stdout: string): string {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("AI Harness active"));
+  return lines[0] ?? "";
+}
+
+function cleanGitLines(stdout: string): string[] {
+  return stdout
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0 && !l.startsWith("AI Harness active"));
 }
 
 async function execGit(
@@ -78,6 +99,29 @@ async function execGit(
   } catch (err) {
     return { ok: false, stdout: "", stderr: String(err) };
   }
+}
+
+function parsePaneList(stdout: string): any[] {
+  try {
+    const start = stdout.indexOf("{");
+    const end = stdout.lastIndexOf("}");
+    if (start !== -1 && end !== -1 && end > start) {
+      const parsed = JSON.parse(stdout.slice(start, end + 1));
+      if (Array.isArray(parsed?.panes)) return parsed.panes;
+      if (Array.isArray(parsed?.result?.panes)) return parsed.result.panes;
+    }
+  } catch {}
+  return [];
+}
+
+function truncateCell(value: string, width: number): string {
+  if (value.length <= width) {
+    return value.padEnd(width);
+  }
+  if (width <= 3) {
+    return value.slice(0, width);
+  }
+  return (value.slice(0, width - 3) + "...").padEnd(width);
 }
 
 export async function buildDailyReport(
@@ -120,54 +164,130 @@ export async function buildDailyReport(
   const todayRuns = allRuns.filter((r) => r.timestampMs >= sinceTimestamp);
   const git = deps?.git ?? deps?.gitRunner ?? defaultGitRunner;
 
+  const paneInfoMap = new Map<string, { terminal_title_stripped?: string; label?: string }>();
+  try {
+    let rawPanes: any[] = [];
+    if (deps?.paneList) {
+      rawPanes = [...deps.paneList];
+    } else if (deps?.listPanes) {
+      const res = await deps.listPanes();
+      if (Array.isArray(res)) {
+        rawPanes = res;
+      } else if (res && typeof res === "object" && "stdout" in res) {
+        rawPanes = parsePaneList(res.stdout);
+      }
+    } else if (deps?.herdrClient?.listPanes) {
+      const res = await deps.herdrClient.listPanes();
+      if (res && res.stdout) {
+        rawPanes = parsePaneList(res.stdout);
+      }
+    } else {
+      const runCmd = deps?.runCommand ?? createProcessCommandAdapter();
+      const res = await runCmd([process.env.HERDR_BIN_PATH || "herdr", "pane", "list"]);
+      if (res && res.stdout) {
+        rawPanes = parsePaneList(res.stdout);
+      }
+    }
+
+    for (const p of rawPanes) {
+      const pId = p.pane_id ?? p.paneId ?? p.id ?? "";
+      if (pId) {
+        paneInfoMap.set(pId, {
+          terminal_title_stripped: p.terminal_title_stripped ?? p.terminalTitleStripped ?? p.terminal_title ?? p.terminalTitle,
+          label: p.label,
+        });
+      }
+    }
+  } catch {}
+
   const cwdCache = new Map<
     string,
     Promise<{
+      repoName: string;
+      branch: string | null;
       commitsCount: number;
       commitSubjects: string[];
       uncommittedCount: number;
-      branch: string | null;
     }>
   >();
 
-  const getCwdInfo = (cwd: string | null) => {
+  const getCwdInfo = (cwd: string | null, fallbackProject: string) => {
     if (!cwd) {
       return Promise.resolve({
+        repoName: fallbackProject,
+        branch: null,
         commitsCount: 0,
         commitSubjects: [],
         uncommittedCount: 0,
-        branch: null,
       });
     }
     if (!cwdCache.has(cwd)) {
       cwdCache.set(
         cwd,
         (async () => {
-          const [logRes, statusRes, branchRes] = await Promise.all([
-            execGit(git, ["log", gitSinceArg, "--pretty=%s"], cwd),
-            execGit(git, ["status", "--porcelain"], cwd),
-            execGit(git, ["rev-parse", "--abbrev-ref", "HEAD"], cwd),
-          ]);
+          let repoName = fallbackProject;
+          const commonDirRes = await execGit(
+            git,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd,
+          );
+          if (commonDirRes.ok) {
+            const commonDir = cleanGitLine(commonDirRes.stdout);
+            if (commonDir) {
+              const absCommonDir = isAbsolute(commonDir) ? commonDir : resolve(cwd, commonDir);
+              const mainWorktreeDir = dirname(absCommonDir);
+              const resolvedName = basename(mainWorktreeDir);
+              if (resolvedName) {
+                repoName = resolvedName;
+              }
+            }
+          }
 
-          const commits = logRes.ok
-            ? logRes.stdout
-                .split("\n")
-                .map((s) => s.trim())
-                .filter((s) => s.length > 0)
-            : [];
-          const uncommittedCount = statusRes.ok
-            ? statusRes.stdout
-                .split("\n")
-                .map((s) => s.trim())
-                .filter((s) => s.length > 0).length
-            : 0;
-          const branch = branchRes.ok && branchRes.stdout.trim() ? branchRes.stdout.trim() : null;
+          const branchRes = await execGit(git, ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+          const branch = branchRes.ok ? cleanGitLine(branchRes.stdout) || null : null;
+
+          let defaultBranch = "main";
+          const symRefRes = await execGit(
+            git,
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            cwd,
+          );
+          if (symRefRes.ok) {
+            const ref = cleanGitLine(symRefRes.stdout).replace(/^origin\//, "");
+            if (ref) defaultBranch = ref;
+          } else {
+            const checkMain = await execGit(git, ["rev-parse", "--verify", "main"], cwd);
+            if (checkMain.ok) {
+              defaultBranch = "main";
+            } else {
+              const checkMaster = await execGit(git, ["rev-parse", "--verify", "master"], cwd);
+              if (checkMaster.ok) {
+                defaultBranch = "master";
+              }
+            }
+          }
+
+          let logRes: { ok: boolean; stdout: string; stderr: string };
+          if (branch && branch !== defaultBranch) {
+            logRes = await execGit(git, ["log", `${defaultBranch}..HEAD`, gitSinceArg, "--pretty=%s"], cwd);
+            if (!logRes.ok) {
+              logRes = await execGit(git, ["log", gitSinceArg, "--pretty=%s"], cwd);
+            }
+          } else {
+            logRes = await execGit(git, ["log", gitSinceArg, "--pretty=%s"], cwd);
+          }
+
+          const statusRes = await execGit(git, ["status", "--porcelain"], cwd);
+
+          const commits = logRes.ok ? cleanGitLines(logRes.stdout) : [];
+          const uncommittedCount = statusRes.ok ? cleanGitLines(statusRes.stdout).length : 0;
 
           return {
+            repoName,
+            branch,
             commitsCount: commits.length,
             commitSubjects: commits.slice(0, 3).map(sanitizeText),
             uncommittedCount,
-            branch,
           };
         })(),
       );
@@ -190,24 +310,29 @@ export async function buildDailyReport(
     return res.ok ? res.stdout : "";
   };
 
-  const projectMap = new Map<string, DailyAgentItem[]>();
-  const projectBranchMap = new Map<string, string | null>();
+  const groupsMap = new Map<
+    string,
+    {
+      project: string;
+      branch: string | null;
+      commitsCount: number;
+      commitSubjects: string[];
+      uncommittedCount: number;
+      agents: DailyAgentItem[];
+    }
+  >();
 
   for (const row of overviewRows) {
-    const project = row.project || "unknown";
+    const rawProject = row.project || "unknown";
     const paneId = row.pane ?? "";
     const cwd = row.cwd ?? null;
-    const cwdInfo = await getCwdInfo(cwd);
+    const cwdInfo = await getCwdInfo(cwd, rawProject);
 
     const handle = row.handle ?? null;
     const agent = row.agent || "agent";
     const model = cleanModel(row.model);
     const state = row.state ?? "unknown";
     const branch = cwdInfo.branch ?? row.branch ?? null;
-
-    if (!projectBranchMap.has(project) && branch) {
-      projectBranchMap.set(project, branch);
-    }
 
     const matchedRun = matchRunForPane(todayRuns, {
       pane: paneId,
@@ -230,8 +355,23 @@ export async function buildDailyReport(
       }
     }
 
+    const paneInfo = paneId ? paneInfoMap.get(paneId) : undefined;
+    let tarefa: string | null = null;
+    const rawTarefa = paneInfo?.terminal_title_stripped || paneInfo?.label || "";
+    if (rawTarefa) {
+      const sanitized = sanitizeText(rawTarefa.trim());
+      const agentName = handle ?? agent;
+      if (
+        sanitized.length > 0 &&
+        sanitized.toLowerCase() !== agentName.toLowerCase() &&
+        sanitized.toLowerCase() !== agent.toLowerCase()
+      ) {
+        tarefa = sanitized.length > 60 ? sanitized.slice(0, 60).trim() : sanitized;
+      }
+    }
+
     const agentItem: DailyAgentItem = {
-      project,
+      project: cwdInfo.repoName,
       agent,
       handle,
       model,
@@ -244,22 +384,34 @@ export async function buildDailyReport(
       runSummary,
       lastLine,
       paneId,
+      tarefa,
     };
 
-    const group = projectMap.get(project) ?? [];
-    group.push(agentItem);
-    projectMap.set(project, group);
-  }
-
-  const projects: DailyProjectGroup[] = [];
-  for (const [project, agents] of projectMap) {
-    const branch = projectBranchMap.get(project) ?? agents.find((a) => a.branch)?.branch ?? null;
-    projects.push({ project, branch, agents });
+    const groupKey = `${cwdInfo.repoName}:::${branch ?? ""}`;
+    let group = groupsMap.get(groupKey);
+    if (!group) {
+      group = {
+        project: cwdInfo.repoName,
+        branch,
+        commitsCount: cwdInfo.commitsCount,
+        commitSubjects: cwdInfo.commitSubjects,
+        uncommittedCount: cwdInfo.uncommittedCount,
+        agents: [],
+      };
+      groupsMap.set(groupKey, group);
+    } else {
+      group.commitsCount = Math.max(group.commitsCount, cwdInfo.commitsCount);
+      if (group.commitSubjects.length === 0 && cwdInfo.commitSubjects.length > 0) {
+        group.commitSubjects = cwdInfo.commitSubjects;
+      }
+      group.uncommittedCount = Math.max(group.uncommittedCount, cwdInfo.uncommittedCount);
+    }
+    group.agents.push(agentItem);
   }
 
   return {
     date: new Date(now),
-    projects,
+    projects: Array.from(groupsMap.values()),
   };
 }
 
@@ -275,15 +427,37 @@ export function formatDailyMarkdown(report: DailyReport): string {
     const branchStr = group.branch ? ` (${group.branch})` : "";
     lines.push(`### ${group.project}${branchStr}`);
 
+    const commitsCount = group.commitsCount ?? Math.max(0, ...group.agents.map((a) => a.commitsCount));
+    const commitSubjects = group.commitSubjects ?? group.agents.find((a) => a.commitSubjects.length > 0)?.commitSubjects ?? [];
+    const uncommittedCount = group.uncommittedCount ?? Math.max(0, ...group.agents.map((a) => a.uncommittedCount));
+
+    const repoFactsParts: string[] = [];
+    if (commitsCount > 0) {
+      const commitWord = commitsCount === 1 ? "commit" : "commits";
+      const subjectsStr =
+        commitSubjects.length > 0
+          ? ` (${commitSubjects.join("; ")})`
+          : "";
+      repoFactsParts.push(`${commitsCount} ${commitWord} hoje${subjectsStr}`);
+    }
+
+    if (uncommittedCount > 0) {
+      const fileWord = uncommittedCount === 1 ? "arquivo não commitado" : "arquivos não commitados";
+      repoFactsParts.push(`${uncommittedCount} ${fileWord}`);
+    }
+
+    if (repoFactsParts.length > 0) {
+      lines.push(repoFactsParts.join("; "));
+    }
+
     const activeBullets: string[] = [];
     const inactiveAgents: string[] = [];
 
     for (const item of group.agents) {
       const isInactive =
-        item.commitsCount === 0 &&
-        item.uncommittedCount === 0 &&
+        (item.state === "idle" || item.state === "done") &&
         !item.runSummary &&
-        item.state === "idle";
+        commitsCount === 0;
 
       const agentName = item.handle ?? item.agent;
 
@@ -293,22 +467,9 @@ export function formatDailyMarkdown(report: DailyReport): string {
       }
 
       const parts: string[] = [];
+      const tarefaStr = item.tarefa ? ` [${item.tarefa}]` : "";
       const modelStr = item.model ? ` ${item.model}` : "";
-      parts.push(`${agentName}${modelStr}: ${item.state}`);
-
-      if (item.commitsCount > 0) {
-        const commitWord = item.commitsCount === 1 ? "commit" : "commits";
-        const subjectsStr =
-          item.commitSubjects.length > 0
-            ? ` (${item.commitSubjects.join("; ")})`
-            : "";
-        parts.push(`${item.commitsCount} ${commitWord} hoje${subjectsStr}`);
-      }
-
-      if (item.uncommittedCount > 0) {
-        const fileWord = item.uncommittedCount === 1 ? "arquivo não commitado" : "arquivos não commitados";
-        parts.push(`${item.uncommittedCount} ${fileWord}`);
-      }
+      parts.push(`${agentName}${tarefaStr}${modelStr}: ${item.state}`);
 
       if (item.runSummary) {
         parts.push(`run: ${item.runSummary}`);
@@ -343,15 +504,16 @@ export function formatDailyText(report: DailyReport): string {
     if (lines.length > 0) lines.push("");
     const branchStr = group.branch ? ` (${group.branch})` : "";
     lines.push(`${group.project}${branchStr}`);
-    lines.push("  AGENT        MODEL        STATE    COMMITS  CHANGES  RUN                 LAST");
+    lines.push("  AGENT        TASK         MODEL        STATE    COMMITS  CHANGES  RUN                 LAST");
 
+    const commitsCount = group.commitsCount ?? Math.max(0, ...group.agents.map((a) => a.commitsCount));
     const inactiveAgents: string[] = [];
+
     for (const item of group.agents) {
       const isInactive =
-        item.commitsCount === 0 &&
-        item.uncommittedCount === 0 &&
+        (item.state === "idle" || item.state === "done") &&
         !item.runSummary &&
-        item.state === "idle";
+        commitsCount === 0;
 
       const agentName = item.handle ?? item.agent;
       if (isInactive) {
@@ -359,15 +521,16 @@ export function formatDailyText(report: DailyReport): string {
         continue;
       }
 
-      const agentCol = agentName.slice(0, 12).padEnd(12);
-      const modelCol = (item.model ?? "-").slice(0, 12).padEnd(12);
-      const stateCol = item.state.slice(0, 8).padEnd(8);
-      const commitsCol = String(item.commitsCount).padEnd(8);
-      const changesCol = String(item.uncommittedCount).padEnd(8);
-      const runCol = (item.runSummary ?? "-").slice(0, 19).padEnd(19);
+      const agentCol = truncateCell(agentName, 12);
+      const taskCol = truncateCell(item.tarefa ?? "-", 12);
+      const modelCol = truncateCell(item.model ?? "-", 12);
+      const stateCol = truncateCell(item.state, 8);
+      const commitsCol = truncateCell(String(item.commitsCount), 8);
+      const changesCol = truncateCell(String(item.uncommittedCount), 8);
+      const runCol = truncateCell(item.runSummary ?? "-", 19);
       const lastCol = item.lastLine ?? "";
 
-      lines.push(`  ${agentCol} ${modelCol} ${stateCol} ${commitsCol} ${changesCol} ${runCol} ${lastCol}`.trimEnd());
+      lines.push(`  ${agentCol} ${taskCol} ${modelCol} ${stateCol} ${commitsCol} ${changesCol} ${runCol} ${lastCol}`.trimEnd());
     }
 
     if (inactiveAgents.length > 0) {
