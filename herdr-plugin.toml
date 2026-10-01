@@ -22,6 +22,12 @@ title = "Jev Radar"
 placement = "overlay"
 command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/overview.sh\""]
 
+[[panes]]
+id = "office"
+title = "Jev Office"
+placement = "overlay"
+command = ["bash", "-c", "exec bash \"$HERDR_PLUGIN_ROOT/herdr-plugin/office.sh\""]
+
 [[actions]]
 id = "assistant"
 title = "Jev: Lantern assistant"
@@ -35,6 +41,13 @@ title = "Jev: Radar overview"
 description = "Project, worktree branch, status and weekly quota without model calls"
 contexts = ["global"]
 command = ["env", "HERDR_JEV_PLACEMENT=tab", "bash", "herdr-plugin/open-pane.sh", "overview"]
+
+[[actions]]
+id = "office"
+title = "Jev: Office view"
+description = "Floor plan of active agents, desks, and Jev telemetry"
+contexts = ["global"]
+command = ["bash", "herdr-plugin/open-pane.sh", "office"]
 
 [[panes]]
 id = "route"
