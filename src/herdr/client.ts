@@ -35,6 +35,7 @@ export interface HerdrClient {
   }): Promise<HerdrCommandResult>;
   closePane(paneId: string): Promise<HerdrCommandResult>;
   readAgent?(target: string, lines?: number, source?: "visible" | "recent"): Promise<HerdrCommandResult>;
+  readPane?(paneId: string, lines?: number): Promise<HerdrCommandResult>;
   getAgent?(target: string): Promise<HerdrCommandResult>;
   reportSpawn?(paneId: string, tokens: Record<string, string>): Promise<HerdrCommandResult>;
   notify(title: string, body: string, sound?: string): Promise<HerdrCommandResult>;
@@ -230,6 +231,10 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
     readAgent(target, lines = 40, source = "visible") {
       if (!Number.isInteger(lines) || lines < 1 || lines > 100000) throw new Error("Invalid terminal line limit");
       return runCommand([herdrBin, "agent", "read", target, "--source", source, "--lines", String(lines)]);
+    },
+    readPane(paneId, lines = 40) {
+      if (!Number.isInteger(lines) || lines < 1 || lines > 100000) throw new Error("Invalid terminal line limit");
+      return runCommand([herdrBin, "pane", "read", paneId, "--lines", String(lines)]);
     },
     getAgent(target) {
       return runCommand([herdrBin, "agent", "get", target]);

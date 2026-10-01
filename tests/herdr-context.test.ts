@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveHerdrContext } from "../src/herdr/context.js";
@@ -78,4 +78,115 @@ test("live exact advisors do not require a cache or membership in worker availab
     } }) }),
   });
   expect(result.delegation).toEqual({ model: "gpt-6.1-sol", availableModels: ["executor", "reviewer"] });
+});
+
+test("falls back to focused_pane_id when configured pane cannot be resolved", async () => {
+  const context = await resolveHerdrContext({}, {
+    env: {
+      HERDR_ENV: "1",
+      HERDR_JEV_SOURCE_PANE_ID: "stale-pane",
+      HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "focused-pane", focused_pane_cwd: "/repository" }),
+    },
+    runCommand: async (args) => {
+      if (args[1] === "agent" && args[2] === "get") {
+        if (args[3] === "stale-pane") return { ok: false, code: 1, stdout: "", stderr: "not found" };
+        if (args[3] === "focused-pane") {
+          return { ok: true, code: 0, stderr: "", stdout: JSON.stringify({ result: { agent: { pane_id: "focused-pane", agent: "claude", cwd: "/repository" } } }) };
+        }
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "unknown" };
+    },
+  });
+  expect(context.sourcePaneId).toBe("focused-pane");
+  expect(context.client).toBe("claude");
+});
+
+test("falls back to pane current when configured and focused panes fail", async () => {
+  const context = await resolveHerdrContext({}, {
+    env: {
+      HERDR_ENV: "1",
+      HERDR_JEV_SOURCE_PANE_ID: "stale-pane",
+      HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "stale-focused", focused_pane_cwd: "/repository" }),
+    },
+    runCommand: async (args) => {
+      if (args[1] === "agent" && args[2] === "get") {
+        if (args[3] === "stale-pane" || args[3] === "stale-focused") return { ok: false, code: 1, stdout: "", stderr: "not found" };
+        if (args[3] === "current-pane") {
+          return { ok: true, code: 0, stderr: "", stdout: JSON.stringify({ result: { agent: { pane_id: "current-pane", agent: "codex", cwd: "/repository" } } }) };
+        }
+      }
+      if (args[1] === "pane" && args[2] === "current") {
+        return { ok: true, code: 0, stderr: "", stdout: JSON.stringify({ result: { pane: { pane_id: "current-pane" } } }) };
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "unknown" };
+    },
+  });
+  expect(context.sourcePaneId).toBe("current-pane");
+  expect(context.client).toBe("codex");
+});
+
+test("falls back to first pane matching client and cwd when other candidates fail", async () => {
+  const cwd = process.cwd();
+  const context = await resolveHerdrContext({ client: "codex" }, {
+    env: {
+      HERDR_ENV: "1",
+      HERDR_JEV_SOURCE_PANE_ID: "stale-pane",
+    },
+    runCommand: async (args) => {
+      if (args[1] === "agent" && args[2] === "get") {
+        if (args[3] === "matched-pane") {
+          return { ok: true, code: 0, stderr: "", stdout: JSON.stringify({ result: { agent: { pane_id: "matched-pane", agent: "codex", cwd } } }) };
+        }
+        return { ok: false, code: 1, stdout: "", stderr: "not found" };
+      }
+      if (args[1] === "pane" && args[2] === "current") return { ok: false, code: 1, stdout: "", stderr: "no current pane" };
+      if (args[1] === "agent" && args[2] === "list") {
+        return {
+          ok: true, code: 0, stderr: "",
+          stdout: JSON.stringify({
+            result: {
+              agents: [
+                { pane_id: "other-pane", agent: "claude", cwd: "/different" },
+                { pane_id: "matched-pane", agent: "codex", cwd },
+              ],
+            },
+          }),
+        };
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "unknown" };
+    },
+  });
+  expect(context.sourcePaneId).toBe("matched-pane");
+  expect(context.client).toBe("codex");
+});
+
+test("throws and includes all tried ids when all candidates fail", async () => {
+  await expect(resolveHerdrContext({}, {
+    env: {
+      HERDR_ENV: "1",
+      HERDR_JEV_SOURCE_PANE_ID: "stale-configured",
+      HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ focused_pane_id: "stale-focused" }),
+    },
+    runCommand: async (args) => {
+      if (args[1] === "pane" && args[2] === "current") {
+        return { ok: true, code: 0, stderr: "", stdout: JSON.stringify({ result: { pane: { pane_id: "stale-current" } } }) };
+      }
+      if (args[1] === "agent" && args[2] === "list") {
+        return {
+          ok: true, code: 0, stderr: "",
+          stdout: JSON.stringify({
+            result: {
+              agents: [{ pane_id: "stale-matched", agent: "claude", cwd: process.cwd() }],
+            },
+          }),
+        };
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "not found" };
+    },
+  })).rejects.toThrow("stale-configured, stale-focused, stale-current, stale-matched");
+});
+
+test("assistant.sh unsets stale HERDR_JEV_SOURCE_PANE_ID before running assistant", () => {
+  const script = readFileSync(join(import.meta.dir, "../herdr-plugin/assistant.sh"), "utf8");
+  expect(script).toContain("unset HERDR_JEV_SOURCE_PANE_ID");
 });
