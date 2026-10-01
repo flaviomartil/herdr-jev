@@ -516,6 +516,7 @@ program.command("standup")
   .option("--yes", "Send instructions without confirmation")
   .option("--force", "Run even if already ran today")
   .option("--json", "Output result in JSON format")
+  .option("--pane <id>", "Eligible pane id (repeatable)", (val: string, prev: string[]) => (prev ? [...prev, val] : [val]))
   .action(async (options: {
     file?: string;
     auto?: boolean;
@@ -523,6 +524,7 @@ program.command("standup")
     yes?: boolean;
     force?: boolean;
     json?: boolean;
+    pane?: string[];
   }) => {
     await executeStandupCommand(options);
   });
