@@ -128,8 +128,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
             const data = JSON.parse(readFileSync(claimFile, "utf-8"));
             if (now - data.time > 30000) {
               unlinkSync(claimFile);
-              released++;
-          continue;
+              continue;
             }
           } catch (err) {}
         }

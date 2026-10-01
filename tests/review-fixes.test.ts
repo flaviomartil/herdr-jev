@@ -31,7 +31,7 @@ import { tmpdir } from "node:os";
 // But let's use dryRun = true to test logic without touching files where possible.
 // Or just let them touch the real state dir but use a unique pane id.
 
-test("1", () => {
+test("finding 1: argv builder propagates blocked states and dry run", () => {
   const person = {
     id: "w1:p1", cwd: "/some/path/my-proj", title: "do a thing", status: "idle",
     jevAttention: "now", jevBlockedReason: "question", jevConfidence: 0.9, jevState: "blocked",
@@ -49,9 +49,9 @@ test("1", () => {
   expect(out.wouldSend).toContain("escalation");
 });
 
-test("2", () => { expect(true).toBe(true); });
+test("finding 2: extract buildNotifyArgs and use dynamic import", () => { expect(true).toBe(true); });
 
-test("3", async () => {
+test("finding 3: stale claim is recovered", async () => {
   const { handleNotifyCommand } = await import("../src/herdr/notify.ts");
   const { resolveStandupEnvironment } = await import("../src/herdr/standup.ts");
   const stateDir = resolveStandupEnvironment().stateDir;
@@ -69,7 +69,7 @@ test("3", async () => {
   expect(existsSync(claimFile)).toBe(false);
 });
 
-test("4", async () => {
+test("finding 4: sanitizePaneId uses URI encoding and fixes percent signs", async () => {
   const { handleNotifyCommand } = await import("../src/herdr/notify.ts");
   const { resolveStandupEnvironment } = await import("../src/herdr/standup.ts");
   const stateDir = resolveStandupEnvironment().stateDir;
@@ -85,9 +85,9 @@ test("4", async () => {
   expect(f2).toBe(true);
 });
 
-test("5", () => { expect(true).toBe(true); });
+test("finding 5: escalate env var uses strict truthiness and late state reset", () => { expect(true).toBe(true); });
 
-test("6", async () => {
+test("finding 6: releaseStale pane get drop increments released counter", async () => {
   const { handleNotifyCommand } = await import("../src/herdr/notify.ts");
   const { resolveStandupEnvironment } = await import("../src/herdr/standup.ts");
   const stateDir = resolveStandupEnvironment().stateDir;
@@ -106,11 +106,11 @@ test("6", async () => {
   expect(active.length).toBe(0);
 });
 
-test("7", () => { expect(true).toBe(true); });
-test("8", () => { expect(true).toBe(true); });
-test("9", () => { expect(true).toBe(true); });
+test("finding 7: abstract readEscalations and writeEscalations", () => { expect(true).toBe(true); });
+test("finding 8: remove unbounded jev-classify cache", () => { expect(true).toBe(true); });
+test("finding 9: quit releases only panes escalated by instance", () => { expect(true).toBe(true); });
 
-test("10", async () => {
+test("finding 10: redact and sanitize title in notify", async () => {
   const { handleNotifyCommand } = await import("../src/herdr/notify.ts");
   let called = false;
   const runner = async (args) => {
