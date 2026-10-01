@@ -120,7 +120,7 @@ function loadEndedLog() {
 }
 
 function recordDepartedAgent(person, shift, now) {
-  if (DEMO) return;
+  if (DEMO || ROSTER_ARG) return;
   const entry = {
     name: person.name,
     kind: person.kind,
@@ -725,7 +725,7 @@ function leaveTerminal() {
 // writes the real file.
 function openTheBooks() {
   loadEndedLog();
-  if (DEMO) return;
+  if (DEMO || ROSTER_ARG) return;
   const saved = loadState();
   if (!saved) return;
   clocks.restore(saved);
@@ -737,7 +737,7 @@ function openTheBooks() {
 // The other half. Synchronous and failure-swallowing all the way down, which is what
 // lets `quit` call it without spending any of its half-second budget.
 function closeTheBooks() {
-  if (DEMO) return;
+  if (DEMO || ROSTER_ARG) return;
   saveState({ ...clocks.snapshot(), desks: roster.snapshotStates() });
 }
 
@@ -1252,7 +1252,7 @@ let subscribedTo = '';
 // accept is said once rather than on every rebuild for the rest of the session.
 let streamComplaint = '';
 function syncSubscriptions() {
-  if (DEMO) return;
+  if (DEMO || ROSTER_ARG) return;
   const ids = roster.people.map((p) => p.id).sort();
   const key = ids.join(',');
   if (key === subscribedTo) return;
@@ -2503,7 +2503,7 @@ if (process.env.HERDR_OFFICE_TEST_UNIT === '1') {
 }
 
 async function main() {
-  if (!DEMO) {
+  if (!DEMO && !ROSTER_ARG) {
     spawn(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
     try {
       api = await new ApiClient().open();
@@ -2592,7 +2592,7 @@ async function main() {
   }
 
   enterTerminal();
-  if (!DEMO) {
+  if (!DEMO && !ROSTER_ARG) {
     saveTimer = setInterval(closeTheBooks, SAVE_MS);
     // The office should not be the reason a terminal will not close.
     saveTimer.unref?.();
