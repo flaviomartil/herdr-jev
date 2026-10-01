@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
+import { homedir } from "node:os";
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import {
   parseStandupFile,
   planStandup,
@@ -8,6 +11,7 @@ import {
   substituteVariables,
   formatStandupDate,
   capMessageBytes,
+  resolveStandupEnvironment,
 } from "../src/herdr/standup.js";
 
 test("parseStandupFile parses front matter with custom states and max", () => {
@@ -385,4 +389,189 @@ test("executeStandupCommand json mode outputs json object", async () => {
   expect(parsed.results.length).toBe(1);
   expect(parsed.results[0].sent).toBe(true);
   expect(res.results.length).toBe(1);
+});
+
+test("resolveStandupEnvironment handles foreign plugin env correctly", () => {
+  const foreignEnv = {
+    HERDR_PLUGIN_ID: "herdr-routines",
+    HERDR_PLUGIN_CONFIG_DIR: "/routines/config",
+    HERDR_PLUGIN_STATE_DIR: "/routines/state",
+    HERDR_PANE_ID: "%stale-pane",
+  };
+
+  const res = resolveStandupEnvironment(foreignEnv);
+  expect(res.configDir).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev"));
+  expect(res.defaultFile).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev", "standup.md"));
+  expect(res.stateDir).toBe(join(homedir(), ".local", "state", "herdr-jev"));
+  expect(res.callerPaneId).toBeUndefined();
+
+  const foreignWithAuth = {
+    ...foreignEnv,
+    HERDR_JEV_SOURCE_PANE_ID: "%auth-pane",
+    HERDR_JEV_STATE_DIR: "/custom/auth/state",
+  };
+
+  const resAuth = resolveStandupEnvironment(foreignWithAuth);
+  expect(resAuth.configDir).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev"));
+  expect(resAuth.defaultFile).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev", "standup.md"));
+  expect(resAuth.stateDir).toBe("/custom/auth/state");
+  expect(resAuth.callerPaneId).toBe("%auth-pane");
+});
+
+test("resolveStandupEnvironment handles herdr-jev plugin env correctly", () => {
+  const jevEnv = {
+    HERDR_PLUGIN_ID: "herdr-jev",
+    HERDR_PLUGIN_CONFIG_DIR: "/jev/config",
+    HERDR_PLUGIN_STATE_DIR: "/jev/state",
+    HERDR_PANE_ID: "%jev-pane",
+  };
+
+  const res = resolveStandupEnvironment(jevEnv);
+  expect(res.configDir).toBe("/jev/config");
+  expect(res.defaultFile).toBe("/jev/config/standup.md");
+  expect(res.stateDir).toBe("/jev/state");
+  expect(res.callerPaneId).toBe("%jev-pane");
+});
+
+test("resolveStandupEnvironment handles no plugin env correctly", () => {
+  const plainEnv = {
+    HERDR_PLUGIN_CONFIG_DIR: "/plain/config",
+    HERDR_PLUGIN_STATE_DIR: "/plain/state",
+    HERDR_PANE_ID: "%plain-pane",
+  };
+
+  const res = resolveStandupEnvironment(plainEnv);
+  expect(res.configDir).toBe("/plain/config");
+  expect(res.defaultFile).toBe("/plain/config/standup.md");
+  expect(res.stateDir).toBe("/plain/state");
+  expect(res.callerPaneId).toBe("%plain-pane");
+
+  const emptyRes = resolveStandupEnvironment({});
+  expect(emptyRes.configDir).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev"));
+  expect(emptyRes.stateDir).toBe(join(homedir(), ".local", "state", "herdr-jev"));
+  expect(emptyRes.callerPaneId).toBeUndefined();
+});
+
+test("planStandup ignores stale caller pane under foreign plugin env", async () => {
+  const rows = [
+    { pane: "%stale-pane", agent: "agent-1", project: "App", state: "idle" },
+    { pane: "%other-pane", agent: "agent-2", project: "App", state: "idle" },
+  ];
+
+  const parsed = parseStandupFile("Daily task.");
+  const targets = await planStandup(
+    {
+      overviewRows: rows,
+      env: {
+        HERDR_PLUGIN_ID: "herdr-routines",
+        HERDR_PANE_ID: "%stale-pane",
+      },
+    },
+    parsed,
+  );
+
+  expect(targets.length).toBe(2);
+  expect(targets.map((t) => t.pane)).toEqual(["%stale-pane", "%other-pane"]);
+});
+
+test("executeStandupCommand concurrent claim with two calls sharing temp state dir", async () => {
+  const tmpDir = join("/tmp", `standup-claim-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const standupFile = join(tmpDir, "standup.md");
+  mkdirSync(tmpDir, { recursive: true });
+  writeFileSync(standupFile, "Daily task for {{agent}}.", "utf-8");
+
+  try {
+    const p1 = executeStandupCommand(
+      { auto: true, file: standupFile },
+      {
+        stateDir: tmpDir,
+        log: () => {},
+        overviewRows: [
+          { pane: "%1", agent: "alice", project: "App", state: "idle" },
+        ],
+        sendPeer: async () => {
+          await new Promise((r) => setTimeout(r, 60));
+          return { ok: true };
+        },
+      },
+    );
+
+    const p2 = (async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      return executeStandupCommand(
+        { auto: true, file: standupFile },
+        {
+          stateDir: tmpDir,
+          log: () => {},
+          overviewRows: [
+            { pane: "%1", agent: "alice", project: "App", state: "idle" },
+          ],
+          sendPeer: async () => ({ ok: true }),
+        },
+      );
+    })();
+
+    const [res1, res2] = await Promise.all([p1, p2]);
+    const results = [res1, res2];
+    const skipped = results.find((r) => r.skipped === "already_ran_today");
+    const completed = results.find((r) => r.results && r.results.length === 1);
+
+    expect(skipped).toBeDefined();
+    expect(completed).toBeDefined();
+    expect(completed.results[0].sent).toBe(true);
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    const dateIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const stateContent = readFileSync(join(tmpDir, "standup", `${dateIso}.json`), "utf-8");
+    const stateObj = JSON.parse(stateContent);
+    expect(Array.isArray(stateObj)).toBe(true);
+    expect(stateObj[0].sent).toBe(true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("executeStandupCommand crash recovery reports already_ran_today unless forced", async () => {
+  const tmpDir = join("/tmp", `standup-crash-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const standupFile = join(tmpDir, "standup.md");
+  mkdirSync(join(tmpDir, "standup"), { recursive: true });
+  writeFileSync(standupFile, "Daily task for {{agent}}.", "utf-8");
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const d = new Date();
+  const dateIso = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const stateFilePath = join(tmpDir, "standup", `${dateIso}.json`);
+  writeFileSync(stateFilePath, JSON.stringify({ status: "running", date: dateIso }, null, 2), "utf-8");
+
+  try {
+    const catchupRes = await executeStandupCommand(
+      { auto: true, file: standupFile },
+      {
+        stateDir: tmpDir,
+        log: () => {},
+        overviewRows: [
+          { pane: "%1", agent: "alice", project: "App", state: "idle" },
+        ],
+        sendPeer: async () => ({ ok: true }),
+      },
+    );
+    expect(catchupRes).toEqual({ skipped: "already_ran_today" });
+
+    const forceRes = await executeStandupCommand(
+      { auto: true, force: true, file: standupFile },
+      {
+        stateDir: tmpDir,
+        log: () => {},
+        overviewRows: [
+          { pane: "%1", agent: "alice", project: "App", state: "idle" },
+        ],
+        sendPeer: async () => ({ ok: true }),
+      },
+    );
+    expect(forceRes.results.length).toBe(1);
+    expect(forceRes.results[0].sent).toBe(true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
