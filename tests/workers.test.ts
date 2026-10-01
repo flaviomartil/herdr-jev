@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,6 +12,18 @@ import {
   type TrackedWorkerRecord,
 } from "../src/herdr/launcher.js";
 import type { HerdrClient } from "../src/herdr/client.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
+
+let testEnv: { stateDir: string; cleanup: () => void };
+
+beforeEach(() => {
+  testEnv = createTestStateDir();
+});
+
+afterEach(() => {
+  testEnv?.cleanup();
+  assertNoRealHomeStateLeaks();
+});
 
 test("filterWorkerClosePlan targets only tracked idle or done workers", () => {
   const tracked: TrackedWorkerRecord[] = [

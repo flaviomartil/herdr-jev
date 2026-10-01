@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolveHarnessRoot } from "../src/harness/bridge.js";
 import { spawnSync } from "node:child_process";
@@ -6,8 +6,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHerdrClient, readHerdrObservedState, type HerdrClient } from "../src/herdr/client.js";
 import { buildAgentCommand, buildInlineCommand, launchStageInHerdr, parseHerdrPaneId } from "../src/herdr/launcher.js";
-import { converseWithPeer } from "../src/herdr/peer.js";
+import { converseWithPeer, resolvePeerStage } from "../src/herdr/peer.js";
 import type { HerdrCommandResult, StageSpec } from "../src/types/index.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
 
 const originalHerdrEnv = process.env.HERDR_ENV;
 const stage: StageSpec = {
@@ -52,9 +53,17 @@ function fakeHerdr(promptResult: HerdrCommandResult, completionResult = commandR
   };
 }
 
+let testEnv: { stateDir: string; cleanup: () => void };
+
+beforeEach(() => {
+  testEnv = createTestStateDir();
+});
+
 afterEach(() => {
   if (originalHerdrEnv === undefined) delete process.env.HERDR_ENV;
   else process.env.HERDR_ENV = originalHerdrEnv;
+  testEnv?.cleanup();
+  assertNoRealHomeStateLeaks();
 });
 
 describe("Herdr launch acknowledgement", () => {
@@ -73,6 +82,38 @@ describe("Herdr launch acknowledgement", () => {
     expect(result.ok).toBe(true);
     expect(reports).toBe(1);
     expect(herdr.promptCalls).toBe(1);
+  });
+
+  it("cascaded codex peer from antigravity applies matrix effort and includes effort flag in launch command", async () => {
+    process.env.HERDR_ENV = "1";
+    const { client, stage: cascadedStage } = await resolvePeerStage({
+      source: "antigravity",
+      role: "implementer",
+      prompt: "Implement caching layer",
+    });
+    expect(client).toBe("codex");
+    expect(cascadedStage.model).toBe("gpt-5.6-luna");
+    expect(cascadedStage.effort).toBe("xhigh");
+
+    const herdr = fakeHerdr(commandResult(true));
+    let agentArgs: string[] | undefined;
+    herdr.startAgent = async (options) => {
+      agentArgs = options.agentArgs;
+      return commandResult(true);
+    };
+
+    const result = await launchStageInHerdr({
+      client,
+      stage: cascadedStage,
+      handoffPrompt: "Implement caching layer",
+      sourcePaneId: "agy-pane-1",
+      herdr,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.commandText).toContain('model_reasoning_effort="xhigh"');
+    expect(agentArgs).toBeDefined();
+    expect(agentArgs).toContain('model_reasoning_effort="xhigh"');
   });
 
   it("preserves the stage effort in interactive and captured commands", () => {
