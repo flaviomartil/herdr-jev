@@ -13,3 +13,9 @@ Report archival uses exclusive creation and validates matching artifacts after a
 New follow-up execution, Office rendering of report history, and worker worktree integration are separate extensions. Existing worker cleanup and task isolation remain the mechanisms to reuse.
 
 Concepts evaluated against [herdr-orchestrate](https://github.com/darjss/herdr-orchestrate/tree/281a462231ed5c9d69fdba503e08e05f6daf193d). Model routes and Pi integration were not ported.
+
+## Architecture diagrams
+
+The [overview](architecture.html) and [detailed architecture](herdr-jev/architecture.html) document the canonical ledger, report archival and reconciliation history. Their JSON sources remain alongside the generated HTML. Redundant summary cards were consolidated; existing graph nodes and connections were preserved.
+
+Both generated artifacts passed the Archify showcase checks. The overview also passed desktop containment checks at 1440×900 through 2048×1320. The detailed view remains scrollable at 1440×900 and 1600×1000; its existing desktop overflow was reduced, not certified as resolved. Large-desktop rendering was inspected at 2048×1320. No application behavior changed in this documentation update.
