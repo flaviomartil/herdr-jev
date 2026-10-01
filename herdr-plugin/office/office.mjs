@@ -96,7 +96,6 @@ let jevCache = new Map();
 let lastJevPoll = 0;
 let swarmPanel = null;
 let jevAgentsCache = new Map();
-let jevSubagentPaneIds = new Set();
 let jevPolling = false;
 
 function getSubagentsFor(primaryId) {
@@ -144,6 +143,11 @@ async function requestClosePlan() {
       env: { ...process.env, HERDR_PANE_ID: '' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    child.on('error', (err) => {
+      note(`could not check close plan: ${err.message}`);
+      swarmPanel = { ...swarmPanel, closeConfirm: null };
+      draw();
+    });
     let out = '';
     child.stdout?.on('data', (d) => { out += d.toString('utf8'); });
     child.on('close', () => {
@@ -171,6 +175,11 @@ async function executeClosePlan() {
     const child = spawn(herdrJevBin, ['workers', 'close', '--all-idle', '--yes'], {
       env: { ...process.env, HERDR_PANE_ID: '' },
       stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.on('error', (err) => {
+      note(`could not execute close plan: ${err.message}`);
+      swarmPanel = { ...swarmPanel, closeConfirm: null };
+      draw();
     });
     child.on('close', async () => {
       swarmPanel = { ...swarmPanel, closeConfirm: null };
@@ -292,13 +301,39 @@ async function pollJevOverview(force = false) {
   if (DEMO) return jevCache;
   jevPolling = true;
   return new Promise((resolve) => {
+    let activeChild = null;
+    let settled = false;
+    const timeoutMs = Number(process.env.HERDR_JEV_TIMEOUT_MS) || 5000;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      if (activeChild) {
+        try {
+          activeChild.kill('SIGTERM');
+        } catch {}
+      }
+      jevPolling = false;
+      resolve(jevCache);
+    }, timeoutMs);
+    timer.unref?.();
+
+    const cleanup = () => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      jevPolling = false;
+      return true;
+    };
+
     const child = spawn(herdrJevBin, ['overview', '--json'], {
       env: { ...process.env, HERDR_PANE_ID: '' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+    activeChild = child;
     let stdout = '';
     child.stdout?.on('data', (d) => { stdout += d.toString('utf8'); });
     const finishOverview = () => {
+      if (settled) return;
       if (stdout.trim()) {
         try {
           const items = JSON.parse(stdout);
@@ -322,20 +357,19 @@ async function pollJevOverview(force = false) {
         env: { ...process.env, HERDR_PANE_ID: '' },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      activeChild = agentsChild;
       let agentsStdout = '';
       agentsChild.stdout?.on('data', (d) => { agentsStdout += d.toString('utf8'); });
       const finishAgents = () => {
-        jevPolling = false;
+        if (!cleanup()) return;
         if (agentsStdout.trim()) {
           try {
             const groups = JSON.parse(agentsStdout);
             if (Array.isArray(groups)) {
               const newMap = new Map();
-              const newSet = new Set();
               for (const group of groups) {
                 if (Array.isArray(group?.rows)) {
                   for (const row of group.rows) {
-                    if (row.paneId) newSet.add(row.paneId);
                     const caller = row.callerPaneId;
                     if (caller) {
                       if (!newMap.has(caller)) newMap.set(caller, []);
@@ -345,7 +379,6 @@ async function pollJevOverview(force = false) {
                 }
               }
               jevAgentsCache = newMap;
-              jevSubagentPaneIds = newSet;
             }
           } catch {}
         }
@@ -353,14 +386,12 @@ async function pollJevOverview(force = false) {
       };
       agentsChild.on('close', finishAgents);
       agentsChild.on('error', () => {
-        jevPolling = false;
-        resolve(jevCache);
+        if (cleanup()) resolve(jevCache);
       });
     };
     child.on('close', finishOverview);
     child.on('error', () => {
-      jevPolling = false;
-      resolve(jevCache);
+      if (cleanup()) resolve(jevCache);
     });
   });
 }
@@ -1555,7 +1586,7 @@ async function startHire(kind) {
   const args = ['subagent', '--role', 'implementer'];
   if (caller) args.push('--source-pane', caller);
   if (cwd) args.push('--cwd', cwd);
-  args.push(promptText);
+  args.push('--', promptText);
   try {
     await new Promise((resolve, reject) => {
       const child = spawn(herdrJevBin, args, {
@@ -1661,7 +1692,7 @@ async function sendCompose() {
     return;
   }
   if (DEMO) {
-    note(`demo mode: would send "${truncateNote(text)}" to ${to.map((p) => p.name).join(', ')}`);
+    note(`demo mode: would send "${truncateNote(text)}" to ${to.map((p) => p.name || p.id).join(', ')}`);
     compose = null;
     prevLines = [];
     draw();
@@ -1685,7 +1716,7 @@ async function sendCompose() {
           const args = ['subagent', '--role', 'implementer'];
           if (caller) args.push('--source-pane', caller);
           if (cwd) args.push('--cwd', cwd);
-          args.push(text);
+          args.push('--', text);
           await new Promise((resolve, reject) => {
             const child = spawn(herdrJevBin, args, {
               env: process.env,
@@ -1702,7 +1733,7 @@ async function sendCompose() {
         } else {
           const handle = person.handle || person.id;
           await new Promise((resolve, reject) => {
-            const child = spawn(herdrJevBin, ['peer-message', handle, text], {
+            const child = spawn(herdrJevBin, ['peer-message', '--', handle, text], {
               env: process.env,
               stdio: ['ignore', 'pipe', 'pipe'],
             });
@@ -2218,6 +2249,15 @@ const anim = setInterval(() => {
 
 const poll = setInterval(refresh, POLL_MS);
 
+if (process.env.HERDR_OFFICE_TEST_POLL === '1') {
+  clearInterval(anim);
+  clearInterval(poll);
+  pollJevOverview(true).then((cache) => {
+    process.stdout.write(JSON.stringify({ polled: true, size: cache?.size ?? 0 }));
+    process.exit(0);
+  });
+}
+
 async function main() {
   if (!DEMO) {
     try {
@@ -2320,4 +2360,6 @@ process.on('SIGINT', () => quit(0));
 process.on('SIGTERM', () => quit(0));
 process.on('uncaughtException', (err) => quit(1, `herdr-office crashed: ${err.stack}`));
 
-main();
+if (process.env.HERDR_OFFICE_TEST_POLL !== '1') {
+  main();
+}

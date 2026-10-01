@@ -309,13 +309,20 @@ function eventSlab(label, kind) {
 const SPARKLE_PATTERNS = ['  * ▄▄▄▄▄ + ', '  · ▄▄▄▄▄ * ', '  + ▄▄▄▄▄ · ', '  * ▄▄▄▄▄ o '];
 const GAUGE_BLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
-function parseQuotaPercent(raw) {
+export function parseQuotaPercent(raw) {
   if (raw == null) return null;
   if (typeof raw === 'number' && !Number.isNaN(raw)) return Math.max(0, Math.min(100, Math.round(raw)));
-  const match = String(raw).match(/(\d{1,3})%/);
-  if (match) return Math.max(0, Math.min(100, parseInt(match[1], 10)));
-  const num = parseInt(String(raw).trim(), 10);
-  if (!Number.isNaN(num) && num >= 0 && num <= 100) return num;
+  const trimmed = String(raw).trim();
+  const match = trimmed.match(/^(\d{1,3})%$/);
+  if (match) {
+    const n = parseInt(match[1], 10);
+    if (n >= 0 && n <= 100) return n;
+    return null;
+  }
+  if (/^\d{1,3}$/.test(trimmed)) {
+    const n = parseInt(trimmed, 10);
+    if (n >= 0 && n <= 100) return n;
+  }
   return null;
 }
 
@@ -509,6 +516,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     }
   }
   jevRow.gap(INNER);
+  const fitJev = jevRow.fit(INNER);
 
   const runBadge = resolveRunBadge(person, frame);
   const swarmBadge = person.swarmBadge;
@@ -527,6 +535,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     runRow.add(swarmBadge.text, { fg: swarmBadge.fg, bold: swarmBadge.bold });
   }
   runRow.gap(INNER);
+  const fitRun = runRow.fit(INNER);
 
   const quotaPct = parseQuotaPercent(person.jevQuota);
   let deskFrontText = DESK_FRONT;
@@ -546,7 +555,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     edge('╭', '╮', TILE_W, chrome),
     blank(),
     row(plate.out().text, plate.out().spans),
-    (person.jevModel || person.jevQuota) ? row(jevRow.out().text, jevRow.out().spans) : blank(),
+    (person.jevModel || person.jevQuota) ? row(fitJev.text, fitJev.spans) : blank(),
     card ? row(card.text, card.spans) : blank(),
     bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : blank(),
     row(art(hair, bezelTop(person.head?.used)), [
@@ -572,7 +581,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       P.deskTop,
     ),
     row(deskFrontText, deskFrontSpans, P.deskFront),
-    (runBadge || swarmBadge) ? row(runRow.out().text, runRow.out().spans) : blank(),
+    (runBadge || swarmBadge) ? row(fitRun.text, fitRun.spans) : blank(),
     row(bar.out().text, bar.out().spans),
     row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),

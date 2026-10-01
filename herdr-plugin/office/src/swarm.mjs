@@ -236,30 +236,7 @@ export function demoSwarmData() {
     },
   ]);
 
+
   return { demoSubagents, demoTracking };
 }
 
-export function formatSubagentRow(sub, widthLimit = 80) {
-  const slotStr = String(sub.slot).padEnd(2);
-  const isBlocked = sub.state === 'blocked';
-  const glyph = isBlocked ? '!' : sub.state === 'working' ? '*' : sub.state === 'idle' ? '-' : sub.state === 'done' ? '+' : '?';
-  const stateLabel = `${glyph} ${sub.state}`.padEnd(10);
-  const handle = (sub.handle || '-').padEnd(15);
-  const clientModel = `${sub.client || '-'}/${sub.model || '-'}`.padEnd(18);
-  const branch = (sub.branch || '-').padEnd(16);
-  const counts = `+${sub.commitsAhead ?? 0} ~${sub.uncommitted ?? 0}`.padEnd(8);
-  const run = sub.run ? String(sub.run) : '';
-
-  return {
-    slot: sub.slot,
-    slotStr,
-    stateLabel,
-    isBlocked,
-    handle,
-    clientModel,
-    branch,
-    counts,
-    run,
-    line: `${slotStr} ${stateLabel} ${handle} ${clientModel} ${branch} ${counts} ${run}`.trimEnd(),
-  };
-}
