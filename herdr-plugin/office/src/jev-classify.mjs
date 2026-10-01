@@ -61,18 +61,23 @@ export async function classifyPane(paneId, revision, person, outputLines) {
       clearTimeout(timer);
       if (code === 0 && stdout) {
         try {
-          const ans = JSON.parse(stdout);
-          const result = {
+          const firstBrace = stdout.indexOf('{');
+          const lastBrace = stdout.lastIndexOf('}');
+          if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
+            const rawJson = stdout.substring(firstBrace, lastBrace + 1);
+            const ans = JSON.parse(rawJson);
+            const result = {
             summary: defaultSummary,
-            state: ans.state?.choice === 'unknown' ? null : ans.state?.choice,
+            state: ans.stateConfidence >= 0.7 && ans.state !== 'unknown' ? ans.state : null,
             attention: ans.attention,
-            confidence: ans.state?.confidence ?? 0,
-            confidence: ans.confidence,
-            blockedReason: ans.blockedReason?.choice
+            confidence: ans.stateConfidence ?? 0,
+            blockedReason: ans.blockedReason,
+            activity: ans.activityConfidence >= 0.45 ? ans.activity : undefined
           };
-          cache.set(key, result);
-          resolve(result);
-          return;
+            cache.set(key, result);
+            resolve(result);
+            return;
+          }
         } catch (e) {}
       }
       resolve(fallback);
