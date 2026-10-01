@@ -306,6 +306,91 @@ function eventSlab(label, kind) {
   };
 }
 
+const SPARKLE_PATTERNS = ['  * ▄▄▄▄▄ + ', '  · ▄▄▄▄▄ * ', '  + ▄▄▄▄▄ · ', '  * ▄▄▄▄▄ o '];
+const GAUGE_BLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
+
+function parseQuotaPercent(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'number' && !Number.isNaN(raw)) return Math.max(0, Math.min(100, Math.round(raw)));
+  const match = String(raw).match(/(\d{1,3})%/);
+  if (match) return Math.max(0, Math.min(100, parseInt(match[1], 10)));
+  const num = parseInt(String(raw).trim(), 10);
+  if (!Number.isNaN(num) && num >= 0 && num <= 100) return num;
+  return null;
+}
+
+function formatQuotaGauge(pct, width = 4) {
+  const units = Math.round((pct / 100) * (width * 8));
+  const full = Math.floor(units / 8);
+  const rem = units % 8;
+  let s = '';
+  for (let i = 0; i < width; i += 1) {
+    if (i < full) s += '█';
+    else if (i === full && rem > 0) s += GAUGE_BLOCKS[rem];
+    else s += ' ';
+  }
+  return s;
+}
+
+function resolveRunBadge(person, frame) {
+  const run = person.jevRun;
+  const role = person.role;
+  if (!run && !role) return null;
+
+  let state = 'working';
+  let label = role || '';
+
+  if (typeof run === 'object' && run !== null) {
+    if (run.state === 'verified') state = 'verified';
+    else if (run.state === 'failed') state = 'failed';
+    else if (run.state === 'working' || run.state === 'running') state = 'working';
+    if (run.stage) label = String(run.stage);
+    else if (run.summary) label = String(run.summary);
+  } else if (typeof run === 'string' && run.trim()) {
+    const lower = run.toLowerCase();
+    if (lower.includes('verified') || lower.includes('passed') || lower.includes('done')) state = 'verified';
+    else if (lower.includes('failed') || lower.includes('broke') || lower.includes('error')) state = 'failed';
+    else if (lower.includes('working') || lower.includes('running') || lower.includes('stage')) state = 'working';
+    label = run.replace(/\s*\(?(verified|failed|working|done)\)?\s*/gi, '').trim() || run;
+  }
+
+  if (person.status === 'done' && state === 'working') state = 'verified';
+  if (person.event?.kind === 'broke' && state === 'working') state = 'failed';
+
+  if (!label && role) label = role;
+  if (!label) label = 'stage';
+
+  label = label.replace(/:+$/, '').trim();
+  let text = `${label}: ${state}`;
+  if (label.toLowerCase().includes(state)) text = label;
+
+  if (state === 'working') {
+    const isLit = (Math.floor(frame / 2) % 2) === 0;
+    return {
+      text,
+      fg: isLit ? P.accent : P.dim,
+      textFg: isLit ? P.accent : P.dim,
+      bold: isLit,
+    };
+  }
+
+  if (state === 'verified') {
+    return {
+      text,
+      fg: '#5ce08a',
+      textFg: '#5ce08a',
+      bold: true,
+    };
+  }
+
+  return {
+    text,
+    fg: '#f09a9a',
+    textFg: '#f09a9a',
+    bold: true,
+  };
+}
+
 function tile(person, { selected, frame, now, lifted = false, dropTarget = false, wall = P.wall }) {
   const st = status(person.status);
   const who = identity(person.id);
@@ -363,7 +448,8 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   plate.add('▌', { fg: who.shirt });
   plate.add(' ');
   plate.add(truncate(person.name, 12), { fg: P.ink, bold: true });
-  if (person.focused) plate.add(' *', { fg: P.accent, bold: true });
+  if (person.hiredSparkle) plate.add(' *', { fg: '#ffe6a8', bold: true });
+  else if (person.focused) plate.add(' *', { fg: P.accent, bold: true });
   const kind = truncate(person.kind, 10);
   plate.gap(INNER - width(kind));
   plate.add(kind, { fg: P.dim });
@@ -410,7 +496,8 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // it: whatever just happened at this desk matters less than the fact that this
   // desk is waiting on you.
   const slab = !bubble && person.event?.label ? eventSlab(person.event.label, person.event.kind) : null;
-  const hair = bubble ? over(body.rows[0], '▘', TAIL_X) : body.rows[0];
+  const sparkRow = SPARKLE_PATTERNS[frame % SPARKLE_PATTERNS.length];
+  const hair = bubble ? over(body.rows[0], '▘', TAIL_X) : person.hiredSparkle ? sparkRow : body.rows[0];
 
   const jevRow = cells();
   if (person.jevModel || person.jevQuota) {
@@ -423,12 +510,24 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   }
   jevRow.gap(INNER);
 
+  const runBadge = resolveRunBadge(person, frame);
   const runRow = cells();
-  if (person.jevRun) {
-    runRow.add('⚡ ', { fg: P.accent });
-    runRow.add(truncate(person.jevRun, INNER - 2), { fg: P.accent });
+  if (runBadge) {
+    runRow.add('▌ ', { fg: runBadge.fg });
+    runRow.add(truncate(runBadge.text, INNER - 2), { fg: runBadge.textFg, bold: runBadge.bold });
   }
   runRow.gap(INNER);
+
+  const quotaPct = parseQuotaPercent(person.jevQuota);
+  let deskFrontText = DESK_FRONT;
+  const deskFrontSpans = [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }];
+  if (quotaPct != null) {
+    const gaugeW = 4;
+    const gaugeX = 2;
+    deskFrontText = over(deskFrontText, formatQuotaGauge(quotaPct, gaugeW), gaugeX);
+    const gaugeFg = quotaPct >= 90 ? '#ef6b43' : quotaPct >= 75 ? '#ffc14d' : '#5ce08a';
+    deskFrontSpans.push({ from: gaugeX, to: gaugeX + gaugeW, fg: gaugeFg });
+  }
 
   // Rows, top to bottom, with a blank line wherever two things that mean
   // different things would otherwise touch: under the nameplate, under the
@@ -441,7 +540,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     card ? row(card.text, card.spans) : blank(),
     bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : blank(),
     row(art(hair, bezelTop(person.head?.used)), [
-      { from: 0, to: POSE_W, fg: emoteFg },
+      { from: 0, to: POSE_W, fg: person.hiredSparkle ? '#ffe6a8' : emoteFg, bold: Boolean(person.hiredSparkle) },
       { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
       ...(bubble ? [{ from: TAIL_X, to: TAIL_X + 1, fg: P.bubble }] : []),
       { from: MON_X, to: INNER, fg: bezel },
@@ -462,8 +561,8 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       ],
       P.deskTop,
     ),
-    row(DESK_FRONT, [{ from: MON_X + 5, to: MON_X + 8, fg: '#40301f' }], P.deskFront),
-    person.jevRun ? row(runRow.out().text, runRow.out().spans) : blank(),
+    row(deskFrontText, deskFrontSpans, P.deskFront),
+    runBadge ? row(runRow.out().text, runRow.out().spans) : blank(),
     row(bar.out().text, bar.out().spans),
     row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),
