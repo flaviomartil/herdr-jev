@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
@@ -114,24 +114,148 @@ export function planGridSplit(layout: PaneLayoutInput, callerPaneId: string, wor
   return { targetPaneId: largest.paneId, direction, ratio: 0.5 };
 }
 
-function gridStatePath(callerPaneId: string): string {
-  const stateDir = process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev");
-  const safePaneId = callerPaneId.replace(/[^a-zA-Z0-9._-]/g, "_");
-  return join(stateDir, "grid", `${safePaneId}.json`);
+export type TrackedWorkerRecord = {
+  callerPaneId: string;
+  workerPaneId: string;
+};
+
+export type ClosePlanItem = {
+  callerPaneId: string;
+  paneId: string;
+  status: string;
+};
+
+export function gridStateDir(stateDir = process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev")): string {
+  return join(stateDir, "grid");
 }
 
-function readGridWorkers(callerPaneId: string): string[] {
+export function gridStatePath(callerPaneId: string, stateDir?: string): string {
+  const safePaneId = callerPaneId.replace(/[^a-zA-Z0-9._-]/g, "_");
+  return join(gridStateDir(stateDir), `${safePaneId}.json`);
+}
+
+export function readGridWorkers(callerPaneId: string, stateDir?: string): string[] {
   try {
-    const value = JSON.parse(readFileSync(gridStatePath(callerPaneId), "utf8"));
+    const value = JSON.parse(readFileSync(gridStatePath(callerPaneId, stateDir), "utf8"));
     const workers = Array.isArray(value) ? value : value.workerPaneIds;
     return Array.isArray(workers) ? workers.filter((paneId): paneId is string => typeof paneId === "string") : [];
   } catch { return []; }
 }
 
-function writeGridWorkers(callerPaneId: string, workerPaneIds: string[]): void {
-  const path = gridStatePath(callerPaneId);
+export function writeGridWorkers(callerPaneId: string, workerPaneIds: string[], stateDir?: string): void {
+  const path = gridStatePath(callerPaneId, stateDir);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  writeFileSync(path, JSON.stringify({ workerPaneIds: [...new Set(workerPaneIds)] }), { mode: 0o600 });
+  writeFileSync(path, JSON.stringify({ callerPaneId, workerPaneIds: [...new Set(workerPaneIds)] }), { mode: 0o600 });
+}
+
+export function listAllGridWorkers(stateDir?: string): TrackedWorkerRecord[] {
+  const dir = gridStateDir(stateDir);
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const result: TrackedWorkerRecord[] = [];
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    try {
+      const content = JSON.parse(readFileSync(join(dir, file), "utf8"));
+      const callerPaneId = typeof content?.callerPaneId === "string" ? content.callerPaneId : file.slice(0, -5);
+      const workers = Array.isArray(content) ? content : content?.workerPaneIds;
+      if (Array.isArray(workers)) {
+        for (const workerPaneId of workers) {
+          if (typeof workerPaneId === "string") {
+            result.push({ callerPaneId, workerPaneId });
+          }
+        }
+      }
+    } catch {
+    }
+  }
+  return result;
+}
+
+export function filterWorkerClosePlan(
+  tracked: readonly TrackedWorkerRecord[],
+  statuses: Record<string, string | null | undefined> | ((paneId: string) => string | null | undefined),
+  options: { pane?: string; allIdle?: boolean },
+): ClosePlanItem[] {
+  if (!options.pane && !options.allIdle) return [];
+  const callerPaneIds = new Set(tracked.map((t) => t.callerPaneId));
+  const getStatus = typeof statuses === "function" ? statuses : (id: string) => statuses[id];
+
+  const plan: ClosePlanItem[] = [];
+  const seen = new Set<string>();
+
+  if (options.pane) {
+    if (callerPaneIds.has(options.pane)) return [];
+    const entries = tracked.filter((t) => t.workerPaneId === options.pane);
+    if (entries.length === 0) return [];
+    for (const entry of entries) {
+      if (seen.has(entry.workerPaneId)) continue;
+      const status = getStatus(entry.workerPaneId) ?? "unknown";
+      if (status === "idle" || status === "done") {
+        seen.add(entry.workerPaneId);
+        plan.push({ callerPaneId: entry.callerPaneId, paneId: entry.workerPaneId, status });
+      }
+    }
+    return plan;
+  }
+
+  if (options.allIdle) {
+    for (const entry of tracked) {
+      if (callerPaneIds.has(entry.workerPaneId)) continue;
+      if (seen.has(entry.workerPaneId)) continue;
+      const status = getStatus(entry.workerPaneId) ?? "unknown";
+      if (status === "idle" || status === "done") {
+        seen.add(entry.workerPaneId);
+        plan.push({ callerPaneId: entry.callerPaneId, paneId: entry.workerPaneId, status });
+      }
+    }
+  }
+
+  return plan;
+}
+
+export function pruneGridWorkers(closedPaneIds: readonly string[], stateDir?: string): void {
+  const closedSet = new Set(closedPaneIds);
+  const dir = gridStateDir(stateDir);
+  let files: string[];
+  try {
+    files = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const file of files) {
+    if (!file.endsWith(".json")) continue;
+    const filePath = join(dir, file);
+    try {
+      const content = JSON.parse(readFileSync(filePath, "utf8"));
+      const callerPaneId = typeof content?.callerPaneId === "string" ? content.callerPaneId : file.slice(0, -5);
+      const workers = Array.isArray(content) ? content : content?.workerPaneIds;
+      if (Array.isArray(workers)) {
+        const remaining = workers.filter((id) => typeof id === "string" && !closedSet.has(id));
+        if (remaining.length === 0) {
+          rmSync(filePath, { force: true });
+        } else {
+          writeGridWorkers(callerPaneId, remaining, stateDir);
+        }
+      }
+    } catch {
+    }
+  }
+}
+
+export async function executeWorkerClose(
+  client: HerdrClient,
+  plan: readonly ClosePlanItem[],
+  stateDir?: string,
+): Promise<void> {
+  for (const item of plan) {
+    await client.closePane(item.paneId);
+  }
+  pruneGridWorkers(plan.map((p) => p.paneId), stateDir);
 }
 
 /**
