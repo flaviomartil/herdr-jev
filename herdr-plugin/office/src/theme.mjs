@@ -134,6 +134,7 @@ export function paint(text, spans = [], base = {}) {
   const chars = [...text];
   let out = '';
   let key = null;
+  const noColor = process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== '';
   for (let i = 0; i < chars.length; i += 1) {
     let s = base;
     for (const sp of spans) {
@@ -151,8 +152,8 @@ export function paint(text, spans = [], base = {}) {
       out += RESET;
       if (s.bold) out += BOLD;
       if (s.dim) out += DIM;
-      if (s.fg) out += fg(s.fg);
-      if (s.bg) out += bg(s.bg);
+      if (!noColor && s.fg) out += fg(s.fg);
+      if (!noColor && s.bg) out += bg(s.bg);
       key = k;
     }
     out += chars[i];
