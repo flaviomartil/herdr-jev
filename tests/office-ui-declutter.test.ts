@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
+import { writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { resolve } from "node:path";
 import { cleanOutput, findAsk, summarize } from "../herdr-plugin/office/src/summary.mjs";
-import { classifyPane } from "../herdr-plugin/office/src/jev-classify.mjs";
+import { classifyPane, jevClassificationEnabled } from "../herdr-plugin/office/src/jev-classify.mjs";
 
 test("filter terminal chrome from the pane text before showing it", () => {
   const outputLines = [
@@ -16,7 +18,6 @@ test("filter terminal chrome from the pane text before showing it", () => {
   ];
   const person = { title: "title" };
   const summary = summarize(person, outputLines);
-  // It should keep the meaningful tool message and title
   expect(summary.some(l => l.includes("meaningful tool message"))).toBe(true);
   expect(summary.some(l => l.includes("warnings"))).toBe(false);
   expect(summary.some(l => l.includes("f2 to view"))).toBe(false);
@@ -25,10 +26,90 @@ test("filter terminal chrome from the pane text before showing it", () => {
   expect(summary.some(l => l.includes("GPT-4"))).toBe(false);
 });
 
+test("jevClassificationEnabled covers default on, opt-out with 0, and demo always off", () => {
+  const origEnv = process.env.HERDR_JEV_OFFICE_JEV;
+  try {
+    delete process.env.HERDR_JEV_OFFICE_JEV;
+    expect(jevClassificationEnabled(process.env, [])).toBe(true);
+
+    process.env.HERDR_JEV_OFFICE_JEV = "1";
+    expect(jevClassificationEnabled(process.env, [])).toBe(true);
+
+    process.env.HERDR_JEV_OFFICE_JEV = "0";
+    expect(jevClassificationEnabled(process.env, [])).toBe(false);
+
+    process.env.HERDR_JEV_OFFICE_JEV = "false";
+    expect(jevClassificationEnabled(process.env, [])).toBe(false);
+
+    process.env.HERDR_JEV_OFFICE_JEV = "off";
+    expect(jevClassificationEnabled(process.env, [])).toBe(false);
+
+    process.env.HERDR_JEV_OFFICE_JEV = "1";
+    expect(jevClassificationEnabled(process.env, ["--demo"])).toBe(false);
+
+    delete process.env.HERDR_JEV_OFFICE_JEV;
+    expect(jevClassificationEnabled(process.env, ["--demo"])).toBe(false);
+  } finally {
+    if (origEnv !== undefined) {
+      process.env.HERDR_JEV_OFFICE_JEV = origEnv;
+    } else {
+      delete process.env.HERDR_JEV_OFFICE_JEV;
+    }
+  }
+});
+
 test("cache once per revision and timeout fallback", async () => {
-  // Test classifyPane with no env var
-  const fallback = await classifyPane("test-pane", 1, {}, []);
-  expect(fallback.state).toBe(null);
+  const origEnv = process.env.HERDR_JEV_OFFICE_JEV;
+  const origBin = process.env.HERDR_JEV_BIN;
+  const fakeBin = resolve(import.meta.dir, `../.test-fake-classify-${Date.now()}.mjs`);
+  const failingBin = resolve(import.meta.dir, `../.test-failing-classify-${Date.now()}.mjs`);
+  writeFileSync(
+    fakeBin,
+    `#!/usr/bin/env node\nprocess.stdout.write(JSON.stringify({ state: { choice: "working", confidence: 0.9 }, attention: "now", blockedReason: { choice: "none" } }));\n`
+  );
+  chmodSync(fakeBin, 0o755);
+  writeFileSync(failingBin, `#!/usr/bin/env node\nprocess.exit(1);\n`);
+  chmodSync(failingBin, 0o755);
+
+  try {
+    delete process.env.HERDR_JEV_OFFICE_JEV;
+    process.env.HERDR_JEV_BIN = fakeBin;
+    const resOn = await classifyPane("test-pane", 1, {}, []);
+    expect(resOn.state).toBe("working");
+    expect(resOn.attention).toBe("now");
+
+    const cached = await classifyPane("test-pane", 1, {}, []);
+    expect(cached.state).toBe("working");
+
+    process.env.HERDR_JEV_BIN = failingBin;
+    const fallback = await classifyPane("test-pane-fail", 1, {}, []);
+    expect(fallback.state).toBe(null);
+
+    process.env.HERDR_JEV_OFFICE_JEV = "0";
+    process.env.HERDR_JEV_BIN = "/nonexistent/fake/herdr-jev";
+    const resOff = await classifyPane("test-pane-off", 1, {}, []);
+    expect(resOff.state).toBe(null);
+
+    delete process.env.HERDR_JEV_OFFICE_JEV;
+    process.argv.push("--demo");
+    const resDemo = await classifyPane("test-pane-demo", 1, {}, []);
+    expect(resDemo.state).toBe(null);
+  } finally {
+    const demoIdx = process.argv.indexOf("--demo");
+    if (demoIdx !== -1) process.argv.splice(demoIdx, 1);
+    if (origEnv !== undefined) {
+      process.env.HERDR_JEV_OFFICE_JEV = origEnv;
+    } else {
+      delete process.env.HERDR_JEV_OFFICE_JEV;
+    }
+    if (origBin !== undefined) {
+      process.env.HERDR_JEV_BIN = origBin;
+    } else {
+      delete process.env.HERDR_JEV_BIN;
+    }
+    try { unlinkSync(fakeBin); } catch {}
+    try { unlinkSync(failingBin); } catch {}
+  }
 });
 
 test("ordering by attention (now first, then soon)", () => {
