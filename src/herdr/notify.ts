@@ -44,6 +44,12 @@ function getReasonText(reason: string) {
 }
 
 export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[]; dryRun?: boolean; wouldSend?: string[] }> {
+  if (opts.pane && !/^[A-Za-z0-9_]+:[A-Za-z0-9_]+$/.test(opts.pane)) {
+    return { sent: false, skippedReason: "invalid pane id", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
+  }
+  if (opts.agent && !/^[A-Za-z0-9._-]{1,40}$/.test(opts.agent)) {
+    return { sent: false, skippedReason: "invalid agent", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
+  }
   if (opts.releaseAll) {
     return handleReleaseAll(runner);
   }
@@ -108,13 +114,15 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     safeTask = safeTask.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
     safeTask = redactSecrets(safeTask);
   }
-  const body = safeTask ? `${safeTask.slice(0, 80)}: ${reasonText}` : reasonText;
+  let body = safeTask ? `${safeTask.slice(0, 80)}: ${reasonText}` : reasonText;
+  let safeTitle = title.startsWith("-") ? "· " + title : title;
+  if (body.startsWith("-")) body = "· " + body;
   const channels: string[] = [];
 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
 
   if (!opts.dryRun) {
-    const res = await runner([herdrBin, "notification", "show", "--", title, "--body", body, "--sound", "request"]);
+    const res = await runner([herdrBin, "notification", "show", safeTitle, "--body", body, "--sound", "request"]);
     if (!res.ok) {
       try { unlinkSync(claimFile); } catch (e) {}
       return { sent: false, skippedReason: "notification failed", channels: [] };
@@ -175,7 +183,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         writeFileSync(tempFile, JSON.stringify(escalations));
         renameSync(tempFile, escalationsFile);
 
-        const repRes = await runner([herdrBin, "pane", "report-agent", "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText, "--", opts.pane!]);
+        const repRes = await runner([herdrBin, "pane", "report-agent", "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText, opts.pane!]);
         if (!repRes.ok) {
           escalations = escalations.filter((e: any) => e.pane !== opts.pane);
           writeFileSync(tempFile, JSON.stringify(escalations));
@@ -215,7 +223,7 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
   }
 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", record.agent, "--", pane]);
+  const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", record.agent, pane]);
   if (!res.ok) {
     return { sent: false, skippedReason: "release failed", channels: [] };
   }
@@ -241,14 +249,14 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
       let shouldRelease = age > 15 * 60 * 1000;
       
       if (!shouldRelease) {
-        const res = await runner([herdrBin, "pane", "get", "--", esc.pane]);
+        const res = await runner([herdrBin, "pane", "get", esc.pane]);
         if (!res.ok) {
           shouldRelease = true;
         }
       }
 
       if (shouldRelease) {
-        const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, "--", esc.pane]);
+        const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, esc.pane]);
         if (res.ok) {
           released++;
         } else {
@@ -277,7 +285,7 @@ async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; ch
 
     const active = [];
     for (const esc of escalations) {
-      const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, "--", esc.pane]);
+      const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, esc.pane]);
       if (!res.ok) {
         active.push(esc);
       }
