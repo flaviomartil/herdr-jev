@@ -43,8 +43,8 @@ function fakeHerdr(promptResult: HerdrCommandResult, completionResult = commandR
       waitCalls += 1;
       return completionResult;
     },
-    readAgent: async () => commandResult(true, lastPrompt || "task synthetic handoff ready"),
-    readPane: async () => commandResult(true, lastPrompt || "task synthetic handoff ready"),
+    readAgent: async () => commandResult(true, lastPrompt || "› \n> \n❯ task synthetic handoff ready"),
+    readPane: async () => commandResult(true, lastPrompt || "› \n> \n❯ task synthetic handoff ready"),
     closePane: async () => {
       closeCalls += 1;
       return commandResult(true);
@@ -163,7 +163,9 @@ describe("Herdr launch acknowledgement", () => {
     const ready = new Promise<void>(resolve => { started = resolve; });
     const pending = new Promise<void>(resolve => { finish = resolve; });
     let tabs = 0;
-    herdr.getAgent = async () => commandResult(false, JSON.stringify({ error: { code: "agent_not_found" } }));
+    let startedFlag = false;
+    herdr.startAgent = async () => { startedFlag = true; return commandResult(true); };
+    herdr.getAgent = async () => startedFlag ? commandResult(true, JSON.stringify({ result: { agent: { agent_status: "idle" } } })) : commandResult(false, JSON.stringify({ error: { code: "agent_not_found" } }));
     herdr.createTab = async () => { tabs++; started(); await pending; return commandResult(true, JSON.stringify({ result: { root_pane: { pane_id: "first-peer" } } })); };
     const input = { client: "codex", stage, handoffPrompt: "task", herdr, layout: "tab" as const, agentName: `named-${Date.now().toString(36)}`, reuseExisting: true };
     const first = launchStageInHerdr(input);
@@ -180,7 +182,9 @@ describe("Herdr launch acknowledgement", () => {
     process.env.HERDR_ENV = "1";
     const herdr = fakeHerdr(commandResult(true));
     let tabs = 0;
-    herdr.getAgent = async () => commandResult(false, JSON.stringify({ error: { code: "agent_not_found" } }));
+    let startedFlag = false;
+    herdr.startAgent = async () => { startedFlag = true; return commandResult(true); };
+    herdr.getAgent = async () => startedFlag ? commandResult(true, JSON.stringify({ result: { agent: { agent_status: "idle" } } })) : commandResult(false, JSON.stringify({ error: { code: "agent_not_found" } }));
     herdr.createTab = async () => { tabs++; return commandResult(true, JSON.stringify({ result: {} })); };
     const input = { client: "codex", stage, handoffPrompt: "task", herdr, layout: "tab" as const,
       agentName: `uncertain-${Date.now().toString(36)}`, reuseExisting: true };
@@ -245,7 +249,8 @@ describe("Herdr launch acknowledgement", () => {
     herdr.readAgent = async () => commandResult(true, "1. Trust and continue");
     const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "bounded task", herdr });
     expect(herdr.promptCalls).toBe(0);
-    expect(result.ackStatus).toBe("rejected");
+    expect(result.ackStatus).toBe("blocked");
+    expect(result.trustRequired).toBe(true);
     expect(result.error).toContain("trust confirmation");
   });
 
@@ -311,7 +316,12 @@ describe("Herdr launch acknowledgement", () => {
     process.env.HERDR_ENV = "1";
     const herdr = fakeHerdr(commandResult(true));
     herdr.readAgent = async () => commandResult(true, "unrelated banner");
-    herdr.getAgent = async () => commandResult(true, JSON.stringify({ result: { agent: { agent_status: "working" } } }));
+    let getCalls = 0;
+    herdr.getAgent = async () => {
+      getCalls++;
+      if (getCalls <= 1) return commandResult(true, JSON.stringify({ result: { agent: { agent_status: "idle" } } }));
+      return commandResult(true, JSON.stringify({ result: { agent: { agent_status: "working" } } }));
+    };
     const result = await launchStageInHerdr({
       client: "cursor",
       stage,

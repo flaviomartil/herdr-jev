@@ -442,8 +442,28 @@ program
   .option("-d, --direction <direction>", "Split layout: auto (grid), grid, right, or down", "auto")
   .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
   .option("-p, --print", "Run non-interactively in inline mode (print output directly)")
-  .action(async (promptText: string, options: { client?: string; target?: string; role: string; split?: boolean; tab?: boolean; name?: string; model?: string; effort?: string; sourcePane?: string; cwd?: string; direction?: string; crossHarness?: string; print?: boolean }) => {
+  .option("--worktree [name]", "Create a sibling worktree for the subagent")
+  .action(async (promptText: string, options: { client?: string; target?: string; role: string; split?: boolean; tab?: boolean; name?: string; model?: string; effort?: string; sourcePane?: string; cwd?: string; direction?: string; crossHarness?: string; print?: boolean; worktree?: boolean | string; gitRunner?: any }) => {
+    const { setupWorktree } = await import("./herdr/agents.js");
     const context = await resolveHerdrContext({ client: options.client, sourcePaneId: options.sourcePane });
+    let finalCwd = options.cwd ?? context.cwd ?? process.cwd();
+    let worktreeBranch = null;
+    let worktreePath = null;
+    
+    if (options.worktree !== undefined) {
+      const res = await setupWorktree(options, finalCwd);
+      if (res.error) {
+        console.error(`[herdr-jev] ${res.error}`);
+        process.exitCode = 1;
+        return;
+      }
+      if (res.worktreePath && res.worktreeBranch) {
+        worktreePath = res.worktreePath;
+        worktreeBranch = res.worktreeBranch;
+        finalCwd = worktreePath;
+      }
+    }
+
     const sourceClient = context.client as ClientKind;
     const role = (options.role || "researcher") as RoleKind;
     const { client: effectiveClient, stage, triage } = await resolvePeerStage({ prompt: promptText, source: sourceClient,
@@ -458,12 +478,7 @@ program
       if (!isHerdr) {
         console.log("\n[herdr-jev] Split pane requested, but HERDR_ENV != 1 (not inside a Herdr pane).");
         console.log(`[herdr-jev] Executing subagent (${effectiveClient}/${stage.model}) in native harness mode...\n`);
-        const inlineResult = runAgentInline({
-          client: effectiveClient,
-          stage,
-          promptText,
-          nonInteractive: options.print ?? false,
-        });
+        const inlineResult = (() => { process.chdir(finalCwd); return runAgentInline({ client: effectiveClient, stage, promptText, nonInteractive: options.print ?? false }); })();
         if (!inlineResult.ok) {
           console.error(`[herdr-jev] Inline execution failed: ${inlineResult.error || `exit code ${inlineResult.exitCode}`}`);
           process.exit(inlineResult.exitCode || 1);
@@ -482,7 +497,7 @@ program
         herdr,
         triage, layout: options.tab ? "tab" : "split", sourcePaneId: context.sourcePaneId,
         agentName: options.name, reuseExisting: !!options.name,
-        workspaceId: context.workspaceId, cwd: options.cwd ?? context.cwd,
+        workspaceId: context.workspaceId, cwd: finalCwd,
       });
 
       if (!result.ok) {
@@ -490,6 +505,17 @@ program
         console.log(JSON.stringify(result));
         process.exitCode = 1;
         return;
+      }
+
+      if (worktreePath && worktreeBranch && result.paneId) {
+        const { readGridWorkerRecords, writeGridWorkers } = await import("./herdr/launcher.js");
+        const records = readGridWorkerRecords(context.sourcePaneId || "");
+        const idx = records.findIndex(r => r.paneId === result.paneId);
+        if (idx !== -1) {
+          records[idx].cwd = worktreePath;
+          records[idx].branch = worktreeBranch;
+          writeGridWorkers(context.sourcePaneId || "", records);
+        }
       }
 
       console.log(`[herdr-jev] Subagent active in pane ${result.paneId} (${result.agentName})`);
@@ -501,17 +527,13 @@ program
 
     // Inline native harness mode (splitMode === false)
     console.log(`\n[herdr-jev] Running ${role} subagent (${effectiveClient}/${stage.model}) in native harness mode...`);
-    const inlineResult = runAgentInline({
-      client: effectiveClient,
-      stage,
-      promptText,
-      nonInteractive: options.print ?? false,
-    });
+    const inlineResult = (() => { process.chdir(finalCwd); return runAgentInline({ client: effectiveClient, stage, promptText, nonInteractive: options.print ?? false }); })();
 
     if (!inlineResult.ok) {
       console.error(`[herdr-jev] Inline subagent failed: ${inlineResult.error || `exit code ${inlineResult.exitCode}`}`);
       process.exit(inlineResult.exitCode || 1);
     }
+  
   });
 
 program.command("peer-message [agent] [text]")

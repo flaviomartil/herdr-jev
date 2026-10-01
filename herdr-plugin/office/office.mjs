@@ -1699,7 +1699,30 @@ async function openHire() {
   // The menu and a desk's detail share the bottom half of the pane, so opening
   // one puts the other away.
   detail = null;
-  hire = { kinds: [], index: 0, pending: null, error: null, worktree: false, branch: '', editing: false };
+  const hireCwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
+  let defaultWorktree = false;
+  if (!process.argv.includes('--no-git')) {
+    const getToplevel = (cwd) => new Promise((resolve) => {
+      const p = spawn('git', ['rev-parse', '--show-toplevel'], { cwd, shell: false });
+      let out = '';
+      p.stdout.on('data', d => out += d.toString());
+      p.on('close', code => resolve(code === 0 ? out.trim() : null));
+      p.on('error', () => resolve(null));
+    });
+    const hireToplevel = await getToplevel(hireCwd);
+    if (hireToplevel) {
+      for (const p of roster.people) {
+        if (p.cwd && !p.focused) {
+          const pToplevel = await getToplevel(p.cwd);
+          if (pToplevel === hireToplevel) {
+            defaultWorktree = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+  hire = { kinds: [], index: 0, pending: null, error: null, worktree: defaultWorktree, branch: '', editing: false };
   prevLines = [];
   draw();
   try {
@@ -1754,7 +1777,6 @@ function editBranch(on) {
   else hire = { ...hire, editing: false, branch: hire.was || defaultBranch(hire.kinds[hire.index]) };
 }
 
-// `agent.start` waits for the agent to reach its own prompt, which can take the
 // better part of a minute, and every request on the main socket is queued behind
 // the one in front of it. So a hire gets its own connection: the office keeps
 // polling and animating while somebody is being shown to their desk.
@@ -1762,6 +1784,7 @@ async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
   const wantsWorktree = hire.worktree;
   const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
+  if (wantsWorktree) args.push('--worktree', branch);
   if (DEMO) {
     note(wantsWorktree
       ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`
@@ -1775,6 +1798,7 @@ async function startHire(kind) {
   const cwd = (roster.people.find((p) => p.focused) || roster.people[0])?.cwd || process.cwd();
   const promptText = `Implement task with ${kind}`;
   const args = ['subagent', '--role', 'implementer'];
+  if (wantsWorktree) args.push('--worktree', branch);
   if (caller) args.push('--source-pane', caller);
   if (cwd) args.push('--cwd', cwd);
   args.push('--', promptText);

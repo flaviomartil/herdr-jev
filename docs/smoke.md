@@ -41,7 +41,8 @@ SMOKE_LIVE_JEV=1 bun run smoke
 9. **`notify --dry-run --json`**: Verifies that `herdr-jev notify --dry-run --json` returns `dryRun: true` and `sent: false`, and writes no state.
 10. **`notify --release --pane <fake>`**: Verifies that `herdr-jev notify --release --pane <fake>` returns `skippedReason: 'no escalation'`.
 11. **`the Office renders`**: Runs `node herdr-plugin/office/office.mjs --once --demo` and validates that stripped output lines have exactly 100, 120, and 140 columns when invoked with those widths.
-12. **`classify-pane --json`** *(Optional: requires `SMOKE_LIVE_JEV=1`)*: Executes a live classification against a fixed terminal sample and asserts exact flat keys (`state`, `stateConfidence`, `attention`, `attentionScore`, `attentionConfidence`, `blockedReason`, `blockedReasonConfidence`, `activity`, `activityConfidence`) with attention in `none|soon|now`.
+12. **`test guard present`**: Verifies that `tests/preload.ts` configures `HERDR_JEV_TEST_GUARD`. Marked as `skip` when `src/herdr/client.ts` does not contain `blocked_by_test_guard`.
+13. **`classify-pane --json`** *(Optional: requires `SMOKE_LIVE_JEV=1`)*: Executes a live classification against a fixed terminal sample and asserts exact flat keys (`state`, `stateConfidence`, `attention`, `attentionScore`, `attentionConfidence`, `blockedReason`, `blockedReasonConfidence`, `activity`, `activityConfidence`) with attention in `none|soon|now`.
 
 ## Safety & Isolation
 

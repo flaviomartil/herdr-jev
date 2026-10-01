@@ -9,13 +9,14 @@ import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
 
 export interface LaunchResult {
   ok: boolean;
-  ackStatus?: "acknowledged" | "rejected" | "unknown" | "not_attempted";
+  ackStatus?: "acknowledged" | "rejected" | "unknown" | "not_attempted" | "blocked";
   completionState?: HerdrObservedState | "not_requested";
   completionObserved?: boolean;
   workEvidence?: "not_checked";
   error?: string;
   paneCreated?: boolean;
   promptPending?: boolean;
+  trustRequired?: boolean;
   promptDelivered?: boolean;
   hint?: string;
   agentName?: string;
@@ -416,6 +417,20 @@ export function parseHerdrPaneId(stdout: string): string | undefined {
 
 import { resolveBaseClientKind, resolveClientExecutable } from "../config/aliases.js";
 
+export function resolveClaudeModel(modelId: string): string {
+  if (!modelId) return modelId;
+  const trimmed = modelId.trim();
+
+  if (trimmed === "fable-5" || trimmed === "fable-5.1") return "claude-fable-5-1";
+  if (trimmed === "sonnet-5" || trimmed === "claude-sonnet-5" || trimmed === "sonnet-5.5") return "claude-sonnet-5-5";
+  if (trimmed === "opus-5" || trimmed === "opus-5.5") return "claude-opus-5-5";
+  if (trimmed === "haiku-4.5") return "claude-haiku-4-5-20251001";
+  if (trimmed === "opus" || trimmed === "sonnet" || trimmed === "haiku" || trimmed === "fable") return trimmed;
+  if (trimmed.startsWith("claude-") && /\d$/.test(trimmed)) return trimmed;
+
+  return trimmed;
+}
+
 export function resolveAntigravityModel(
   modelId: string,
   effort?: ReasoningEffort | string,
@@ -495,7 +510,7 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
   const bin = resolveClientExecutable(client);
   switch (base) {
     case "claude": {
-      const args = [bin, "--model", stage.model];
+      const args = [bin, "--model", resolveClaudeModel(stage.model)];
       if (stage.extraFlags.length > 0) {
         args.push(...stage.extraFlags);
       }
@@ -591,7 +606,9 @@ async function launchStageInHerdrAttempt(input: {
   sourcePaneId?: string;
   workspaceId?: string;
   cwd?: string;
+  clock?: { now: () => number; sleep: (ms: number) => Promise<void> };
 }): Promise<LaunchResult> {
+  const clock = input.clock ?? { now: Date.now, sleep: (ms: number) => new Promise(r => setTimeout(r, ms)) };
   const herdr = input.herdr ?? createHerdrClient();
   const effectiveClient = input.stage.client ?? input.client;
   const command = buildAgentCommand(effectiveClient, input.stage);
@@ -714,18 +731,116 @@ async function launchStageInHerdrAttempt(input: {
   if (herdr.readAgent) {
     const screen = await herdr.readAgent(agentName);
     if (!screen.ok || requiresTrustConfirmation(screen)) {
-      return { ok: false, ackStatus: screen.ok ? "rejected" : "unknown", completionState: screen.ok ? "blocked" : "unknown", paneCreated: true, promptPending: true, agentName, paneId, commandText,
-        error: screen.ok ? "Agent requires repository trust confirmation; resolve it in the pane before dispatching work." : "Agent readiness could not be inspected" };
+      if (screen.ok) {
+        return { ok: false, ackStatus: "blocked", completionState: "blocked", paneCreated: true, promptPending: true, trustRequired: true, hint: "confirm trust in the pane, then send the task with peer-message", agentName, paneId, commandText, error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.", direction: splitDirection };
+      }
+      return { ok: false, ackStatus: "unknown", completionState: "unknown", paneCreated: true, promptPending: true, agentName, paneId, commandText, error: "Agent readiness could not be inspected", direction: splitDirection };
     }
   }
   let promptDelivered = false;
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
-    const prompted = await herdr.prompt({
+    const baseClient = resolveBaseClientKind(effectiveClient);
+    const readyTimeoutMs = parseInt(process.env.HERDR_JEV_READY_TIMEOUT_MS || "45000", 10);
+    const readyDeadline = clock.now() + readyTimeoutMs;
+    let isReady = false;
+
+    while (clock.now() < readyDeadline) {
+      if (herdr.getAgent && herdr.readAgent) {
+        const [agentRes, screenRes] = await Promise.all([
+          herdr.getAgent(agentName),
+          herdr.readAgent(agentName)
+        ]);
+        if (screenRes && screenRes.ok) {
+          if (requiresTrustConfirmation(screenRes)) {
+            return {
+              ok: false,
+              ackStatus: "blocked",
+              completionState: "blocked",
+              completionObserved: false,
+              workEvidence: "not_checked",
+              promptPending: true,
+              trustRequired: true,
+              hint: "confirm trust in the pane, then send the task with peer-message",
+              error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.",
+              paneCreated: true,
+              agentName,
+              paneId,
+              commandText,
+              direction: splitDirection,
+            };
+          }
+        }
+        if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
+          const state = readHerdrObservedState(agentRes);
+          if (state === "idle") {
+            const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+            let readyMatch = false;
+            if (baseClient === "antigravity") readyMatch = /(^|\n)>\s*(?=\n|$)/.test(cleanText);
+            else if (baseClient === "codex") readyMatch = /(^|\n)› /.test(cleanText);
+            else if (baseClient === "claude") readyMatch = /(^|\n)[❯>] /.test(cleanText);
+            else readyMatch = true;
+
+            if (readyMatch) {
+              isReady = true;
+              break;
+            }
+          }
+        }
+      } else {
+        isReady = true;
+        break;
+      }
+      await clock.sleep(500);
+    }
+
+    if (!isReady) {
+      return {
+        ok: false,
+        ackStatus: "unknown",
+        completionState: "not_requested",
+        completionObserved: false,
+        workEvidence: "not_checked",
+        promptPending: true,
+        hint: "prompt not observed; use peer-message",
+        error: "Agent prompt readiness timed out",
+        paneCreated: true,
+        agentName,
+        paneId,
+        commandText,
+        direction: splitDirection,
+      };
+    }
+
+    let prompted = await herdr.prompt({
       target: agentName,
       text: input.handoffPrompt,
       wait: true,
       waitForStart: true,
     });
+
+    if (!prompted.ok && `${prompted.stdout}\n${prompted.stderr}`.includes("agent_prompt_stalled")) {
+      if (herdr.getAgent && herdr.readAgent) {
+        const [agentRes, screenRes] = await Promise.all([
+          herdr.getAgent(agentName),
+          herdr.readAgent(agentName)
+        ]);
+        if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
+          const state = readHerdrObservedState(agentRes);
+          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+          const promptPrefix = input.handoffPrompt.trim().slice(0, Math.min(input.handoffPrompt.trim().length, 32));
+          if (state === "idle" && !cleanText.includes(promptPrefix)) {
+            await clock.sleep(2000);
+            prompted = await herdr.prompt({
+              target: agentName,
+              text: input.handoffPrompt,
+              wait: true,
+              waitForStart: true,
+            });
+          }
+        }
+      }
+    }
+
     if (!prompted.ok) {
       return {
         ok: false,
@@ -770,8 +885,8 @@ async function launchStageInHerdrAttempt(input: {
           }
         }
       }
-      if (Date.now() >= deadline) break;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(0, deadline - Date.now()))));
+      if (clock.now() >= deadline) break;
+      await clock.sleep(Math.min(100, Math.max(0, deadline - clock.now())));
     }
     if (!promptDelivered) {
       return {
@@ -872,12 +987,13 @@ export function buildInlineCommand(
   const bin = resolveClientExecutable(client);
   switch (base) {
     case "claude": {
+      const model = resolveClaudeModel(stage.model);
       if (nonInteractive) {
-        const args = [bin, "-p", promptText, "--model", stage.model];
+        const args = [bin, "-p", promptText, "--model", model];
         if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
         return args;
       }
-      const args = [bin, "--model", stage.model];
+      const args = [bin, "--model", model];
       if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
       args.push(promptText);
       return args;
