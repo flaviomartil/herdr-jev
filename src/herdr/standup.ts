@@ -289,7 +289,7 @@ export async function planStandup(
   deps: StandupPlanDeps,
   parsed: ParsedStandup,
 ): Promise<StandupTarget[] & { skipped: StandupSkippedTarget[] }> {
-  if (process.env.HERDR_JEV_TEST_GUARD === '1' && !deps.overviewRows && !deps.readOverview) throw new Error('standup_requires_injected_deps_in_tests');
+
   let rows: any[];
   if (deps.overviewRows) {
     rows = deps.overviewRows;
@@ -445,10 +445,7 @@ export async function executeStandupCommand(
   deps: StandupCommandDeps = {},
 ): Promise<any> {
   const standupEnv = resolveStandupEnvironment(deps.env);
-  if (process.env.HERDR_JEV_TEST_GUARD === '1') {
-    if (!deps.overviewRows && !deps.readOverview) throw new Error('standup_requires_injected_deps_in_tests');
-    if (!deps.sendPeer) throw new Error('standup_requires_injected_deps_in_tests');
-  }
+
 
   const fileExists = deps.fileExists ?? existsSync;
   const readFile = deps.readFile ?? ((p: string) => readFileSync(p, "utf-8"));

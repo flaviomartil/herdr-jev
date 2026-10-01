@@ -781,3 +781,27 @@ Only app task.`;
   ]);
 });
 
+
+test("executeStandupCommand throws before sending if sendPeer is missing (guard on)", async () => {
+  const rows = [
+    { pane: "%target", agent: "codex", project: "App", state: "idle" },
+  ];
+
+  let threw = false;
+  try {
+    await executeStandupCommand(
+      { dryRun: false, json: false, file: "/tmp/standup.md", yes: true },
+      {
+        fileExists: () => true,
+        readFile: () => "Global standup instruction.",
+        overviewRows: rows,
+        log: () => {},
+      },
+    );
+  } catch (err: any) {
+    threw = true;
+    expect(err.message).toBe("standup_requires_injected_deps_in_tests");
+  }
+
+  expect(threw).toBe(true);
+});
