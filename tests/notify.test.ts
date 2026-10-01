@@ -1,18 +1,23 @@
+let runnerImpl: any;
 import { expect, test } from "bun:test";
 import { handleNotifyCommand } from "../src/herdr/notify.ts";
 import { join } from "node:path";
 import { writeFileSync, existsSync, rmSync, mkdirSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { beforeAll, afterAll } from "bun:test";
+import { createFakeHerdr } from "./helpers.ts";
+import { createProcessCommandAdapter } from "../src/herdr/client.ts";
 
 
 let stateDir: string;
 beforeAll(() => {
   stateDir = mkdtempSync(join(tmpdir(), 'herdr-jev-notify-'));
   process.env.HERDR_JEV_STATE_DIR = stateDir;
+  process.env.HERDR_BIN_PATH = createFakeHerdr(stateDir);
+  runnerImpl = createProcessCommandAdapter();
 });
 afterAll(() => {
-  try { rmSync(stateDir, { recursive: true, force: true }); } catch (e) {}
+  try { rmSync(join(stateDir, "notify"), { recursive: true, force: true }); } catch (e) {}
 });
 
 test("notify skips when attention is not now", async () => {
@@ -35,15 +40,19 @@ test("notify skips when HERDR_JEV_NOTIFY is 0", async () => {
 
 test("notify uses cooldowns per pane", async () => {
   process.env.HERDR_JEV_NOTIFY = "1";
-  const runner = async () => ({ ok: true, stdout: "" });
+  let runnerArgs: string[] = [];
+  const runner = async (args: readonly string[]) => {
+    runnerArgs.push(...args);
+    return runnerImpl(args);
+  };
   
   mkdirSync(join(stateDir, "notify"), { recursive: true });
   
   const now = Date.now();
-  writeFileSync(join(stateDir, "notify", "pane-test-pane-1.json"), JSON.stringify({ time: now - 5000 }));
+  writeFileSync(join(stateDir, "notify", "pane-w1p1.json"), JSON.stringify({ time: now - 5000 }));
   
   const res = await handleNotifyCommand({ 
-    pane: "test-pane-1", name: "Ada", project: "StixLab", 
+    pane: "w1:p1", name: "Ada", project: "StixLab", 
     attention: "now", reason: "approval", dryRun: false, now 
   }, runner);
   
@@ -51,7 +60,7 @@ test("notify uses cooldowns per pane", async () => {
   expect(res.skippedReason).toBe("cooldown");
   
   const res2 = await handleNotifyCommand({ 
-    pane: "test-pane-1", name: "Ada", project: "StixLab", 
+    pane: "w1:p1", name: "Ada", project: "StixLab", 
     attention: "now", reason: "approval", dryRun: false, now: now + 700000 
   }, runner);
   
@@ -62,16 +71,16 @@ test("notify uses cooldowns per pane", async () => {
 test("notify escalation blocked requires valid agent", async () => {
   process.env.HERDR_JEV_NOTIFY = "1";
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
-  try { rmSync(stateDir, { recursive: true, force: true }); } catch (e) {}
+  try { rmSync(join(stateDir, "notify"), { recursive: true, force: true }); } catch (e) {}
   
   let runnerArgs: string[] = [];
   const runner = async (args: readonly string[]) => {
     runnerArgs.push(...args);
-    return { ok: true, stdout: "" };
+    return runnerImpl(args);
   };
   
   const resUnknown = await handleNotifyCommand({ 
-    pane: "escalate-pane", name: "Ada", project: "StixLab", 
+    pane: "w1:p2", name: "Ada", project: "StixLab", 
     attention: "now", reason: "approval", confidence: 0.9, nativeStatus: "idle", agent: "unknown", dryRun: false, now: Date.now() 
   }, runner);
   
@@ -79,7 +88,7 @@ test("notify escalation blocked requires valid agent", async () => {
   expect(resUnknown.channels).not.toContain("escalation");
 
   const resValid = await handleNotifyCommand({ 
-    pane: "escalate-pane-2", name: "Ada", project: "StixLab", 
+    pane: "w1:p3", name: "Ada", project: "StixLab", 
     attention: "now", reason: "approval", jevState: "blocked", reasonConfidence: 0.9, confidence: 0.9, nativeStatus: "idle", agent: "kiro", dryRun: false, now: Date.now() 
   }, runner);
   
@@ -96,7 +105,7 @@ test("notify release missing makes no herdr call", async () => {
   mkdirSync(notifyDir, { recursive: true });
   writeFileSync(join(notifyDir, "escalations.json"), JSON.stringify([]));
 
-  const res = await handleNotifyCommand({ release: true, pane: "missing-pane" }, runner);
+  const res = await handleNotifyCommand({ release: true, pane: "w1:missing" }, runner);
   expect(res.sent).toBe(false);
   expect(res.skippedReason).toBe("no escalation");
   expect(calls).toBe(0);
@@ -106,21 +115,18 @@ test("notify release stale uses pane get", async () => {
   let runnerArgs: string[] = [];
   const runner = async (args: readonly string[]) => {
     runnerArgs.push(...args);
-    if (args.includes("get")) {
-      return { ok: false, stdout: "error" };
-    }
-    return { ok: true, stdout: "" };
+    return runnerImpl(args);
   };
   
   
   const notifyDir = join(stateDir, "notify");
   const escFile = join(notifyDir, "escalations.json");
   writeFileSync(escFile, JSON.stringify([
-    { pane: "stale-pane", agent: "kiro", time: Date.now() - 60000 }
+    { pane: "w1:stale", agent: "kiro", time: Date.now() - 60000 }
   ]));
   
   const res = await handleNotifyCommand({ releaseStale: true }, runner);
-  expect(res.sent).toBe(true);
+  if (!res.sent) console.log(res); if (!res.sent) console.log("ARGS", runnerArgs); expect(res.sent).toBe(true);
   expect(res.channels).toContain("release-stale");
   expect(runnerArgs).toContain("get");
   
@@ -132,15 +138,15 @@ test("notify release all with records", async () => {
   let calls = 0;
   const runner = async (args: readonly string[]) => {
     if (args.includes("release-agent")) calls++;
-    return { ok: true, stdout: "" };
+    return runnerImpl(args);
   };
   
   
   const notifyDir = join(stateDir, "notify");
   const escFile = join(notifyDir, "escalations.json");
   writeFileSync(escFile, JSON.stringify([
-    { pane: "pane1", agent: "kiro", time: Date.now() },
-    { pane: "pane2", agent: "ada", time: Date.now() - 1000 }
+    { pane: "w1:p1", agent: "kiro", time: Date.now() },
+    { pane: "w1:p2", agent: "ada", time: Date.now() - 1000 }
   ]));
   
   const res = await handleNotifyCommand({ releaseAll: true }, runner);
@@ -172,7 +178,7 @@ test("notify dry run shape", async () => {
   process.env.HERDR_JEV_NOTIFY = "1";
   
   const res = await handleNotifyCommand({ 
-    pane: "test-pane-1", name: "Ada", project: "StixLab", 
+    pane: "w1:p1", name: "Ada", project: "StixLab", 
     attention: "now", reason: "approval", dryRun: true 
   }, runner);
   

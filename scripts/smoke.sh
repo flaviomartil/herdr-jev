@@ -47,6 +47,35 @@ else
   echo "skip herdr reachable"
 fi
 
+
+if grep -q '"--", ' src/herdr/notify.ts; then
+  echo "FAIL: no double dash before herdr positionals"
+  FAILED=1
+else
+  echo "ok no double dash before herdr positionals"
+fi
+
+
+if [ "${SMOKE_LIVE_NOTIFY:-0}" = "1" ]; then
+  TMP_NOTIFY_DIR=$(mktemp -d)
+  OUT=$(HERDR_JEV_STATE_DIR="$TMP_NOTIFY_DIR" HERDR_JEV_NOTIFY=1 bun "$CLI" notify --pane "wZZ:pZZ" --attention now --reason approval --project test --json 2>/dev/null || true)
+  if node -e '
+    try {
+      const parsed = JSON.parse(process.argv[1]);
+      if (parsed.sent === true && parsed.channels && parsed.channels.includes("herdr")) process.exit(0);
+      process.exit(1);
+    } catch {
+      process.exit(1);
+    }
+  ' "$OUT"; then
+    echo "ok SMOKE_LIVE_NOTIFY"
+  else
+    echo "FAIL SMOKE_LIVE_NOTIFY"
+    FAILED=1
+  fi
+  rm -rf "$TMP_NOTIFY_DIR"
+fi
+
 if [ $HERDR_REACHABLE -eq 1 ]; then
   PANE_LIST_OUT=$("$HERDR_BIN" pane list 2>/dev/null || true)
   FIRST_PANE_ID=$(node -e '
@@ -272,7 +301,7 @@ else
   FAILED=1
 fi
 
-NOTIFY_REL_OUT=$(run_cli notify --release --pane "nonexistent-smoke-pane-999" --json 2>/dev/null || true)
+NOTIFY_REL_OUT=$(run_cli notify --release --pane "wZZ:missing" --json 2>/dev/null || true)
 if node -e '
   try {
     const raw = process.argv[1];
