@@ -6,7 +6,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 PANE_ID="${1:-route}"
-if [[ "$PANE_ID" == "overview" || "$PANE_ID" == "assistant" ]]; then
+if [[ "$PANE_ID" == "overview" || "$PANE_ID" == "assistant" || "$PANE_ID" == "office" ]]; then
   context="$(bun -e 'const c=JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || "{}"); console.log(JSON.stringify({sourcePaneId:c.focused_pane_id || process.env.HERDR_PANE_ID,cwd:c.focused_pane_cwd || process.cwd()}))')"
 else
   context="$(jev_cli context --json)"
