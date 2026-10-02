@@ -696,6 +696,23 @@ function hasReadyPattern(baseClient: string): boolean {
 const UNKNOWN_STATE_STABLE_MS = 1000;
 const UNKNOWN_STATE_GRACE_MS = 3000;
 
+function trustUnverifiedResult(
+  context: { agentName: string; paneId: string; commandText: string; direction: "right" | "down"; trustPolicyReason: string },
+): LaunchResult {
+  return {
+    ok: false,
+    ackStatus: "unknown",
+    completionState: "not_requested",
+    completionObserved: false,
+    workEvidence: "not_checked",
+    promptPending: true,
+    paneCreated: true,
+    hint: "inspect the pane, then send the task with peer-message",
+    error: "Trust confirmation was already sent; the pane still or again shows a dialog. Inspect it before dispatching work.",
+    ...context,
+  };
+}
+
 function paneBlockedResult(
   kind: PaneBlockKind,
   context: { agentName: string; paneId: string; commandText: string; direction: "right" | "down"; trustPolicyReason?: string },
@@ -1040,10 +1057,9 @@ interface TrustState {
   outcome?: TrustOutcome;
   failure?: string;
   attempted: boolean;
+  entered?: boolean;
   trackingError?: string;
 }
-
-const TRUST_DIALOG_GONE: ReadonlySet<string> = new Set(["not_trust_dialog", "agent_not_ready_after_trust"]);
 
 const PANE_DECORATION = /[\s\u2500-\u257f|]+/g;
 
@@ -1115,8 +1131,12 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
         trust.outcome = outcome;
         return null;
       }
-      if (TRUST_DIALOG_GONE.has(outcome.reason)) return null;
+      if (outcome.reason === "not_trust_dialog") return null;
       trust.failure = outcome.reason;
+      if (outcome.entered) trust.entered = true;
+    }
+    if (kind === "trust" && (trust.entered || trust.outcome?.confirmed)) {
+      return trustUnverifiedResult({ agentName, commandText, ...context, trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" });
     }
     return paneBlockedResult(kind, { agentName, commandText, ...context, ...(kind === "trust" ? { trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" } : {}) });
   };
