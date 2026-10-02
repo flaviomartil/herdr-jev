@@ -69,13 +69,22 @@ describe("worker runs recorded in the harness", () => {
     expect(readGridWorkerRecords("caller-1")[0]!.runId).toBe(id);
   });
 
-  it("derives the branch and fork point from the repository when the pane has no grid record", () => {
+  it("derives the branch and fork point from the repository when the tracked record carries none", () => {
     install();
-    const id = register("untracked-caller");
+    writeGridWorkers("caller-1", [{ paneId: "pane-42", handle: "jev-research-sonnet5-abc", cwd: repo }]);
+    const id = register();
     expect(id).toMatch(RUN_ID);
     const request = JSON.parse(harness!.callsFor("external-run")[0]![harness!.callsFor("external-run")[0]!.indexOf("--request-json") + 1]!);
     expect(request.branch).toBe("main");
     expect(request.forkSha).toBe(git(repo, "rev-parse", "HEAD"));
+    expect(readGridWorkerRecords("caller-1")[0]!.runId).toBe(id);
+  });
+
+  it("never creates a run for a pane that no record tracks", () => {
+    install();
+    expect(register("untracked-caller")).toBeNull();
+    expect(register(undefined as unknown as string)).toBeNull();
+    expect(harness!.callsFor("external-run")).toEqual([]);
     expect(readGridWorkerRecords("untracked-caller")).toEqual([]);
   });
 

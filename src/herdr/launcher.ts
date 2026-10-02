@@ -1,13 +1,14 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, type Stats, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
 import { classifyHerdrCommandFailure, classifyPaneBlock, createHerdrClient, isTestSafeBinary, looksLikeSelectionMenu, normalizePaneText, readHerdrObservedState, readHerdrStructuredState, type HerdrClient, type HerdrObservedState, type PaneBlockKind } from "./client.js";
 import { ANSI_PATTERN } from "./pane-text.js";
 import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
 import { reserveHerdrHandle, claimHerdrSpawn, releaseHerdrSpawn } from "./reservation.js";
+import { takeOverStale } from "./notify.js";
 import { autoTrustEnabled, confirmWorkspaceTrust, type TrustOutcome } from "./trust.js";
 import { createWorkerRun, harnessModelResolve, settleWorkerRun } from "../harness/bridge.js";
 
@@ -23,6 +24,7 @@ export interface LaunchResult {
   trustRequired?: boolean;
   trustConfirmed?: boolean;
   trustPolicyReason?: string;
+  trackingError?: string;
   selectionRequired?: boolean;
   promptDelivered?: boolean;
   hint?: string;
@@ -71,6 +73,18 @@ function layoutPanes(input: PaneLayoutInput): Array<{ id: string; rect: PaneRect
     return id && rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number"
       ? [{ id, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, owner: paneOwner(pane) }] : [];
   });
+}
+
+function layoutPaneIds(input: PaneLayoutInput): Set<string> {
+  const layout = input.result?.layout ?? input.layout ?? input;
+  const ids = new Set<string>();
+  const panes: unknown = layout.panes;
+  if (!Array.isArray(panes)) return ids;
+  for (const pane of panes as PaneLayoutPane[]) {
+    const id = pane?.pane_id ?? pane?.id;
+    if (typeof id === "string" && id) ids.add(id);
+  }
+  return ids;
 }
 
 function paneOwner(pane: PaneLayoutPane): string | undefined {
@@ -152,6 +166,15 @@ export interface GridWorkerRecord {
   branch?: string | null;
   forkSha?: string | null;
   runId?: string | null;
+  layout?: WorkerLayoutKind;
+  gitDir?: string | null;
+  settleAttempts?: number;
+}
+
+export type WorkerLayoutKind = "grid" | "split" | "tab";
+
+function workerLayoutKind(value: unknown): WorkerLayoutKind | undefined {
+  return value === "grid" || value === "split" || value === "tab" ? value : undefined;
 }
 
 interface ParsedGridFile {
@@ -207,6 +230,9 @@ function parseGridFile(filePath: string): ParsedGridFile {
           branch: typeof rec.branch === "string" ? rec.branch : null,
           forkSha: typeof rec.forkSha === "string" ? rec.forkSha : typeof rec.fork_sha === "string" ? rec.fork_sha : null,
           ...(typeof rec.runId === "string" && rec.runId ? { runId: rec.runId } : {}),
+          ...(workerLayoutKind(rec.layout) ? { layout: workerLayoutKind(rec.layout) } : {}),
+          ...(typeof rec.gitDir === "string" && rec.gitDir ? { gitDir: rec.gitDir } : {}),
+          ...(Number.isInteger(rec.settleAttempts) && (rec.settleAttempts as number) > 0 ? { settleAttempts: rec.settleAttempts as number } : {}),
         });
       }
     }
@@ -225,34 +251,59 @@ export function readGridWorkers(callerPaneId: string, stateDir?: string): string
 const GRID_LOCK_WAIT_MS = 15_000;
 const GRID_LOCK_STALE_MS = 10_000;
 
-function withGridLock<T>(filePath: string, action: () => T): T {
+export interface GridLockHooks {
+  waitMs?: number;
+  staleMs?: number;
+  afterStaleSeen?: () => void;
+  onWait?: () => void;
+}
+
+function releaseGridLock(lock: string, token: string): void {
+  try {
+    if (readFileSync(lock, "utf8") === token) unlinkSync(lock);
+  } catch {
+  }
+}
+
+export function withGridLock<T>(filePath: string, action: () => T, hooks: GridLockHooks = {}): T {
   const lock = `${filePath}.lock`;
+  const staleMs = hooks.staleMs ?? GRID_LOCK_STALE_MS;
   mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + GRID_LOCK_WAIT_MS;
+  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
+  const deadline = Date.now() + (hooks.waitMs ?? GRID_LOCK_WAIT_MS);
   for (;;) {
     try {
-      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(lock, token, { flag: "wx", mode: 0o600 });
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      let age: number;
+      let held: Stats | undefined;
       try {
-        age = Date.now() - statSync(lock).mtimeMs;
-      } catch {
-        continue;
+        held = statSync(lock);
+      } catch (statError) {
+        if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+          if (Date.now() > deadline) throw new Error("grid_state_lock_timeout");
+          continue;
+        }
       }
-      if (age > GRID_LOCK_STALE_MS) {
-        rmSync(lock, { recursive: true, force: true });
-        continue;
+      if (held && Date.now() - held.mtimeMs > staleMs) {
+        hooks.afterStaleSeen?.();
+        if (held.isDirectory()) {
+          rmSync(lock, { recursive: true, force: true });
+          continue;
+        }
+        const outcome = takeOverStale(lock, (snapshot) => Date.now() - statSync(snapshot).mtimeMs > staleMs);
+        if (outcome === "taken" || outcome === "missing") continue;
       }
       if (Date.now() > deadline) throw new Error("grid_state_lock_timeout");
+      hooks.onWait?.();
       Bun.sleepSync(5);
     }
   }
   try {
     return action();
   } finally {
-    rmSync(lock, { recursive: true, force: true });
+    releaseGridLock(lock, token);
   }
 }
 
@@ -274,6 +325,9 @@ function toGridRecords(workers: ReadonlyArray<string | GridWorkerRecord>): GridW
               branch: item.branch ?? null,
               forkSha: item.forkSha ?? (item as any).fork_sha ?? null,
               ...(item.runId ? { runId: item.runId } : {}),
+              ...(workerLayoutKind(item.layout) ? { layout: workerLayoutKind(item.layout) } : {}),
+              ...(item.gitDir ? { gitDir: item.gitDir } : {}),
+              ...(item.settleAttempts && item.settleAttempts > 0 ? { settleAttempts: item.settleAttempts } : {}),
             },
       );
     }
@@ -393,33 +447,55 @@ export function filterWorkerClosePlan(
   return plan;
 }
 
-export function pruneGridWorkers(closedPaneIds: readonly string[], stateDir?: string): GridWorkerRecord[] {
-  const closedSet = new Set(closedPaneIds);
-  const dir = gridStateDir(stateDir);
-  let files: string[];
+export interface PruneFailure {
+  file: string;
+  error: string;
+}
+
+const MAX_SETTLE_ATTEMPTS = 3;
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function gridFiles(dir: string, failures?: PruneFailure[]): string[] {
   try {
-    files = readdirSync(dir);
-  } catch {
+    return readdirSync(dir).filter((file) => file.endsWith(".json"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") failures?.push({ file: dir, error: errorText(error) });
     return [];
   }
+}
+
+export function trackedRecordsForPanes(paneIds: readonly string[], stateDir?: string): GridWorkerRecord[] {
+  const wanted = new Set(paneIds);
+  const dir = gridStateDir(stateDir);
+  return gridFiles(dir).flatMap((file) => parseGridFile(join(dir, file)).records.filter((record) => wanted.has(record.paneId)));
+}
+
+export function pruneGridWorkers(
+  closedPaneIds: readonly string[],
+  stateDir?: string,
+  options: { failures?: PruneFailure[]; kept?: ReadonlyMap<string, GridWorkerRecord> } = {},
+): GridWorkerRecord[] {
+  const closedSet = new Set(closedPaneIds);
+  const dir = gridStateDir(stateDir);
   const removed: GridWorkerRecord[] = [];
-  for (const file of files) {
-    if (!file.endsWith(".json")) continue;
+  for (const file of gridFiles(dir, options.failures)) {
     const filePath = join(dir, file);
     try {
       withGridLock(filePath, () => {
         const current = parseGridFile(filePath);
         if (current.corrupt) return;
-        const remaining = current.records.filter((r) => !closedSet.has(r.paneId));
-        if (remaining.length === 0) {
-          removed.push(...current.records);
-          rmSync(filePath, { force: true });
-        } else if (remaining.length !== current.records.length) {
-          removed.push(...current.records.filter((r) => closedSet.has(r.paneId)));
-          writeGridFile(filePath, current.callerPaneId ?? file.slice(0, -5), remaining);
-        }
+        const closing = current.records.filter((r) => closedSet.has(r.paneId));
+        if (closing.length === 0) return;
+        const remaining = current.records.flatMap((r) => !closedSet.has(r.paneId) ? [r] : options.kept?.has(r.paneId) ? [options.kept.get(r.paneId)!] : []);
+        removed.push(...closing.filter((r) => !options.kept?.has(r.paneId)));
+        if (remaining.length === 0) rmSync(filePath, { force: true });
+        else writeGridFile(filePath, current.callerPaneId ?? file.slice(0, -5), remaining);
       });
-    } catch {
+    } catch (error) {
+      options.failures?.push({ file: filePath, error: errorText(error) });
     }
   }
   return removed;
@@ -431,22 +507,31 @@ export interface WorkerSettlement {
   settled: boolean;
 }
 
-function gitHead(cwd: string | null | undefined, branch?: string | null): string | null {
-  if (!cwd) return null;
-  for (const ref of ["HEAD", ...(branch ? [`refs/heads/${branch}`] : [])]) {
-    try {
-      const rev = spawnSync("git", ["rev-parse", "--verify", ref], { cwd, encoding: "utf8" });
-      const sha = rev.status === 0 ? rev.stdout.trim() : "";
-      if (/^[0-9a-f]{7,64}$/.test(sha)) return sha;
-    } catch {
-    }
+function gitRun(cwd: string, args: string[]): string | null {
+  try {
+    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    const text = result.status === 0 ? result.stdout.trim() : "";
+    return /^[0-9a-f]{7,64}$/.test(text) ? text : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
-export function recordGridWorkerRun(callerPaneId: string, paneId: string, runId: string, stateDir?: string): void {
-  updateGridWorkers(callerPaneId, (records) => records.some((record) => record.paneId === paneId)
+function gitHead(cwd: string | null | undefined, branch?: string | null, gitDir?: string | null): string | null {
+  if (cwd) {
+    const head = gitRun(cwd, ["rev-parse", "--verify", "HEAD"]);
+    if (head) return head;
+  }
+  if (!branch) return null;
+  const root = gitDir && existsSync(gitDir) ? gitDir : null;
+  if (root) return gitRun(root, ["--git-dir", root, "rev-parse", "--verify", `refs/heads/${branch}`]);
+  return cwd ? gitRun(cwd, ["rev-parse", "--verify", `refs/heads/${branch}`]) : null;
+}
+
+export function recordGridWorkerRun(callerPaneId: string, paneId: string, runId: string, stateDir?: string): boolean {
+  const { after } = updateGridWorkers(callerPaneId, (records) => records.some((record) => record.paneId === paneId)
     ? records.map((record) => record.paneId === paneId ? { ...record, runId } : record) : null, stateDir);
+  return after.some((record) => record.paneId === paneId && record.runId === runId);
 }
 
 export function registerWorkerRun(input: {
@@ -460,15 +545,25 @@ export function registerWorkerRun(input: {
   callerPaneId?: string;
   stateDir?: string;
 }): string | null {
-  const record = input.callerPaneId ? readGridWorkerRecords(input.callerPaneId, input.stateDir).find((item) => item.paneId === input.pane) : undefined;
-  const git = record?.branch && record?.forkSha ? {} : resolveGitBranchAndForkSha(input.cwd);
+  if (!input.callerPaneId) return null;
+  const record = readGridWorkerRecords(input.callerPaneId, input.stateDir).find((item) => item.paneId === input.pane);
+  if (!record) return null;
+  const git = record.branch && record.forkSha ? {} : resolveGitBranchAndForkSha(input.cwd);
   const run = createWorkerRun({
     client: resolveBaseClientKind(input.client), model: input.model, role: input.role, cwd: input.cwd,
-    branch: record?.branch ?? git.branch ?? null, forkSha: record?.forkSha ?? git.forkSha ?? null,
+    branch: record.branch ?? git.branch ?? null, forkSha: record.forkSha ?? git.forkSha ?? null,
     pane: input.pane, handle: input.handle, objectiveDigest: createHash("sha256").update(input.prompt).digest("hex"),
   });
   if (!run) return null;
-  if (input.callerPaneId) recordGridWorkerRun(input.callerPaneId, input.pane, run.id, input.stateDir);
+  let recorded = false;
+  try {
+    recorded = recordGridWorkerRun(input.callerPaneId, input.pane, run.id, input.stateDir);
+  } catch {
+  }
+  if (!recorded) {
+    settleWorkerRun({ id: run.id, state: "closed", head: null });
+    return null;
+  }
   return run.id;
 }
 
@@ -476,18 +571,31 @@ export interface WorkerCloseOutcome {
   closed: string[];
   failed: Array<{ paneId: string; error: string }>;
   settlements: WorkerSettlement[];
+  pruneFailures: PruneFailure[];
 }
 
-const PANE_ALREADY_GONE = /pane_not_found|\bnot_found\b/;
+const PANE_ALREADY_GONE = /\bpane_not_found\b|\bpane\b[^\n]*\bnot[_ ]found\b/i;
 
 export function settleClosedWorkerRuns(records: readonly GridWorkerRecord[]): WorkerSettlement[] {
-  const seen = new Set<string>();
-  return records.flatMap((record) => {
-    if (!record.runId || seen.has(record.runId)) return [];
-    seen.add(record.runId);
-    return [{ paneId: record.paneId, runId: record.runId,
-      settled: settleWorkerRun({ id: record.runId, state: "closed", head: gitHead(record.cwd, record.branch) }) !== null }];
-  });
+  return settleDeadRecords(records).settlements;
+}
+
+export function settleDeadRecords(records: readonly GridWorkerRecord[]): { settlements: WorkerSettlement[]; kept: Map<string, GridWorkerRecord> } {
+  const seen = new Map<string, boolean>();
+  const settlements: WorkerSettlement[] = [];
+  const kept = new Map<string, GridWorkerRecord>();
+  for (const record of records) {
+    if (!record.runId) continue;
+    let settled = seen.get(record.runId);
+    if (settled === undefined) {
+      settled = settleWorkerRun({ id: record.runId, state: "closed", head: gitHead(record.cwd, record.branch, record.gitDir) }) !== null;
+      seen.set(record.runId, settled);
+      settlements.push({ paneId: record.paneId, runId: record.runId, settled });
+    }
+    const attempts = (record.settleAttempts ?? 0) + 1;
+    if (!settled && attempts < MAX_SETTLE_ATTEMPTS) kept.set(record.paneId, { ...record, settleAttempts: attempts });
+  }
+  return { settlements, kept };
 }
 
 export async function closeWorkerPanes(
@@ -502,8 +610,10 @@ export async function closeWorkerPanes(
     if (result.ok || PANE_ALREADY_GONE.test(`${result.stdout}\n${result.stderr}`)) closed.push(item.paneId);
     else failed.push({ paneId: item.paneId, error: (result.stderr || result.stdout).trim().slice(0, 200) || "close_failed" });
   }
-  const removed = pruneGridWorkers(closed, stateDir);
-  return { closed, failed, settlements: settleClosedWorkerRuns(removed) };
+  const { settlements, kept } = settleDeadRecords(trackedRecordsForPanes(closed, stateDir));
+  const pruneFailures: PruneFailure[] = [];
+  pruneGridWorkers(closed, stateDir, { failures: pruneFailures, kept });
+  return { closed, failed, settlements, pruneFailures };
 }
 
 export async function executeWorkerClose(
@@ -892,15 +1002,18 @@ export function formatHerdrAgentName(
   return `${candidate.slice(0, 31 - token.length)}-${token}`;
 }
 
-function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: string } {
+function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: string; gitDir?: string } {
   try {
     const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
     const forkSha = rev.status === 0 && rev.stdout ? rev.stdout.trim() : undefined;
     const branchRes = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf8" });
     const branch = branchRes.status === 0 && branchRes.stdout ? branchRes.stdout.trim() : undefined;
+    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, encoding: "utf8" });
+    const gitDir = common.status === 0 && common.stdout.trim().startsWith("/") ? common.stdout.trim() : undefined;
     return {
       branch: branch || undefined,
       forkSha: forkSha || undefined,
+      gitDir,
     };
   } catch {
     return {};
@@ -911,7 +1024,10 @@ interface TrustState {
   outcome?: TrustOutcome;
   failure?: string;
   attempted: boolean;
+  trackingError?: string;
 }
+
+const TRUST_DIALOG_GONE: ReadonlySet<string> = new Set(["not_trust_dialog", "agent_not_ready_after_trust"]);
 
 const PANE_DECORATION = /[\s\u2500-\u257f|]+/g;
 
@@ -943,7 +1059,8 @@ type LaunchInput = {
 async function launchStageInHerdrAttempt(input: LaunchInput): Promise<LaunchResult> {
   const trust: TrustState = { attempted: false };
   const result = await launchStageCore(input, trust);
-  return trust.outcome?.confirmed ? { ...result, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : result;
+  const tracked = trust.trackingError ? { ...result, trackingError: trust.trackingError } : result;
+  return trust.outcome?.confirmed && !result.trustRequired ? { ...tracked, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : tracked;
 }
 
 async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<LaunchResult> {
@@ -971,18 +1088,21 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     return { ok: false, ackStatus: "rejected", error: "Invalid agent name: use letters, digits, '.', '_', ':' or '-', starting with a letter or digit", commandText };
   }
   const readyBase = resolveBaseClientKind(effectiveClient);
+  const launchCwd = input.cwd ? resolvePath(input.cwd) : undefined;
+  const workerCwd = launchCwd ?? process.cwd();
   const resolveBlock = async (kind: PaneBlockKind, context: { paneId: string; direction: "right" | "down" }): Promise<LaunchResult | null> => {
     if (kind === "trust" && !trust.attempted) {
       trust.attempted = true;
-      const outcome = await confirmWorkspaceTrust({ herdr, target: agentName, cwd: input.cwd ?? process.cwd(), clock,
+      const outcome = await confirmWorkspaceTrust({ herdr, target: agentName, cwd: workerCwd, flags: command.slice(1), clock,
         ready: (text) => isClientPromptReady(readyBase, text) });
       if (outcome.confirmed) {
         trust.outcome = outcome;
         return null;
       }
+      if (TRUST_DIALOG_GONE.has(outcome.reason)) return null;
       trust.failure = outcome.reason;
     }
-    return paneBlockedResult(kind, { agentName, commandText, ...context, ...(kind === "trust" && trust.failure ? { trustPolicyReason: trust.failure } : {}) });
+    return paneBlockedResult(kind, { agentName, commandText, ...context, ...(kind === "trust" ? { trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" } : {}) });
   };
   if (input.reuseExisting) {
     if (!input.agentName || !herdr.getAgent) return { ok: false, ackStatus: "rejected", error: "A stable agent name and native lookup are required for retry recovery", commandText };
@@ -1013,10 +1133,13 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     const layoutResult = await herdr.paneLayout(callerPaneId);
     if (!layoutResult.ok) { releaseFence(); return { ok: false, ackStatus: classifyHerdrCommandFailure(layoutResult), error: `Pane layout failed: ${layoutResult.stderr || layoutResult.stdout}`, commandText }; }
     let layout: PaneLayoutInput;
-    try { layout = JSON.parse(layoutResult.stdout); } catch { releaseFence(); return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
-    const livePaneIds = new Set(layoutPanes(layout).map((pane) => pane.id));
+    try { layout = JSON.parse(layoutResult.stdout); } catch { layout = null as unknown as PaneLayoutInput; }
+    if (!layout || typeof layout !== "object") { releaseFence(); return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
+    const livePaneIds = layoutPaneIds(layout);
     const liveRecords = existingRecords.filter((r) => livePaneIds.has(r.paneId));
-    deadPaneIds = new Set(existingRecords.filter((r) => !livePaneIds.has(r.paneId)).map((r) => r.paneId));
+    if (livePaneIds.has(callerPaneId)) {
+      deadPaneIds = new Set(existingRecords.filter((r) => r.layout !== "tab" && !livePaneIds.has(r.paneId)).map((r) => r.paneId));
+    }
     const plan = planGridSplit(layout, callerPaneId, liveRecords.map((r) => r.paneId));
     splitPaneId = plan.targetPaneId;
     splitDirection = plan.direction;
@@ -1025,8 +1148,8 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
 
   // 1. Split current pane with resolved direction
   const split = input.layout === "tab"
-    ? await herdr.createTab?.({ label: agentName, cwd: input.cwd ?? process.cwd(), workspaceId: input.workspaceId })
-    : await herdr.splitCurrent({ direction: splitDirection, paneId: splitPaneId, ratio: splitRatio, cwd: input.cwd });
+    ? await herdr.createTab?.({ label: agentName, cwd: workerCwd, workspaceId: input.workspaceId })
+    : await herdr.splitCurrent({ direction: splitDirection, paneId: splitPaneId, ratio: splitRatio, cwd: launchCwd });
   if (!split) { releaseFence(); return { ok: false, ackStatus: "rejected", error: "Tab creation unavailable", commandText }; }
   if (!split.ok) {
     const splitAck = classifyHerdrCommandFailure(split);
@@ -1039,8 +1162,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     return { ok: false, ackStatus: "unknown", completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
   }
 
-  if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId) {
-    const workerCwd = input.cwd ?? process.cwd();
+  if (callerPaneId) {
     const gitInfo = resolveGitBranchAndForkSha(workerCwd);
     const newRecord: GridWorkerRecord = {
       paneId,
@@ -1048,9 +1170,19 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
       cwd: workerCwd,
       branch: gitInfo.branch,
       forkSha: gitInfo.forkSha,
+      ...(gitInfo.gitDir ? { gitDir: gitInfo.gitDir } : {}),
+      layout: input.layout === "tab" ? "tab" : splitLayout === "grid" ? "grid" : "split",
     };
-    const { before } = updateGridWorkers(callerPaneId, (records) => [...records.filter((r) => !deadPaneIds.has(r.paneId) && r.paneId !== paneId), newRecord]);
-    settleClosedWorkerRuns(before.filter((r) => deadPaneIds.has(r.paneId)));
+    try {
+      const { kept } = settleDeadRecords(existingRecords.filter((r) => deadPaneIds.has(r.paneId)));
+      updateGridWorkers(callerPaneId, (records) => [
+        ...records.flatMap((r) => deadPaneIds.has(r.paneId) ? (kept.has(r.paneId) ? [kept.get(r.paneId)!] : []) : r.paneId === paneId ? [] : [r]),
+        newRecord,
+      ]);
+    } catch (error) {
+      trust.trackingError = errorText(error);
+      console.error(`[herdr-jev] Worker tracking unavailable for ${paneId}: ${trust.trackingError}`);
+    }
   }
 
   let releasePane: (() => Promise<void>) | undefined;
