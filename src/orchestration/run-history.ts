@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { HarnessWorkerRun } from "../harness/bridge.js";
+import { singleLine } from "../harness/printable.js";
 import { resolveStateDir } from "../herdr/state-dir.js";
 
 export const runIdPattern = /^[a-f0-9-]{36}$/;
@@ -52,14 +53,17 @@ export function listRunHistory(stateDir?: string, limit = 20): RunHistoryEntry[]
   }).sort((a, b) => b.timestampMs - a.timestampMs || b.mtimeMs - a.mtimeMs).slice(0, limit);
 }
 
-function stages(projection: Record<string, any>): Array<{ id?: string; state?: string; blocked_reason?: string }> {
-  if (Array.isArray(projection.tasks)) return projection.tasks;
-  if (Array.isArray(projection.stages)) return projection.stages;
-  return [];
+function stages(projection: Record<string, any>): Array<{ id?: unknown; state?: unknown; blocked_reason?: unknown }> {
+  const list = Array.isArray(projection.tasks) ? projection.tasks : Array.isArray(projection.stages) ? projection.stages : [];
+  return list.filter((stage: unknown) => stage && typeof stage === "object");
+}
+
+function text(value: unknown, fallback: string): string {
+  return typeof value === "string" && value ? value : fallback;
 }
 
 export function runStateSummary(projection: Record<string, any>): string {
-  const summary = stages(projection).map((stage) => `${stage.id ?? "stage"}:${stage.state ?? "unknown"}${stage.blocked_reason ? `(${stage.blocked_reason})` : ""}`);
+  const summary = stages(projection).map((stage) => `${text(stage.id, "stage")}:${text(stage.state, "unknown")}${typeof stage.blocked_reason === "string" && stage.blocked_reason ? `(${stage.blocked_reason})` : ""}`);
   return summary.length ? summary.join(",") : "no-stages";
 }
 
@@ -86,6 +90,7 @@ export function mergeRunHistory(local: readonly RunHistoryEntry[], remote: reado
   const merged = new Map<string, MergedRunEntry>();
   for (const entry of local) merged.set(entry.id, { ...entry, kind: "pipeline", source: "local" });
   for (const run of remote ?? []) {
+    if (!run || typeof run !== "object" || typeof run.id !== "string") continue;
     const kind = typeof run.kind === "string" && run.kind ? run.kind : "pipeline";
     const existing = merged.get(run.id);
     if (existing) {
@@ -94,13 +99,15 @@ export function mergeRunHistory(local: readonly RunHistoryEntry[], remote: reado
     }
     const created = typeof run.createdAt === "string" ? Date.parse(run.createdAt) : NaN;
     const timestampMs = Number.isFinite(created) ? created : 0;
+    const remoteStages: unknown[] = Array.isArray(run.stages) ? run.stages : [];
     const projection = { id: run.id, kind, cwd: run.cwd, created_at: run.createdAt,
-      tasks: (run.stages ?? []).map((stage) => ({ id: stage.role, state: stage.state })) };
+      tasks: remoteStages.flatMap((stage) => stage && typeof stage === "object"
+        ? [{ id: (stage as { role?: unknown }).role, state: (stage as { state?: unknown }).state }] : []) };
     merged.set(run.id, { id: run.id, projection, mtimeMs: timestampMs, timestampMs, kind, source: "harness" });
   }
   return [...merged.values()].sort((a, b) => b.timestampMs - a.timestampMs || b.mtimeMs - a.mtimeMs).slice(0, limit);
 }
 
 export function formatRunHistory(entry: RunHistoryEntry & { kind?: string }, now = Date.now()): string {
-  return [entry.id, entry.kind, runStateSummary(entry.projection), runLocation(entry.projection), formatRunAge(entry.timestampMs, now)].filter(Boolean).join("  ");
+  return singleLine([entry.id, entry.kind, runStateSummary(entry.projection), runLocation(entry.projection), formatRunAge(entry.timestampMs, now)].filter(Boolean).join("  "));
 }

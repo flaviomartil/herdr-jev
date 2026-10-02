@@ -409,15 +409,15 @@ describe("15: the sensitive file guard covers staged and modified files", () => 
     expect(listChangedFiles(repo).sensitive).toEqual(["config/secrets.json", "deploy/credentials"]);
   });
 
-  it("flags a tracked key that is modified in the working tree but not one already committed or deleted", () => {
+  it("flags a tracked key that is modified in the working tree but not one older than the base or deleted", () => {
     write("keys/server.pem", "first\n");
     git(repo, "add", "-f", "-A");
     git(repo, "commit", "-q", "-m", "key");
-    expect(listChangedFiles(repo).sensitive).toEqual([]);
+    expect(listChangedFiles(repo, "HEAD").sensitive).toEqual([]);
     write("keys/server.pem", "second\n");
-    expect(listChangedFiles(repo).sensitive).toEqual(["keys/server.pem"]);
+    expect(listChangedFiles(repo, "HEAD").sensitive).toEqual(["keys/server.pem"]);
     rmSync(join(repo, "keys/server.pem"));
-    expect(listChangedFiles(repo).sensitive).toEqual([]);
+    expect(listChangedFiles(repo, "HEAD").sensitive).toEqual([]);
   });
 
   it("the review refuses a staged secret before any harness call", async () => {
@@ -442,7 +442,7 @@ describe("16: two runs with the same session keep separate command directories",
       expect(new Set(entries).size).toBe(2);
       for (const entry of entries) {
         expect(entry.startsWith("same-")).toBe(true);
-        expect(existsSync(join(reviewRoot(), entry, "judge-core.json"))).toBe(true);
+        expect(existsSync(join(reviewRoot(), entry, "judge-0.json"))).toBe(true);
       }
     } finally {
       writeFileSync(gate, "open");
