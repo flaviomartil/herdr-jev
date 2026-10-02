@@ -352,3 +352,21 @@ test("desk card alignment check: name plate, state line, and task line share ide
     }
   }
 });
+
+test("disconnected action keys are refused with footer note", async () => {
+  const officeScript = resolve(import.meta.dir, "../herdr-plugin/office/office.mjs");
+  const proc = spawn("node", [officeScript, "--demo", "--state", "disconnected"], {
+    env: { ...process.env, COLUMNS: "120", LINES: "40" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+
+  let output = "";
+  proc.stdout?.on("data", (d) => { output += d.toString("utf8"); });
+
+  await new Promise((r) => setTimeout(r, 200));
+  proc.stdin?.write("y");
+  await new Promise((r) => setTimeout(r, 200));
+  proc.kill("SIGTERM");
+
+  expect(output).toContain("cannot do that while disconnected");
+});

@@ -8,6 +8,10 @@ import { join, resolve } from "node:path";
 const tempDir = mkdtempSync(join(tmpdir(), 'herdr-jev-rate-'));
 afterAll(() => {
   try { rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+  delete process.env.HERDR_OFFICE_TEST_UNIT;
+  delete process.env.HERDR_JEV_CLASSIFY;
+  delete process.env.HERDR_JEV_BIN;
+  delete process.env.HERDR_JEV_ESCALATE_BLOCKED;
 });
 
 test("rate policy a to d", async () => {

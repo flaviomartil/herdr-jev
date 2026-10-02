@@ -1,0 +1,17 @@
+{
+  "agents": [
+    {
+      "pane_id": "w1:p1",
+      "agent": "claude",
+      "agent_status": "blocked",
+      "workspace_id": "w1",
+      "tab_id": "w1:t1",
+      "cwd": "/Users/you/Desktop/projects/test",
+      "terminal_title_stripped": "fix tests",
+      "focused": true,
+      "state_change_seq": 1,
+      "since": 1700000000000,
+      "head": { "used": 50, "model": "sonnet" }
+    }
+  ]
+}

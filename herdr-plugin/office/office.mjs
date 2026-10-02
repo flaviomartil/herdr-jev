@@ -15,6 +15,9 @@ import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
 //   node office.mjs --no-context  do not read how full anybody's context window is
 import { createHash } from "node:crypto";
 import { spawn, spawnSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { ApiClient, EventStream, resolveSocketPath } from './src/socket.mjs';
 import { Roster, cleanModel } from './src/roster.mjs';
 import { renderFrame, nextZoom, ZOOMS, HIRE_ID } from './src/render.mjs';
@@ -32,7 +35,7 @@ import { filterPeople, typeFilterChunk, terms } from './src/filter.mjs';
 import { follow } from './src/follow.mjs';
 import { assignRooms } from './src/rooms.mjs';
 import { Clocks } from './src/punchclock.mjs';
-import { load as loadState, save as saveState } from './src/state.mjs';
+import { load as loadState, save as saveState, today } from './src/state.mjs';
 import { branchFromList } from './src/branches.mjs';
 import { readDirt } from './src/dirt.mjs';
 import { parseGauge, compactionNews } from './src/head.mjs';
@@ -43,6 +46,20 @@ import { classifyPanes, aggregateSwarmBadge, demoSwarmData } from './src/swarm.m
 const argv = new Set(process.argv.slice(2));
 const DEMO = argv.has('--demo');
 const ONCE = argv.has('--once');
+const argvList = process.argv.slice(2);
+const ROSTER_ARG = argvList.includes('--roster') ? argvList[argvList.indexOf('--roster') + 1] : null;
+const STATE_ARG = argvList.includes('--state') ? argvList[argvList.indexOf('--state') + 1] : null;
+
+if (ROSTER_ARG) {
+  delete process.env.HERDR_SOCKET_PATH;
+  delete process.env.HERDR_ENV;
+  delete process.env.HERDR_PANE_ID;
+  delete process.env.HERDR_TAB_ID;
+  delete process.env.HERDR_WORKSPACE_ID;
+  delete process.env.HERDR_PLUGIN_CONTEXT_JSON;
+  delete process.env.HERDR_JEV_SOURCE_PANE_ID;
+}
+
 let panelArg = null;
 let detailArg = null;
 for (let i = 0; i < process.argv.length; i++) {
@@ -90,6 +107,54 @@ const GIT = !argv.has('--no-git');
 // pane were not looking gets to say so in one flag.
 const HEAD = !argv.has('--no-context');
 const FOLLOW = argv.has('--follow');
+let REDUCED_MOTION = argv.has('--reduced-motion') || process.env.HERDR_JEV_REDUCED_MOTION === '1';
+
+const JEV_STATE_DIR = process.env.HERDR_JEV_STATE_DIR || join(homedir(), '.local', 'state', 'herdr-jev');
+let endedLog = [];
+
+function loadEndedLog() {
+  if (DEMO) {
+    const now = getNow();
+    endedLog = [
+      { name: 'Fake 1', kind: 'claude', project: 'web', branch: 'main', task: 'test', state: 'done', firstSeen: now - 3600000, lastSeen: now - 3000000, worked: 600000, waiting: 0 },
+      { name: 'Fake 2', kind: 'codex', project: 'api', branch: 'fix', task: 'auth', state: 'blocked', firstSeen: now - 7200000, lastSeen: now - 3600000, worked: 3000000, waiting: 600000 },
+      { name: 'Fake 3', kind: 'gemini', project: 'app', branch: 'feat', task: 'ui', state: 'working', firstSeen: now - 10000000, lastSeen: now - 7200000, worked: 2800000, waiting: 0 },
+    ];
+    return;
+  }
+  try {
+    const file = join(JEV_STATE_DIR, 'office', `ended-${today(getNow())}.json`);
+    endedLog = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    endedLog = [];
+  }
+}
+
+function recordDepartedAgent(person, shift, now) {
+  if (DEMO || ROSTER_ARG) return;
+  const entry = {
+    name: person.name,
+    kind: person.kind,
+    project: person.repo || person.workspaceName || '',
+    branch: person.branch || '',
+    task: person.title || person.cwd.split('/').pop() || person.id,
+    state: person.status,
+    firstSeen: shift.onShift ? now - shift.onShift : now,
+    lastSeen: now,
+    worked: shift.worked || 0,
+    waiting: shift.waiting || 0,
+  };
+  endedLog.unshift(entry);
+  if (endedLog.length > 50) endedLog.pop();
+  try {
+    const dir = join(JEV_STATE_DIR, 'office');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `ended-${today(now)}.json`), JSON.stringify(endedLog, null, 2));
+  } catch (e) {
+    // ignore
+  }
+}
+let endedView = argv.has('--ended') || (argvList.includes('--view') && argvList[argvList.indexOf('--view') + 1] === 'ended');
 // --zoom picks the level to open at. An unknown value is the floor plan rather than
 // an error: this is a wall display as often as it is a tool, and a typo in a plugin
 // action's arguments should not leave somebody with a blank pane and no explanation.
@@ -113,6 +178,7 @@ let lastJevPoll = 0;
 let swarmPanel = null;
 let jevAgentsCache = new Map();
 let jevPolling = false;
+let disconnectedSince = STATE_ARG === 'disconnected' ? Date.now() - 5000 : 0;
 
 function getSubagentsFor(primaryId) {
   if (DEMO) {
@@ -411,7 +477,7 @@ async function pollJevOverview(force = false) {
         } catch {}
       }
       jevPolling = false;
-      resolve(jevCache);
+      resolve(Promise.reject(new Error('overview timed out')));
     }, timeoutMs);
     timer.unref?.();
 
@@ -430,8 +496,14 @@ async function pollJevOverview(force = false) {
     activeChild = child;
     let stdout = '';
     child.stdout?.on('data', (d) => { stdout += d.toString('utf8'); });
-    const finishOverview = () => {
+    let jevErr = '';
+    child.stderr?.on('data', (d) => { jevErr += d.toString('utf8'); });
+    const finishOverview = (code) => {
       if (settled) return;
+      if (code !== 0) {
+        if (cleanup()) resolve(Promise.reject(new Error(`overview exited with ${code}: ${jevErr}`)));
+        return;
+      }
       if (stdout.trim()) {
         try {
           const items = JSON.parse(stdout);
@@ -483,13 +555,13 @@ async function pollJevOverview(force = false) {
         resolve(jevCache);
       };
       agentsChild.on('close', finishAgents);
-      agentsChild.on('error', () => {
-        if (cleanup()) resolve(jevCache);
+      agentsChild.on('error', (err) => {
+        if (cleanup()) resolve(Promise.reject(new Error(`agents failed: ${err.message}`)));
       });
     };
     child.on('close', finishOverview);
-    child.on('error', () => {
-      if (cleanup()) resolve(jevCache);
+    child.on('error', (err) => {
+      if (cleanup()) resolve(Promise.reject(new Error(`overview failed: ${err.message}`)));
     });
   });
 }
@@ -662,7 +734,8 @@ function leaveTerminal() {
 // with time already banked. Demo numbers are invented, so the demo never reads or
 // writes the real file.
 function openTheBooks() {
-  if (DEMO) return;
+  loadEndedLog();
+  if (DEMO || ROSTER_ARG) return;
   const saved = loadState();
   if (!saved) return;
   clocks.restore(saved);
@@ -674,7 +747,7 @@ function openTheBooks() {
 // The other half. Synchronous and failure-swallowing all the way down, which is what
 // lets `quit` call it without spending any of its half-second budget.
 function closeTheBooks() {
-  if (DEMO) return;
+  if (DEMO || ROSTER_ARG) return;
   saveState({ ...clocks.snapshot(), desks: roster.snapshotStates() });
 }
 
@@ -742,9 +815,18 @@ function quit(code = 0, msg) {
 // The header counts what is on the floor, which with a filter on is the filtered
 // set. Counting the whole room under a filtered floor plan would have the header
 // and the desks under it disagreeing about how many people are stuck.
-function countOf(people) {
-  const tally = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0 };
-  for (const p of people) tally[p.status] = (tally[p.status] ?? 0) + 1;
+function countOf(people, now) {
+  const tally = { working: 0, blocked: 0, idle: 0, done: 0, unknown: 0, longestWait: 0 };
+  for (const p of people) {
+    tally[p.status] = (tally[p.status] ?? 0) + 1;
+    if ((p.status === 'blocked' || p.jevAttention === 'now') && p.jevWaitingSince) {
+      const wait = now - p.jevWaitingSince;
+      if (wait > tally.longestWait) tally.longestWait = wait;
+    } else if (p.status === 'blocked' && p.since) {
+      const wait = now - p.since;
+      if (wait > tally.longestWait) tally.longestWait = wait;
+    }
+  }
   return tally;
 }
 
@@ -766,7 +848,7 @@ function view() {
     // its view rather than holding a clock it can ask questions of.
     shift: detail ? clocks.desk(detail.id) : null,
     stats: clocks.office(),
-    counts: countOf(people),
+    counts: countOf(people, now),
     total: roster.people.length,
     filter,
     filtering,
@@ -775,7 +857,7 @@ function view() {
     selectedId,
     detail,
     swarm: swarmPanel,
-    frame: ONCE ? Math.floor(now / ANIM_MS) : frame,
+    frame: REDUCED_MOTION ? 0 : (ONCE ? Math.floor(now / ANIM_MS) : frame),
     now,
     size: size(),
     message,
@@ -784,6 +866,10 @@ function view() {
     hire,
     compose,
     trust,
+    disconnectedSince,
+    reducedMotion: REDUCED_MOTION,
+    endedLog,
+    endedView,
   };
 }
 
@@ -1115,8 +1201,16 @@ async function refresh() {
     ]);
     seat(snapshot, tabs);
     await pollJevOverview();
+    disconnectedSince = 0;
     const raw = agentList.agents || [];
     const { primaries } = classifyPanes(raw, jevAgentsCache);
+    const incomingIds = new Set(primaries.filter(a => a && a.pane_id).map(a => a.pane_id));
+    for (const person of roster.people) {
+      if (!incomingIds.has(person.id)) {
+        const shift = clocks.desk(person.id, getNow());
+        if (shift) recordDepartedAgent(person, shift, getNow());
+      }
+    }
     const newlyBlocked = roster.update(primaries);
     
     const validIds = new Set(roster.people.map((p) => p.id));
@@ -1155,6 +1249,7 @@ async function refresh() {
     }
     draw();
   } catch (err) {
+    if (!disconnectedSince) disconnectedSince = Date.now();
     note(`api: ${err.message}`);
     draw();
   }
@@ -1180,7 +1275,7 @@ let subscribedTo = '';
 // accept is said once rather than on every rebuild for the rest of the session.
 let streamComplaint = '';
 function syncSubscriptions() {
-  if (DEMO) return;
+  if (DEMO || ROSTER_ARG) return;
   const ids = roster.people.map((p) => p.id).sort();
   const key = ids.join(',');
   if (key === subscribedTo) return;
@@ -1998,6 +2093,11 @@ function onInput(chunk) {
   }
 
   if (str === '\x03' || str === 'q') return quit(0);
+  
+  if (disconnectedSince && ['y', 'n', 's', 'a', 'A', '+', 'c'].includes(str)) {
+    return refuse('cannot do that while disconnected');
+  }
+
   // esc closes the panel. Enter no longer does: the panel shares the pane with
   // the floor now, so enter still means "show me this desk" even while one is
   // open, which is what walking to a new desk and hitting it should do.
@@ -2029,6 +2129,12 @@ function onInput(chunk) {
     // back out the way you came in rather than throwing away a filter you are
     // still using because a panel happened to be open.
     if (filtering) return closeFilter(true);
+    if (endedView) {
+      endedView = false;
+      prevLines = [];
+      draw();
+      return;
+    }
     if (swarmPanel?.closeConfirm) {
       swarmPanel = { ...swarmPanel, closeConfirm: null };
       prevLines = [];
@@ -2223,6 +2329,17 @@ function onInput(chunk) {
   else if (str === 'f') jumpToPane();
   else if (str === 'b') nextRaisedHand();
   else if (str === 'F') toggleFollow();
+  else if (str === 'e') {
+    endedView = !endedView;
+    prevLines = [];
+    draw();
+  }
+  else if (str === 'm') {
+    REDUCED_MOTION = !REDUCED_MOTION;
+    note(REDUCED_MOTION ? 'reduced motion: on' : 'reduced motion: off');
+    prevLines = [];
+    draw();
+  }
   else if (str === 'z') {
     zoom = nextZoom(zoom);
     // Said out loud, because on a small pane 'auto' and 'list' can look identical:
@@ -2397,7 +2514,7 @@ const poll = setInterval(refresh, POLL_MS);
 if (process.env.HERDR_OFFICE_TEST_POLL === '1') {
   clearInterval(anim);
   clearInterval(poll);
-  pollJevOverview(true).then((cache) => {
+  pollJevOverview(true).catch(() => jevCache).then((cache) => {
     process.stdout.write(JSON.stringify({ polled: true, size: cache?.size ?? 0 }));
     process.exit(0);
   });
@@ -2409,7 +2526,7 @@ if (process.env.HERDR_OFFICE_TEST_UNIT === '1') {
 }
 
 async function main() {
-  if (!DEMO) {
+  if (!DEMO && !ROSTER_ARG) {
     spawn(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
     try {
       api = await new ApiClient().open();
@@ -2432,7 +2549,20 @@ async function main() {
   if (ONCE) {
     clearInterval(anim);
     clearInterval(poll);
-    if (DEMO) {
+    if (ROSTER_ARG) {
+      try {
+        const fixture = JSON.parse(readFileSync(ROSTER_ARG, 'utf8'));
+        const raw = STATE_ARG === 'empty' ? [] : (fixture.agents || []);
+        if (fixture.ended) endedLog = fixture.ended;
+        const { primaries } = classifyPanes(raw, new Map());
+        roster.update(primaries);
+                updateScopeFromRoster();
+        clocks.observe(roster.people);
+      } catch (err) {
+        process.stderr.write(`could not load --roster ${ROSTER_ARG}: ${err.message}\n`);
+        process.exit(1);
+      }
+    } else if (DEMO) {
       const { demoTracking } = demoSwarmData();
       const raw = demoAgents();
       const { primaries } = classifyPanes(raw, demoTracking);
@@ -2484,7 +2614,7 @@ async function main() {
   }
 
   enterTerminal();
-  if (!DEMO) {
+  if (!DEMO && !ROSTER_ARG) {
     saveTimer = setInterval(closeTheBooks, SAVE_MS);
     // The office should not be the reason a terminal will not close.
     saveTimer.unref?.();

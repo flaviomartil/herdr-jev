@@ -79,9 +79,15 @@ export function center(str, max) {
   return ' '.repeat(left) + clipped + ' '.repeat(slack - left);
 }
 
-export function formatDuration(ms) {
+export function formatDuration(ms, reducedMotion = false) {
   if (ms == null) return '';
   const secs = Math.floor(ms / 1000);
+  if (reducedMotion) {
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    return `${hours}h${String(mins % 60).padStart(2, '0')}m`;
+  }
   if (secs < 60) return `${secs}s`;
   const mins = Math.floor(secs / 60);
   if (mins < 60) return `${mins}m${String(secs % 60).padStart(2, '0')}s`;

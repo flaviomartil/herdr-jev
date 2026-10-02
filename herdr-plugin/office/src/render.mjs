@@ -121,12 +121,12 @@ const over = (base, str, col) => {
 // One bordered row of a card: `│ <inner> │`, with inner's spans shifted past the
 // border and gutter. Works out the right-hand border from inner's code-point
 // length so a wide glyph inside cannot push the frame off the grid.
-function framed(inner, spans, { rowBg, borderFg, bold, borderBg = P.cubicle, gutter = 1, selected = false }) {
+function framed(inner, spans, { rowBg, borderFg, bold, borderBg = P.cubicle, gutter = 1, doubleBorder = false }) {
   const n = [...inner].length;
   const pad = ' '.repeat(gutter);
   const shift = 1 + gutter;
   const right = n + shift + gutter;
-  const borderChar = selected ? '║' : '│';
+  const borderChar = doubleBorder ? '║' : '│';
   return paint(
     `${borderChar}${pad}${inner}${pad}${borderChar}`,
     [
@@ -139,10 +139,10 @@ function framed(inner, spans, { rowBg, borderFg, bold, borderBg = P.cubicle, gut
   );
 }
 
-const edge = (left, right, w, { borderFg, bold, selected }) => {
-  const lineChar = selected ? '═' : '─';
-  const l = selected && left === '╭' ? '╔' : selected && left === '╰' ? '╚' : left;
-  const r = selected && right === '╮' ? '╗' : selected && right === '╯' ? '╝' : right;
+const edge = (left, right, w, { borderFg, bold, doubleBorder }) => {
+  const lineChar = doubleBorder ? '═' : '─';
+  const l = doubleBorder && left === '╭' ? '╔' : doubleBorder && left === '╰' ? '╚' : left;
+  const r = doubleBorder && right === '╮' ? '╗' : doubleBorder && right === '╯' ? '╝' : right;
   return paint(l + lineChar.repeat(Math.max(0, w - 2)) + r, [], { fg: borderFg, bg: P.cubicle, bold });
 };
 
@@ -435,7 +435,7 @@ export function formatCommand(cmd, kind) {
   return parsed;
 }
 
-function tile(person, { selected, frame, now, lifted = false, dropTarget = false, wall = P.wall }) {
+function tile(person, { selected, frame, now, lifted = false, dropTarget = false, wall = P.wall, reducedMotion = false, stale = false }) {
   const jevState = person.jevConfidence >= 0.7 && person.jevState && person.jevState !== "unknown" ? person.jevState : person.status;
   const st = status(jevState);
   const who = identity(person.id);
@@ -453,32 +453,25 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // Drag feedback is colour only, never a different glyph or an extra cell: the
   // desk being carried goes pale, the desk it would land on lights up. Anything
   // that changed a line's width here would wrap the whole floor.
-  const borderFg = dropTarget
-    ? P.accent
-    : lifted
-      ? P.faint
-      : selected
-        ? (alert && st.hot) || st.bright || st.fg
-        : st.fg;
-  const chrome = { borderFg, bold: dropTarget || (!lifted && (selected || alert)), selected };
+  const needsAttention = person.status === 'blocked' || person.jevAttention === 'now';
+  const borderFg = stale 
+    ? P.faint
+    : dropTarget
+      ? P.accent
+      : lifted
+        ? P.faint
+        : needsAttention
+          ? STATUS.blocked.fg
+          : selected
+            ? (alert && st.hot) || st.bright || st.fg
+            : st.fg;
+  const chrome = { borderFg, bold: !stale && (dropTarget || (!lifted && (selected || alert))), doubleBorder: needsAttention || selected };
   const row = (inner, spans, rowBg = P.cubicle) => framed(inner, spans, { ...chrome, rowBg, gutter: GUTTER });
   const blank = (rowBg) => row(' '.repeat(INNER), [], rowBg);
   // A person, a cell of desk, then their monitor.
   const art = (figure, monitor) => figure + ' '.repeat(MON_X - POSE_W) + monitor;
 
   const emoteFg = body.emote === 'skin' ? who.skin : st.fg;
-  // The monitor is their head, and how full it is is the colour of the frame around it.
-  //
-  // This is the only cell on a desk that was still free. The desk row is spoken for from
-  // end to end (a sticky note, the pile of paper, ten cells of keyboard, a mug), the wall
-  // above carries the tab card and whatever the desk is saying, and both text rows are
-  // full. The frame was doing nothing but being furniture, it is drawn in four places
-  // that are already one colour, and it surrounds the one part of a desk that stands for
-  // what the agent is thinking with. Nothing moves and nothing is added: a warm bezel is
-  // a desk that is filling up.
-  //
-  // The glass inside it is untouched, which is the division worth keeping: the screen says
-  // what this desk is doing and the frame says how much room it has left to do it in.
   const bezel = headTint(pressure(person.head?.used)) || P.faint;
   const mon = [
     { from: MON_X, to: INNER, fg: bezel },
@@ -486,12 +479,12 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
     { from: INNER - 1, to: INNER, fg: bezel },
   ];
 
-  const plateBg = selected ? P.accent : P.cubicle;
-  const plateFg = selected ? '#ffffff' : P.ink;
-  const plateDim = selected ? '#ffffff' : P.soft;
+  const plateBg = stale ? P.cubicle : selected ? P.accent : P.cubicle;
+  const plateFg = stale ? P.faint : selected ? '#ffffff' : P.ink;
+  const plateDim = stale ? P.faint : selected ? '#ffffff' : P.soft;
 
   const plateL = cells();
-  plateL.add('▌ ', { fg: selected ? P.cubicle : st.fg });
+  plateL.add('▌ ', { fg: stale ? P.faint : selected ? P.cubicle : st.fg });
   plateL.add(truncate(person.name, 12), { fg: plateFg, bold: true });
   if (person.hiredSparkle) plateL.add(' *', { fg: '#ffe6a8', bold: true });
   else if (person.focused) plateL.add(' *', { fg: selected ? '#ffffff' : P.accent, bold: true });
@@ -513,11 +506,12 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   const plate = plateL;
 
   const bar = cells();
-  const dur = (person.assumedSince ? '~' : '') + formatDuration(now - person.since);
-  bar.add('▌ ', { fg: st.fg });
-  bar.add(st.label, { fg: P.ink, bold: alert || person.status === 'blocked' });
+  const dur = (person.assumedSince ? '~' : '') + formatDuration(now - person.since, reducedMotion);
+  bar.add('▌ ', { fg: stale ? P.faint : st.fg });
+  const labelText = stale ? `${st.label} (stale)` : st.label;
+  bar.add(labelText, { fg: stale ? P.faint : P.ink, bold: !stale && (alert || person.status === 'blocked') });
   bar.gap(INNER - width(dur));
-  bar.add(dur, { fg: P.soft });
+  bar.add(dur, { fg: stale ? P.faint : P.soft });
   bar.gap(INNER);
 
   const task = person.title || person.cwd.split('/').pop() || person.id;
@@ -526,8 +520,8 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   const foot = cells();
   const ref = person.branch ? `@${truncate(person.branch, BRANCH_W - 1)}` : '';
   const roomForRef = ref && INNER - 2 - width(ref) >= TASK_MIN;
-  foot.add('▌ ', { fg: st.fg });
-  foot.add(truncate(task, roomForRef ? INNER - 2 - width(ref) : INNER - 2), { fg: P.soft });
+  foot.add('▌ ', { fg: stale ? P.faint : st.fg });
+  foot.add(truncate(task, roomForRef ? INNER - 2 - width(ref) : INNER - 2), { fg: stale ? P.faint : P.soft });
   if (roomForRef) {
     foot.gap(INNER - width(ref));
     foot.add(ref, { fg: P.soft });
@@ -554,11 +548,20 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   }
   runRow.gap(INNER);
 
+  const topRows = [];
+  if (needsAttention) {
+    const banner = cells();
+    const msg = `PRECISA DE VOCE ${dur}`;
+    banner.add(padEnd(msg, INNER), { fg: '#ffffff', bold: true });
+    topRows.push(row(banner.out().text, banner.out().spans, STATUS.blocked.fg));
+  }
+  topRows.push(row(plate.out().text, plate.out().spans, plateBg));
+  topRows.push(card ? row(card.text, card.spans) : row(' '.repeat(INNER), []));
+  topRows.push(bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : row(' '.repeat(INNER), []));
+
   const rows = [
     edge('╭', '╮', TILE_W, chrome),
-    row(plate.out().text, plate.out().spans, plateBg),
-    card ? row(card.text, card.spans) : row(' '.repeat(INNER), []),
-    bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : row(' '.repeat(INNER), []),
+    ...topRows,
     row(art(hair, bezelTop(person.head?.used)), [
       { from: 0, to: POSE_W, fg: person.hiredSparkle ? '#ffe6a8' : emoteFg, bold: Boolean(person.hiredSparkle) },
       { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
@@ -582,7 +585,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
       P.deskTop,
     ),
     row(runRow.out().text, runRow.out().spans),
-    row(bar.out().text, bar.out().spans),
+    ...(needsAttention ? [] : [row(bar.out().text, bar.out().spans)]),
     row(foot.out().text, foot.out().spans),
     edge('╰', '╯', TILE_W, chrome),
   ];
@@ -652,8 +655,20 @@ function vacantTile({ selected, pending, kind }) {
 /* -------------------------------------------------------------------- chrome */
 
 function headerLines(view) {
-  const { counts, people, size } = view;
-  const clock = new Date(view.now).toTimeString().slice(0, 8);
+  const { counts, people, size, reducedMotion } = view;
+  const clock = new Date(view.now).toTimeString().slice(0, reducedMotion ? 5 : 8);
+  if (view.disconnectedSince) {
+    const dur = formatDuration(view.now - view.disconnectedSince, view.reducedMotion);
+    const msg = ` HERDR DESCONECTADO: tentando reconectar `;
+    const b = cells();
+    b.add(msg, { bg: P.accent, fg: P.cubicle, bold: true });
+    b.add(` há ${dur} `, { bg: P.accent, fg: P.cubicle });
+    b.gap(size.cols - width(clock) - 2);
+    if (b.w + width(clock) + 2 <= size.cols) b.add(clock, { fg: P.dim });
+    const { text, spans } = b.fit(size.cols);
+    return [paint(text, spans, { bg: P.bar, fg: P.soft }), fill(size.cols, P.carpet)];
+  }
+
   const b = cells();
   b.add('  ');
   b.add('JEV OFFICE', { fg: P.ink, bg: P.accent, bold: true }); 
@@ -683,7 +698,7 @@ function headerLines(view) {
   for (const key of ORDER) {
     if (!counts[key]) continue;
     const st = status(key);
-    const chunk = ` ${counts[key]} ${PHRASE[key]} `;
+    const chunk = key === 'blocked' ? ` ${counts[key]} ${PHRASE[key]} · ${formatDuration(counts.longestWait, view.reducedMotion)} ` : ` ${counts[key]} ${PHRASE[key]} `;
     if (b.w + width(chunk) + 1 > budget) break;
     b.add('   ');
     b.add(chunk, { bg: st.fg, fg: P.cubicle, bold: key === 'blocked' });
@@ -899,7 +914,7 @@ const colour = (name) =>
 // pixel layer without counting lines here and there separately.
 const WB_BAR_ROW = 2;
 
-export function whiteboard(stats, now) {
+export function whiteboard(stats, now, reducedMotion = false) {
   if (!stats) return null;
   // A blank board until there is something true to write on it. A fresh office
   // reading "worked 0s, hands 0" would be furniture pretending to be information.
@@ -915,12 +930,12 @@ export function whiteboard(stats, now) {
   // Time first, because the split between working and waiting on a human is the one
   // number here that says something about how the office is being run rather than
   // about how the agents are doing.
-  const spent = `worked ${formatDuration(stats.worked)} \u00b7 waiting ${formatDuration(stats.waiting)}`;
+  const spent = `worked ${formatDuration(stats.worked, reducedMotion)} \u00b7 waiting ${formatDuration(stats.waiting, reducedMotion)}`;
   const hands = [`hands ${stats.hands}`];
   if (stats.answers > 0) hands.push(`${stats.answers} from here`);
   // A second, not a millisecond: on the first frame of a session the worst wait is
   // however long ago the last poll was, and "worst 0s" is not a statistic.
-  if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest)}`);
+  if (stats.longest >= 1000) hands.push(`worst ${formatDuration(stats.longest, reducedMotion)}`);
   // The coarse bar: whole cells in the status colours, in the same left-to-right
   // order the header counts them. A cell is the smallest thing this can be wrong by,
   // which is the whole argument for the pixel layer that covers it, and is also why
@@ -1132,7 +1147,7 @@ function compactFloor(view, floorRows, hitboxes, startRow) {
     const who = identity(person.id);
     const face = [...pose(person.status, view.frame).rows[1]].slice(HAIR_FROM, HAIR_TO).join('');
     const selected = person.id === view.selectedId;
-    const dur = (person.assumedSince ? '~' : '') + formatDuration(view.now - person.since);
+    const dur = (person.assumedSince ? '~' : '') + formatDuration(view.now - person.since, view.reducedMotion);
     const b = cells();
     // Narrow terminals drop columns from the right rather than wrapping: state
     // and face first, then who they are, then what they are doing.
@@ -1575,15 +1590,15 @@ function detailPanel(view, floorRows, hitboxes, startRow) {
   if (person) {
     // "for at least 0s" is just noise on someone we only just laid eyes on.
     const held = view.now - person.since;
-    const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held)}`;
+    const dwell = person.assumedSince && held < 2000 ? '' : ` for ${person.assumedSince ? 'at least ' : ''}${formatDuration(held, view.reducedMotion)}`;
     const longAct = person.jevActivity && person.jevActivity !== 'unknown' ? person.jevActivity.replace(/_/g, ' ') : null;
     const activityLabel = longAct ? `${st.label} · ${longAct}` : formatCommand(person.command, person.kind);
     let statusLine = (activityLabel || st.label) + dwell;
     if (view.shift && view.shift.onShift >= 1000) {
       const shift = view.shift;
-      const parts = [`${formatDuration(shift.onShift)} on shift`];
-      if (shift.worked >= 1000) parts.push(`${formatDuration(shift.worked)} working`);
-      if (shift.waiting >= 1000) parts.push(`${formatDuration(shift.waiting)} waiting on you`);
+      const parts = [`${formatDuration(shift.onShift, view.reducedMotion)} on shift`];
+      if (shift.worked >= 1000) parts.push(`${formatDuration(shift.worked, view.reducedMotion)} working`);
+      if (shift.waiting >= 1000) parts.push(`${formatDuration(shift.waiting, view.reducedMotion)} waiting on you`);
       if (shift.hands > 1) parts.push(`${shift.hands} hands`);
       statusLine += ' · ' + parts.join(' · ');
     }
@@ -1823,6 +1838,78 @@ function swarmPanel(view, floorRows, hitboxes, startRow) {
   return lines;
 }
 
+function endedPanel(view, floorRows) {
+  const { size, endedLog = [] } = view;
+  const PW = Math.min(size.cols, Math.max(100, size.cols - 4));
+  const TEXT = PW - 4;
+  const left = Math.max(0, Math.floor((size.cols - PW) / 2));
+  const chrome = { borderFg: P.accent, bold: false };
+  const row = (inner, spans = [], rowBg = P.cubicle) => framed(padEnd(inner, TEXT), spans, { ...chrome, rowBg });
+  const body = [];
+
+  const head = cells();
+  head.add('╭─ ', { fg: chrome.borderFg });
+  head.add(' ENCERRADOS ', { bg: P.accent, fg: P.cubicle, bold: true });
+  head.add(' ');
+  head.add('─'.repeat(Math.max(0, PW - head.w - 1)), { fg: chrome.borderFg });
+  head.add('╮', { fg: chrome.borderFg });
+  body.push(paint(head.out().text, head.out().spans, { bg: P.cubicle, fg: chrome.borderFg }));
+
+  let totalWork = 0;
+  let totalWait = 0;
+  let longestWait = 0;
+  for (const l of endedLog) {
+    totalWork += l.worked || 0;
+    totalWait += l.waiting || 0;
+    longestWait = Math.max(longestWait, l.waiting || 0);
+  }
+
+  const recap = cells();
+  recap.add(`  Vistos hoje: ${endedLog.length} | Trabalhou: ${formatDuration(totalWork, view.reducedMotion)} | Esperou: ${formatDuration(totalWait, view.reducedMotion)} | Maior espera: ${formatDuration(longestWait, view.reducedMotion)}`, { fg: P.ink, bold: true });
+  body.push(row(recap.out().text, recap.out().spans));
+  body.push(row(''));
+
+  if (endedLog.length === 0) {
+    body.push(row('  nenhum agente encerrado', [{ from: 0, to: Infinity, fg: P.dim }]));
+  } else {
+    for (let i = 0; i < endedLog.length; i++) {
+      const entry = endedLog[i];
+      if (body.length > floorRows - 5) break;
+      const line = cells();
+      line.add(' ');
+      line.add(truncate(entry.name || '-', 12).padEnd(13), { fg: P.ink });
+      line.add(truncate(entry.kind || '-', 10).padEnd(11), { fg: P.soft });
+      line.add(truncate(entry.project || '-', 12).padEnd(13), { fg: P.soft });
+      line.add(truncate(entry.branch || '-', 16).padEnd(17), { fg: P.dim });
+      line.add(truncate(entry.task || '-', 20).padEnd(21), { fg: P.ink });
+      line.add(truncate(entry.state || '-', 9).padEnd(10), { fg: status(entry.state).fg });
+      
+      const timeStr = `${formatDuration(entry.worked || 0, view.reducedMotion)} trab / ${formatDuration(entry.waiting || 0, view.reducedMotion)} esp`;
+      line.add(timeStr, { fg: P.dim });
+      
+      body.push(row(line.out().text, line.out().spans, i % 2 === 1 ? P.cubicleAlt : P.cubicle));
+    }
+  }
+
+  const foot = cells();
+  foot.add('╰─ ', { fg: chrome.borderFg });
+  foot.add(' e ', { bg: P.accent, fg: P.cubicle });
+  foot.add(' voltar  ');
+  foot.add('─'.repeat(Math.max(0, PW - foot.w - 1)), { fg: chrome.borderFg });
+  foot.add('╯', { fg: chrome.borderFg });
+  body.push(paint(foot.out().text, foot.out().spans, { bg: P.cubicle, fg: chrome.borderFg }));
+
+  const lines = [];
+  for (let i = 0; i < floorRows; i += 1) {
+    if (i >= body.length) {
+      lines.push(fill(size.cols, P.carpet));
+      continue;
+    }
+    lines.push(fill(left, P.carpet) + body[i] + fill(size.cols - left - PW, P.carpet));
+  }
+  return lines;
+}
+
 /* --------------------------------------------------------------------- frame */
 
 export function renderFrame(view) {
@@ -1837,7 +1924,7 @@ export function renderFrame(view) {
   // are either reading about somebody, deciding who to hire, or writing down what
   // somebody should do, never two of the three. Assign outranks the others because
   // it is the one holding half-typed text somebody would lose.
-  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.swarm ? 'swarm' : view.detail ? 'detail' : null;
+  const panel = view.compose ? 'compose' : view.hire ? 'hire' : view.swarm ? 'swarm' : view.endedView ? 'endedView' : view.detail ? 'detail' : null;
   const detailRows = panel ? Math.min(roomBelowHeader - 1, Math.max(8, Math.floor(roomBelowHeader / 2))) : 0;
   const floorRows = Math.max(1, roomBelowHeader - detailRows);
   const startRow = out.length;
@@ -1891,8 +1978,8 @@ export function renderFrame(view) {
     // Not an empty office: a filter with nothing behind it. Offering to hire
     // somebody here would be answering a question nobody asked.
     out.push(...noMatchFloor(view, floorRows));
-  } else if (!view.people.length && !roomForDesks) {
-    out.push(...emptyFloor(view, floorRows));
+  } else if (!view.people.length) {
+    out.push(...zeroAgentsFloor(view, floorRows));
   } else if (!roomForDesks) {
     out.push(...compactFloor(view, floorRows, hitboxes, startRow));
   } else {
@@ -1951,11 +2038,11 @@ export function renderFrame(view) {
           selected: person.id === view.selectedId,
           frame: view.frame,
           now: view.now,
-          // A desk with a swap in flight stays pale until the server confirms
-          // it, so the room never looks settled while it is still moving.
           lifted: (Boolean(view.drag?.active) && person.id === view.drag.id) || Boolean(view.busy?.has(person.id)),
           dropTarget: Boolean(view.drag?.active) && person.id === view.drag.overId && person.id !== view.drag.id,
           wall: roomWall(view.rooms, person),
+          reducedMotion: view.reducedMotion,
+          stale: Boolean(view.disconnectedSince),
         });
       });
       const span = rendered.length * TILE_W + (rendered.length - 1) * GAP_X;
@@ -1974,7 +2061,7 @@ export function renderFrame(view) {
     const pages = Math.ceil(view.people.length / perPage);
     // Furnish the strip under the desks, keeping clear of the paging note.
     const deskBottom = top + (usedRows - 1) * stepY + TILE_H + 1;
-    const board = whiteboard(view.stats, view.now);
+    const board = whiteboard(view.stats, view.now, view.reducedMotion);
     const hung = decorate(lines, cols, floorRows - (pages > 1 ? 1 : 0), deskBottom, board);
     // Only the bar row, not the writing. The first version of this took both interior
     // rows and so deleted `worked 12m · waiting 3m` to draw a picture of it, which
@@ -2002,7 +2089,32 @@ export function renderFrame(view) {
     out.push(...drawn.lines);
   } else if (panel === 'compose') out.push(...composePanel(view, detailRows));
   else if (panel === 'swarm') out.push(...swarmPanel(view, detailRows, hitboxes, out.length));
+  else if (panel === 'endedView') out.push(...endedPanel(view, detailRows));
   else if (panel === 'detail') out.push(...detailPanel(view, detailRows, hitboxes, out.length));
   out.push(...footerLines(view));
   return { lines: out.slice(0, rows), hitboxes, grid, regions };
+}
+
+function zeroAgentsFloor(view, height) {
+  const { cols } = view.size;
+  const lines = [];
+  const text1 = 'Nenhum agente neste escopo';
+  const text2 = 'w amplia o escopo';
+  const text3 = '+ contrata';
+  const l1 = Math.max(0, Math.floor((cols - width(text1)) / 2));
+  const l2 = Math.max(0, Math.floor((cols - width(text2)) / 2));
+  const l3 = Math.max(0, Math.floor((cols - width(text3)) / 2));
+  
+  for (let i = 0; i < height; i += 1) {
+    if (i === Math.floor(height / 2) - 1) {
+      lines.push(fill(l1, P.carpet) + paint(text1, [], { bg: P.carpet }) + fill(cols - l1 - width(text1), P.carpet));
+    } else if (i === Math.floor(height / 2) + 1) {
+      lines.push(fill(l2, P.carpet) + paint(text2, [{ from: 0, to: Infinity, fg: P.dim }], { bg: P.carpet }) + fill(cols - l2 - width(text2), P.carpet));
+    } else if (i === Math.floor(height / 2) + 2) {
+      lines.push(fill(l3, P.carpet) + paint(text3, [{ from: 0, to: Infinity, fg: P.dim }], { bg: P.carpet }) + fill(cols - l3 - width(text3), P.carpet));
+    } else {
+      lines.push(fill(cols, P.carpet));
+    }
+  }
+  return lines;
 }
