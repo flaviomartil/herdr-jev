@@ -59,6 +59,7 @@ import { readOverview } from "./herdr/overview.js";
 import { buildDailyReport, formatDailyText, formatDailyMarkdown, writeDailyMarkdown } from "./herdr/daily.js";
 import { buildAgentsView, formatAgentsTable } from "./herdr/agents.js";
 import { assertRunId, formatRunHistory, listRunHistory, mergeRunHistory } from "./orchestration/run-history.js";
+import { parseListLimit, peerBroadcastFailed } from "./cli-support.js";
 import { studio, studioEventPane } from "./herdr/studio.js";
 import { changeEffort } from "./herdr/effort.js";
 import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
@@ -70,7 +71,7 @@ import { homedir } from "node:os";
 
 // Automatically load from ~/.config/herdr/.env and repo .env
 loadEnvFile(join(homedir(), ".config/herdr/.env"));
-loadEnvFile(join(import.meta.dir, "../.env"));
+if (process.env.HERDR_JEV_TEST_GUARD !== "1") loadEnvFile(join(import.meta.dir, "../.env"));
 
 const program = new Command();
 
@@ -354,10 +355,15 @@ runsCommand
   .option("--limit <n>", "Maximum number of runs", "20")
   .option("--json", "Output JSON")
   .action((options: { limit: string; json?: boolean }) => {
-    const limit = Number(options.limit);
-    const runs = mergeRunHistory(listRunHistory(undefined, limit), listHarnessRuns({ limit, kind: "all" }), limit);
-    if (options.json) console.log(JSON.stringify(runs, null, 2));
-    else for (const run of runs) console.log(formatRunHistory(run));
+    try {
+      const limit = parseListLimit(options.limit);
+      const runs = mergeRunHistory(listRunHistory(undefined, limit), listHarnessRuns({ limit, kind: "all" }), limit);
+      if (options.json) console.log(JSON.stringify(runs, null, 2));
+      else for (const run of runs) console.log(formatRunHistory(run));
+    } catch (error) {
+      console.error(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      process.exitCode = 1;
+    }
   });
 
 runsCommand
@@ -575,12 +581,7 @@ program.command("peer-message [agent] [text]")
           timeoutMs: Number(options.timeoutMs),
         });
         console.log(result);
-        try {
-          const items = JSON.parse(result);
-          if (Array.isArray(items) && items.some((item: any) => !item.acknowledged)) {
-            process.exitCode = 1;
-          }
-        } catch {}
+        if (peerBroadcastFailed(result)) process.exitCode = 1;
         return;
       }
       if (!agentOrText || !maybeText) throw new Error("Peer agent handle and message text are required");
@@ -627,7 +628,7 @@ program.command("standup")
 
 function recognisedClient(name: string): boolean {
   const lower = name.trim().toLowerCase();
-  return (BASE_CLIENTS as string[]).includes(lower) || lower in loadClientAliases()
+  return (BASE_CLIENTS as string[]).includes(lower) || Object.hasOwn(loadClientAliases(), lower)
     || lower.includes("claude") || resolveBaseClientKind(lower) !== "claude";
 }
 

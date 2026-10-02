@@ -170,6 +170,7 @@ const QUOTA_DEGRADED_CACHE_MS = 60_000;
 const QUOTA_FRESH_MS = 15 * 60_000;
 const QUOTA_STOP_ERROR = /^(?:harness_command_timeout|harness_command_failed|harness_unavailable|unknown_command|invalid_external_action|unknown_option)/;
 let quotaCache: { key: string; at: number; ttl: number; value: unknown[] } | undefined;
+let quotaHarnessDownUntil = 0;
 
 function localQuotaObservation(request: { provider: string; scope: string; observedAt: number | null; remainingPercent: number | null; resetsAt: number | null }): unknown {
   const now = Date.now();
@@ -186,8 +187,8 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
     if (quotaCache && quotaCache.key === key && Date.now() - quotaCache.at < quotaCache.ttl) return quotaCache.value;
     const data = JSON.parse(readFileSync(path, "utf8"));
     if (!Array.isArray(data.windows)) return [];
-    let degraded = false;
-    let harnessDown = false;
+    let harnessDown = Date.now() < quotaHarnessDownUntil;
+    let degraded = harnessDown;
     const value = data.windows.slice(0, QUOTA_MAX_WINDOWS).map((window: any) => {
       const request = {
         provider: "codex", scope: data.session_quota_only ? "unknown" : data.account_id ? "account" : "unknown",
@@ -200,6 +201,7 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
       catch (error) {
         degraded = true;
         harnessDown = QUOTA_STOP_ERROR.test(error instanceof Error ? error.message : "");
+        if (harnessDown) quotaHarnessDownUntil = Date.now() + QUOTA_DEGRADED_CACHE_MS;
         return localQuotaObservation(request);
       }
     });
@@ -353,6 +355,7 @@ const probeCache = new Map<string, { value: unknown; expires: number }>();
 export function resetHarnessCaches(): void {
   probeCache.clear();
   quotaCache = undefined;
+  quotaHarnessDownUntil = 0;
 }
 
 function remembered<T>(key: string, build: () => { value: T; ok: boolean }): T {
