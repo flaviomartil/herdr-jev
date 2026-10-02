@@ -74,6 +74,16 @@ function isolateConfig(quotaObservations: unknown[] = []) {
   };
 }
 
+function useIsolatedConfig() {
+  let restore: () => void = () => {};
+  beforeEach(() => {
+    restore = isolateConfig();
+  });
+  afterEach(() => {
+    restore();
+  });
+}
+
 describe("Pipeline Planner", () => {
   let restoreConfig: () => void;
   beforeEach(() => {
@@ -247,6 +257,7 @@ describe("Dynamic Model Matrix & Quota Cascade", () => {
 });
 
 describe("Model Discovery & Auto-Classification", () => {
+  useIsolatedConfig();
   it("detects known registered models for clients", () => {
     const knownClaude = getKnownModels("claude");
     expect(knownClaude.has("fable-5")).toBe(true);
@@ -403,6 +414,7 @@ describe("Split Pane Direction: Jev Decision vs Explicit", () => {
 });
 
 describe("Cross-Harness Delegation & Peering Matrix", () => {
+  useIsolatedConfig();
   it("defaults to disabled self-only delegation when unset", () => {
     const config = parseCrossHarnessConfig("");
     expect(config.mode).toBe("disabled");
@@ -571,6 +583,7 @@ describe("Cross-Harness Delegation & Peering Matrix", () => {
 });
 
 describe("Client Aliases & Executable Resolution", () => {
+  useIsolatedConfig();
   it("resolves base client kinds from naming heuristics and explicit aliases", () => {
     expect(resolveBaseClientKind("claude")).toBe("claude");
     expect(resolveBaseClientKind("claude-px")).toBe("claude");
@@ -692,6 +705,7 @@ describe("Client Aliases & Executable Resolution", () => {
 });
 
 describe("Harness & Quota Detection & Auto-Config", () => {
+  useIsolatedConfig();
   it("detects installed harnesses and probes available models", async () => {
     const harnesses = await detectInstalledHarnesses();
     expect(Array.isArray(harnesses)).toBe(true);
