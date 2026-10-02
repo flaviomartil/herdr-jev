@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, unlinkSync } from "node:fs";
+import { copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -84,11 +84,19 @@ function copyEntry(from: string, to: string): "copied" | "exists" {
   }
 }
 
-function moveEntries(source: string, target: string, errors: string[]): void {
+function sameEntry(from: string, to: string): boolean {
+  const a = statSync(from);
+  const b = statSync(to);
+  if (a.dev === b.dev && a.ino === b.ino) return true;
+  return a.isFile() && b.isFile() && a.size === b.size && readFileSync(from).equals(readFileSync(to));
+}
+
+function moveEntries(source: string, target: string, errors: string[], prefix = ""): void {
   mkdirSync(target, { recursive: true, mode: 0o700 });
   for (const name of readdirSync(source)) {
     const from = join(source, name);
     const to = join(target, name);
+    const label = `${prefix}${name}`;
     try {
       if (lstatSync(from).isDirectory()) {
         if (!existsSync(to)) {
@@ -100,21 +108,27 @@ function moveEntries(source: string, target: string, errors: string[]): void {
             if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EXDEV") throw error;
           }
         }
-        if (!existsSync(to) || lstatSync(to).isDirectory()) moveEntries(from, to, errors);
-        else errors.push(`${name}: conflict`);
+        if (!existsSync(to) || lstatSync(to).isDirectory()) moveEntries(from, to, errors, `${label}/`);
+        else errors.push(`${label}: conflict`);
         continue;
       }
+      let present = false;
       try {
         linkSync(from, to);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EEXIST" || code === "ENOENT") continue;
-        if (code !== "EXDEV" && code !== "EPERM") throw error;
-        if (copyEntry(from, to) === "exists") continue;
+        if (code === "ENOENT") continue;
+        if (code === "EEXIST") present = true;
+        else if (code !== "EXDEV" && code !== "EPERM") throw error;
+        else present = copyEntry(from, to) === "exists";
+      }
+      if (present && !sameEntry(from, to)) {
+        errors.push(`${label}: conflict`);
+        continue;
       }
       unlinkSync(from);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${name}: ${errorCode(error)}`);
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${label}: ${errorCode(error)}`);
     }
   }
   try {
@@ -123,7 +137,7 @@ function moveEntries(source: string, target: string, errors: string[]): void {
   }
 }
 
-export function migrateLegacyState(legacy: string, configured: string): string[] {
+export function migrateLegacyState(legacy: string, configured: string, hooks: { beforeMove?: () => void } = {}): string[] {
   const errors: string[] = [];
   if (legacy === configured || !existsSync(legacy)) return errors;
   try {
@@ -141,14 +155,15 @@ export function migrateLegacyState(legacy: string, configured: string): string[]
         }
       }
     }
+    hooks.beforeMove?.();
     moveEntries(legacy, configured, errors);
   } catch (error) {
-    errors.push(`${legacy}: ${errorCode(error)}`);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${legacy}: ${errorCode(error)}`);
   }
   return errors;
 }
 
-const resolvedRoots = new Map<string, string>();
+const fixedRoots = new Map<string, string>();
 
 export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = absoluteDir(env.HERDR_JEV_STATE_DIR);
@@ -160,17 +175,17 @@ export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
     throw new Error("state_dir_required_in_tests");
   }
   const legacy = legacyStateDir(env);
+  const key = `${legacy}\0${harnessGeneratedDir(env)}`;
+  const fixed = fixedRoots.get(key);
+  if (fixed) return fixed;
   const configured = readToolEnv(env).stateDir;
   if (!configured || configured === legacy) return legacy;
-  const key = `${legacy}\0${configured}`;
-  if (!resolvedRoots.has(key)) {
-    const errors = migrateLegacyState(legacy, configured);
-    if (errors.length > 0) {
-      console.error(`[herdr-jev] State migration from ${legacy} to ${configured} is incomplete (${errors.slice(0, 5).join(", ")}); entries left in the old directory stay invisible until a later run moves them.`);
-    }
-    resolvedRoots.set(key, configured);
+  const errors = migrateLegacyState(legacy, configured);
+  if (errors.length > 0) {
+    console.error(`[herdr-jev] State migration from ${legacy} to ${configured} is incomplete (${errors.slice(0, 5).join(", ")}); entries left in the old directory stay invisible until they are moved or the conflicts are resolved by hand.`);
   }
-  return resolvedRoots.get(key)!;
+  fixedRoots.set(key, configured);
+  return configured;
 }
 
 export function legacyConfigDir(): string {

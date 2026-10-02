@@ -124,23 +124,34 @@ function realOrNull(path: string): string | null {
   }
 }
 
-function showsDifferentPath(shown: string, expected: string): boolean {
+type PathRelation = "same" | "different" | "partial";
+
+function pathRelation(shown: string, expected: string): PathRelation {
   const target = pathKey(expected);
   if (ELLIPSIS.test(shown)) {
     const visible = pathKey(shown.replace(/^(?:…|\.{3})/, "").replace(/(?:…|\.{3})$/, ""));
-    if (!visible || visible === "/") return false;
-    return shown.startsWith("…") || shown.startsWith("...") ? !target.endsWith(visible) : !target.startsWith(visible);
+    if (!visible || visible === "/") return "partial";
+    const consistent = shown.startsWith("…") || shown.startsWith("...") ? target.endsWith(visible) : target.startsWith(visible);
+    return consistent ? "partial" : "different";
   }
   const home = process.env.HOME?.trim() || homedir();
   const expanded = shown === "~" ? home : shown.startsWith("~/") ? resolve(home, shown.slice(2)) : shown;
   const candidate = pathKey(resolve(expanded));
-  if (candidate === target) return false;
+  if (candidate === target) return "same";
   const real = realOrNull(candidate);
-  return !(real !== null && pathKey(real) === target);
+  return real !== null && pathKey(real) === target ? "same" : "different";
+}
+
+export type DialogPathVerdict = "match" | "mismatch" | "unverified";
+
+export function dialogPathVerdict(screenText: string, expected: string): DialogPathVerdict {
+  const relations = dialogPaths(screenText).map((shown) => pathRelation(shown, expected));
+  if (relations.includes("different")) return "mismatch";
+  return relations.includes("same") ? "match" : "unverified";
 }
 
 export function dialogMatchesPath(screenText: string, expected: string): boolean {
-  return !dialogPaths(screenText).some((shown) => showsDifferentPath(shown, expected));
+  return dialogPathVerdict(screenText, expected) === "match";
 }
 
 export async function confirmWorkspaceTrust(input: TrustConfirmation): Promise<TrustOutcome> {
@@ -185,7 +196,8 @@ export async function confirmWorkspaceTrust(input: TrustConfirmation): Promise<T
       await settle();
       continue;
     }
-    if (!dialogMatchesPath(screen.stdout, checkedPath)) return { confirmed: false, reason: "trust_path_mismatch" };
+    const verdict = dialogPathVerdict(screen.stdout, checkedPath);
+    if (verdict !== "match") return { confirmed: false, reason: verdict === "mismatch" ? "trust_path_mismatch" : "trust_path_unverified" };
     const menu = parseTrustMenu(screen.stdout);
     if (!menu || menu.trustIndex < 0) return { confirmed: false, reason: "trust_option_not_found" };
     if (menu.cursorIndex === menu.trustIndex) { aligned = true; break; }
