@@ -20,6 +20,7 @@ const ok = (stdout = ""): HerdrCommandResult => ({ ok: true, code: 0, stdout, st
 const fixture = (name: string) => readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
 const DIALOG_NO = fixture("claude-trust-dialog-27cols.txt");
 const DIALOG_YES = DIALOG_NO.replace("❯ No, exit\n  Yes, I trust this", "  No, exit\n❯ Yes, I trust this");
+const dialogAt = (dir: string) => `Accessing workspace:\n\n${dir}\n\n${DIALOG_YES}`;
 const READY = fixture("claude-ready-placeholder-30cols.txt");
 
 let testEnv: { stateDir: string; cleanup: () => void };
@@ -464,7 +465,7 @@ describe("trust is bound to the folder that is confirmed", () => {
     const workdir = realpathSync(mkdtempSync(join(tmpdir(), "bound-")));
     try {
       const seen: string[] = [];
-      const { client } = pane(() => DIALOG_YES);
+      const { client } = pane(() => dialogAt(workdir));
       await confirmWorkspaceTrust({ herdr: client, target: "peer", cwd: relative(process.cwd(), workdir), clock: clock(), lookup: (path) => { seen.push(path); return { trusted: false, reason: "no" }; } });
       expect(seen).toEqual([workdir]);
     } finally { rmSync(workdir, { recursive: true, force: true }); }
@@ -475,12 +476,12 @@ describe("trust is bound to the folder that is confirmed", () => {
     try {
       trusting(workdir);
       for (const flags of [["--add-dir", "/etc"], ["--cd=/etc"], ["-C", "/etc"]]) {
-        const { client, state } = pane(() => DIALOG_YES);
+        const { client, state } = pane(() => dialogAt(workdir));
         const outcome = await confirmWorkspaceTrust({ herdr: client, target: "peer", cwd: workdir, flags, clock: clock() });
         expect(outcome).toEqual({ confirmed: false, reason: "directory_flags_present" });
         expect(state.keys).toEqual([]);
       }
-      const { client, state } = pane(() => DIALOG_YES);
+      const { client, state } = pane(() => dialogAt(workdir));
       const result = await start(client, workdir, { extraFlags: ["--add-dir", "/etc"] });
       expect(result.trustRequired).toBe(true);
       expect(result.trustPolicyReason).toBe("directory_flags_present");
@@ -492,7 +493,7 @@ describe("trust is bound to the folder that is confirmed", () => {
     const workdir = realpathSync(mkdtempSync(join(tmpdir(), "bound-")));
     try {
       trusting(workdir);
-      const { client, state } = pane(({ reads }) => reads <= 1 ? DIALOG_YES : READY);
+      const { client, state } = pane(({ reads }) => reads <= 1 ? dialogAt(workdir) : READY);
       const result = await start(client, workdir);
       expect(state.keys).toEqual([]);
       expect(result.ok).toBe(true);
@@ -505,7 +506,7 @@ describe("trust is bound to the folder that is confirmed", () => {
     const workdir = realpathSync(mkdtempSync(join(tmpdir(), "bound-")));
     try {
       trusting(workdir);
-      const { client, state } = pane(({ enters, sinceEnter }) => enters > 0 ? (sinceEnter >= 26 ? READY : "Starting...\n") : DIALOG_YES);
+      const { client, state } = pane(({ enters, sinceEnter }) => enters > 0 ? (sinceEnter >= 26 ? READY : "Starting...\n") : dialogAt(workdir));
       const result = await start(client, workdir);
       expect(state.keys).toEqual(["enter"]);
       expect(result.ok).toBe(true);
@@ -520,7 +521,7 @@ describe("trust is bound to the folder that is confirmed", () => {
     const workdir = realpathSync(mkdtempSync(join(tmpdir(), "bound-")));
     try {
       trusting(workdir);
-      const { client, state } = pane(({ enters, sinceEnter }) => enters > 0 ? (sinceEnter <= 1 ? READY : DIALOG_YES) : DIALOG_YES);
+      const { client, state } = pane(({ enters, sinceEnter }) => enters > 0 ? (sinceEnter <= 1 ? READY : dialogAt(workdir)) : dialogAt(workdir));
       const result = await start(client, workdir);
       expect(state.keys).toEqual(["enter"]);
       expect(result.ok).toBe(false);
@@ -535,7 +536,7 @@ describe("trust is bound to the folder that is confirmed", () => {
     const workdir = realpathSync(mkdtempSync(join(tmpdir(), "bound-")));
     try {
       trusting(workdir);
-      const { client } = pane(({ enters }) => enters > 0 ? READY : DIALOG_YES);
+      const { client } = pane(({ enters }) => enters > 0 ? READY : dialogAt(workdir));
       const outcome = await confirmWorkspaceTrust({ herdr: client, target: "peer", cwd: workdir, clock: clock(), ready: (text) => isClientPromptReady("claude", text) });
       expect(outcome.confirmed).toBe(true);
     } finally { rmSync(workdir, { recursive: true, force: true }); }
