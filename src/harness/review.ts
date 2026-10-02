@@ -139,7 +139,7 @@ export function resolveReviewerStage(client: string, options: { model?: string; 
   if (decision.mode === "delegate") {
     const reviewer = decision.profile.reviewer;
     return { source: "profile", stage: { role: "reviewer", client: decision.profile.client, model: reviewer.model,
-      effort: reviewer.effort ?? "standard", extraFlags: [], description: `AI Harness profile: ${decision.profile.id}` } };
+      effort: reviewer.effort ?? "standard", ...(reviewer.cliModel ? { cliModel: reviewer.cliModel } : {}), extraFlags: [], description: `AI Harness profile: ${decision.profile.id}` } };
   }
   const stage = resolveStageSpec(client, "reviewer");
   stage.client = client;
@@ -163,6 +163,7 @@ export interface ReviewReport {
   cwd: string;
   base: string | null;
   degraded?: "scopes_unsupported";
+  retried?: string[];
   reviewer?: { source: "profile" | "matrix"; client: string; model: string; effort: string };
   scopes: Array<{ name: string; fileCount: number }>;
   verify?: { status: string | null; error?: string };
@@ -214,18 +215,32 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
   if (!verify.ok) return { ...report, verify: { status: null, error: failedProbe(verify) }, error: failedProbe(verify) };
   report.verify = { status: verify.value?.status ?? null };
 
+  const judgeScope = async (scope: ReviewScope, command: string[]) => {
+    const commandFile = join(dir, `judge-${scope.name}.json`);
+    writeFileSync(commandFile, JSON.stringify(command), { mode: 0o600 });
+    const judged = await harnessProbeAsync<{ status?: string }>(["review-judge", ...identity, "--command-json", commandFile,
+      ...(scoped ? ["--scope", scope.name, "--timeout-ms", String(timeoutMs)] : [])], { timeout: timeoutMs + 60_000, acceptNonZeroJson: true });
+    return judged.ok ? { scope: scope.name, status: judged.value?.status ?? null } : { scope: scope.name, status: null, error: failedProbe(judged) };
+  };
+  const fetchFindings = () => harnessProbeAsync<{ status?: string; scopes?: Array<{ name: string; verdict: string; reason?: string }> }>(["review-findings", ...identity], { acceptNonZeroJson: true });
+
+  let findings: HarnessProbe<{ status?: string; scopes?: Array<{ name: string; verdict: string; reason?: string }> }> | undefined;
   if (verify.value?.status === "pending_review") {
     const judgeCommands = scoped ? commands : [reviewerCommand(reviewerClient, reviewer.stage, buildJudgePrompt(scopes[0]!, base))];
-    report.judges = await Promise.all(scopes.map(async (scope, index) => {
-      const commandFile = join(dir, `judge-${scope.name}.json`);
-      writeFileSync(commandFile, JSON.stringify(judgeCommands[index]), { mode: 0o600 });
-      const judged = await harnessProbeAsync<{ status?: string }>(["review-judge", ...identity, "--command-json", commandFile,
-        ...(scoped ? ["--scope", scope.name, "--timeout-ms", String(timeoutMs)] : [])], { timeout: timeoutMs + 60_000, acceptNonZeroJson: true });
-      return judged.ok ? { scope: scope.name, status: judged.value?.status ?? null } : { scope: scope.name, status: null, error: failedProbe(judged) };
-    }));
+    report.judges = await Promise.all(scopes.map((scope, index) => judgeScope(scope, judgeCommands[index]!)));
+    findings = await fetchFindings();
+    const timedOut = scoped && findings.ok
+      ? (findings.value?.scopes ?? []).filter((item) => item.verdict === "pending" && item.reason === "timeout").map((item) => item.name) : [];
+    const retry = scopes.filter((scope) => timedOut.includes(scope.name));
+    if (retry.length) {
+      report.retried = retry.map((scope) => scope.name);
+      const again = await Promise.all(retry.map((scope) => judgeScope(scope, judgeCommands[scopes.indexOf(scope)]!)));
+      report.judges = report.judges.map((judge) => again.find((item) => item.scope === judge.scope) ?? judge);
+      findings = await fetchFindings();
+    }
   }
 
-  const findings = await harnessProbeAsync<{ status?: string }>(["review-findings", ...identity], { acceptNonZeroJson: true });
+  findings ??= await fetchFindings();
   if (findings.ok) {
     report.findings = findings.value;
     report.status = findings.value?.status ?? null;
@@ -244,10 +259,11 @@ export function formatReviewReport(report: ReviewReport): string {
   if (report.degraded) lines.push("Harness without scope support: reviewed as a single scope");
   for (const scope of report.scopes) lines.push(`Scope ${scope.name}: ${scope.fileCount} files`);
   if (report.verify) lines.push(`Verify: ${report.verify.status ?? report.verify.error ?? "unknown"}`);
+  if (report.retried?.length) lines.push(`Retried after timeout: ${report.retried.join(", ")}`);
   for (const judge of report.judges) lines.push(`Judge ${judge.scope}: ${judge.status ?? judge.error ?? "unknown"}`);
-  const scopedFindings = (report.findings as { scopes?: Array<{ name: string; verdict: string; findings?: string }> } | undefined)?.scopes ?? [];
+  const scopedFindings = (report.findings as { scopes?: Array<{ name: string; verdict: string; reason?: string; findings?: string }> } | undefined)?.scopes ?? [];
   for (const scope of scopedFindings) {
-    lines.push(`Verdict ${scope.name}: ${scope.verdict}`);
+    lines.push(`Verdict ${scope.name}: ${scope.verdict}${scope.reason ? ` (${scope.reason})` : ""}`);
     if (scope.findings) lines.push(scope.findings.length > 4000 ? `${scope.findings.slice(0, 4000)}\n[truncated]` : scope.findings);
   }
   lines.push(`Status: ${report.status ?? "unavailable"}${report.error ? ` (${report.error})` : ""}`);

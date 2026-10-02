@@ -117,8 +117,8 @@ export interface DelegationInput {
 export type HarnessDecision = { mode: "direct"; reason: string } | {
   mode: "delegate";
   profile: { id: string; client: string; advisor: string;
-    executor: { model: string; effort?: "high" | "xhigh" };
-    reviewer: { model: string; effort?: "high" | "xhigh" } };
+    executor: { model: string; cliModel?: string; effort?: "high" | "xhigh" };
+    reviewer: { model: string; cliModel?: string; effort?: "high" | "xhigh" } };
 };
 
 export function resolveHarnessDelegation(client: string, substantive: boolean, input: DelegationInput = {}): HarnessDecision {
@@ -234,7 +234,7 @@ export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions
   });
 }
 
-export type HarnessRole = "executor" | "reviewer" | "advisor" | "researcher";
+export type HarnessRole = "implementer" | "executor" | "reviewer" | "advisor" | "researcher";
 
 export interface ModelResolution {
   client: string;

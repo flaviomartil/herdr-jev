@@ -79,7 +79,7 @@ async function continueRun(run: any, task: string, options: RunOptions) {
     for (const entry of entries) {
       if (entry.state === "verified") continue;
       if (entry.state === "failed" && !options.fromFailed) break;
-      const stage: StageSpec = { role: entry.role, client: run.client, model: entry.model, effort: entry.effort ?? "standard",
+      const stage: StageSpec = { role: entry.role, client: run.client, model: entry.model, ...(typeof entry.cliModel === "string" && entry.cliModel ? { cliModel: entry.cliModel } : {}), effort: entry.effort ?? "standard",
         extraFlags: entry.effort ? run.client === "codex" ? ["-c", `model_reasoning_effort="${entry.effort}"`]
           : run.client === "claude" ? ["--effort", entry.effort] : [] : [], description: "AI Harness canonical stage" };
       if (stage.role === "reviewer" && entry.state === "queued" && !options.verifyCommandJson) break;
