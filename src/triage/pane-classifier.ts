@@ -1,4 +1,5 @@
 import { choice, score } from "@typesafe-ai/sdk";
+import type { Readable } from "node:stream";
 import type { ResilientJevClient } from "./jev-client.js";
 
 export interface FlatClassification {
@@ -60,7 +61,19 @@ function clipTail(text: string): string {
   if (text.length <= MAX_CLASSIFY_PANE_TEXT_CHARS) return text;
   const tail = text.slice(-MAX_CLASSIFY_PANE_TEXT_CHARS);
   const newline = tail.indexOf("\n");
-  return newline === -1 ? tail : tail.slice(newline + 1);
+  if (newline !== -1) return tail.slice(newline + 1);
+  const gap = tail.search(/\s/);
+  return gap === -1 ? "" : tail.slice(gap + 1);
+}
+
+export async function readClassifyInput(stream: Readable): Promise<string> {
+  stream.setEncoding("utf8");
+  let input = "";
+  for await (const chunk of stream) {
+    input += chunk;
+    if (input.length > MAX_CLASSIFY_INPUT_CHARS) break;
+  }
+  return input;
 }
 
 export function validateClassifyInput(data: unknown): ClassifyInput {
