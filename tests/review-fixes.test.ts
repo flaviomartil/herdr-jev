@@ -170,7 +170,7 @@ test("finding 3: stale claim is recovered", async () => {
   const stateDir = resolveStandupEnvironment().stateDir;
   mkdirSync(join(stateDir, "notify"), { recursive: true });
   const claimFile = join(stateDir, "notify", "pane-w1-p3.claim");
-  writeFileSync(claimFile, JSON.stringify({ time: Date.now() - 40000 }));
+  writeFileSync(claimFile, JSON.stringify({ time: Date.now() - 100000 }));
 
   let runnerCalled = false;
   const runner = async () => { runnerCalled = true; throw new Error("die"); };

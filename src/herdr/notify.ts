@@ -1,11 +1,11 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync, linkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync, linkSync, realpathSync } from "node:fs";
 import { randomBytes } from "node:crypto";
-import { dirname, join } from "node:path";
-import { tmpdir, homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
-import { readHerdrObservedState, type RunCommand } from "./client.js";
-import { redactSecrets } from "./pane-text.js";
-import { resolveStateDir } from "./state-dir.js";
+import { DEFAULT_COMMAND_TIMEOUT_MS, readHerdrObservedState, resolveFakeBinDir, type RunCommand } from "./client.js";
+import { ANSI_PATTERN, redactSecrets } from "./pane-text.js";
+import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
 
 export interface NotifyOptions {
   pane?: string;
@@ -30,10 +30,13 @@ export interface NotifyOptions {
 export interface NotifyHooks {
   afterCooldownCheck?: () => void | Promise<void>;
   afterStaleClaimSeen?: () => void | Promise<void>;
+  hookTimeoutMs?: number;
+  hookKillGraceMs?: number;
 }
 
 export interface EscalationLockHooks {
   afterStaleLockSeen?: () => void | Promise<void>;
+  lockWaitMs?: number;
 }
 
 interface EscalationRecord {
@@ -45,15 +48,21 @@ interface EscalationRecord {
 }
 
 const PANE_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9_]+$/;
-const AGENT_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
+const AGENT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 const OWNER_PATTERN = /^[0-9]+-[A-Za-z0-9]{1,48}$/;
 const REASONS: ReadonlySet<string> = new Set(["approval", "question", "error", "none"]);
-const CLAIM_STALE_MS = 30_000;
+const CLAIM_STALE_MS = DEFAULT_COMMAND_TIMEOUT_MS + 30_000;
 const CLOCK_SKEW_MS = 5_000;
 const LOCK_STALE_MS = 2_000;
 const LOCK_WAIT_MS = 3_000;
 const RELEASE_STALE_AGE_MS = 15 * 60 * 1000;
 const MAX_RELEASE_ATTEMPTS = 3;
+const LOCK_OVERTIME_TAKEOVERS = 3;
+const HOOK_TIMEOUT_MS = 5_000;
+const HOOK_KILL_GRACE_MS = 1_000;
+const OUTBOUND_TITLE_LIMIT = 2_048;
+const OUTBOUND_TASK_LIMIT = 1_024;
+const TRANSIENT_FAILURE = /(?:connection (?:refused|reset|closed)|econn|socket|transport|timed[ -]?out|timeout|not running|unavailable|temporar|broken pipe|\beof\b|enoent|spawn)/i;
 
 export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.HERDR_JEV_NOTIFY_HOOK !== undefined) {
@@ -116,22 +125,37 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-type TakeOver = "taken" | "missing" | "fresh";
+type TakeOver = "taken" | "missing" | "fresh" | "failed";
 
-function takeOverStale(file: string, isStale: (path: string) => boolean): TakeOver {
-  const grave = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.stale`;
+export function takeOverStale(file: string, isStale: (path: string) => boolean): TakeOver {
+  const suffix = `${process.pid}.${randomBytes(4).toString("hex")}`;
+  const snapshot = `${file}.${suffix}.stale`;
   try {
-    renameSync(file, grave);
-  } catch (e) {
-    return "missing";
+    linkSync(file, snapshot);
+  } catch (e: any) {
+    return e?.code === "ENOENT" ? "missing" : "failed";
   }
   let stale = false;
-  try { stale = isStale(grave); } catch (e) {}
+  try { stale = isStale(snapshot); } catch (e) {}
   if (!stale) {
+    try { unlinkSync(snapshot); } catch (e) {}
+    return "fresh";
+  }
+  const grave = `${file}.${suffix}.grave`;
+  try {
+    renameSync(file, grave);
+  } catch (e: any) {
+    try { unlinkSync(snapshot); } catch (err) {}
+    return e?.code === "ENOENT" ? "missing" : "failed";
+  }
+  let sameFile = false;
+  try { sameFile = statSync(grave).ino === statSync(snapshot).ino; } catch (e) {}
+  try { unlinkSync(snapshot); } catch (e) {}
+  if (!sameFile) {
     try { linkSync(grave, file); } catch (e) {}
   }
   try { unlinkSync(grave); } catch (e) {}
-  return stale ? "taken" : "fresh";
+  return sameFile ? "taken" : "fresh";
 }
 
 function releaseLock(lockFile: string, token: string) {
@@ -144,7 +168,8 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
   mkdirSync(dirname(file), { recursive: true });
   const lockFile = `${file}.lock`;
   const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
+  const deadline = Date.now() + (hooks.lockWaitMs ?? LOCK_WAIT_MS);
+  let overtime = 0;
   for (;;) {
     try {
       writeFileSync(lockFile, token, { flag: "wx" });
@@ -152,16 +177,19 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
     } catch (e: any) {
       if (e?.code !== "EEXIST") throw e;
       const expired = Date.now() > deadline;
+      if (expired && overtime++ >= LOCK_OVERTIME_TAKEOVERS) throw new Error("escalation_lock_timeout");
       let stale = expired;
-      try {
-        stale = stale || Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS;
-      } catch (err) {
-        continue;
+      if (!stale) {
+        try {
+          stale = Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS;
+        } catch (err: any) {
+          if (err?.code === "ENOENT") continue;
+        }
       }
       if (stale) {
         await hooks.afterStaleLockSeen?.();
-        takeOverStale(lockFile, (grave) => expired || Date.now() - statSync(grave).mtimeMs > LOCK_STALE_MS);
-        continue;
+        const outcome = takeOverStale(lockFile, (snapshot) => expired || Date.now() - statSync(snapshot).mtimeMs > LOCK_STALE_MS);
+        if (outcome === "taken" || outcome === "missing") continue;
       }
       await sleep(15);
     }
@@ -226,6 +254,31 @@ function claimTime(claimFile: string): number {
   return statSync(claimFile).mtimeMs;
 }
 
+function claimOwner(claimFile: string): string | undefined {
+  try {
+    const data = JSON.parse(readFileSync(claimFile, "utf-8"));
+    return typeof data?.owner === "string" ? data.owner : undefined;
+  } catch (e) {
+    return undefined;
+  }
+}
+
+function releaseClaim(claimFile: string, owner: string) {
+  if (claimOwner(claimFile) !== owner) return;
+  try { unlinkSync(claimFile); } catch (e) {}
+}
+
+function writeStateFile(stateFile: string, now: number) {
+  const tempFile = `${stateFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tempFile, JSON.stringify({ time: now }));
+    renameSync(tempFile, stateFile);
+  } catch (e) {
+    try { unlinkSync(tempFile); } catch (err) {}
+    throw e;
+  }
+}
+
 function claimStale(claimFile: string, now: number): boolean {
   const age = now - claimTime(claimFile);
   return age > CLAIM_STALE_MS || age < -CLOCK_SKEW_MS;
@@ -240,6 +293,57 @@ function isPaneGone(res: { stdout?: string; stderr?: string }): boolean {
     } catch (e) {}
   }
   return false;
+}
+
+function isTransientFailure(res: { stdout?: string; stderr?: string }): boolean {
+  return TRANSIENT_FAILURE.test(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
+}
+
+function realOrResolved(path: string): string {
+  try { return realpathSync(path); } catch (e) { return resolve(path); }
+}
+
+export function isInsideDir(path: string, root: string): boolean {
+  const rel = relative(realOrResolved(root), realOrResolved(path));
+  return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+function sanitizeOutbound(text: string, limit: number): string {
+  const first = redactSecrets(text.slice(0, limit));
+  const cleaned = first.replace(ANSI_PATTERN, "").replace(/[\x00-\x1F\x7F-\x9F]/g, " ");
+  return redactSecrets(cleaned);
+}
+
+function runHook(hook: string, args: string[], timeoutMs: number, killGraceMs: number): Promise<boolean> {
+  return new Promise<boolean>((resolveHook) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      resolveHook(ok);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(hook, args, { stdio: "ignore" });
+    } catch (e) {
+      finish(false);
+      return;
+    }
+    child.unref();
+    timer = setTimeout(() => {
+      try { child.kill("SIGTERM"); } catch (e) {}
+      killTimer = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch (e) {}
+        finish(false);
+      }, killGraceMs);
+    }, timeoutMs);
+    child.on("error", () => finish(false));
+    child.on("close", (code, signal) => finish(code === 0 && signal === null));
+  });
 }
 
 function getReasonText(reason: string) {
@@ -308,6 +412,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   const stateFile = join(notifyDir, `pane-${sanitizedPane}.json`);
   const claimFile = join(notifyDir, `pane-${sanitizedPane}.claim`);
   const now = opts.now || Date.now();
+  const claimToken = `${process.pid}-${randomBytes(8).toString("hex")}`;
   let cooldownS = parseInt(process.env.HERDR_JEV_NOTIFY_COOLDOWN_S || "600", 10);
   if (!Number.isFinite(cooldownS) || Number.isNaN(cooldownS)) cooldownS = 600;
 
@@ -319,7 +424,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     let claimed = false;
     for (let attempt = 0; attempt < 2 && !claimed; attempt++) {
       try {
-        writeFileSync(claimFile, JSON.stringify({ time: now }), { flag: "wx" });
+        writeFileSync(claimFile, JSON.stringify({ time: now, owner: claimToken }), { flag: "wx" });
         claimed = true;
       } catch (e: any) {
         if (e?.code !== "EEXIST") return { sent: false, skippedReason: "cooldown", channels: [] };
@@ -331,27 +436,22 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         }
         if (!stale) return { sent: false, skippedReason: "cooldown", channels: [] };
         await hooks.afterStaleClaimSeen?.();
-        if (takeOverStale(claimFile, (grave) => claimStale(grave, now)) === "fresh") {
+        const outcome = takeOverStale(claimFile, (grave) => claimStale(grave, now));
+        if (outcome === "fresh" || outcome === "failed") {
           return { sent: false, skippedReason: "cooldown", channels: [] };
         }
       }
     }
     if (!claimed) return { sent: false, skippedReason: "cooldown", channels: [] };
     if (cooldownActive(stateFile, now, cooldownS)) {
-      try { unlinkSync(claimFile); } catch (e) {}
+      releaseClaim(claimFile, claimToken);
       return { sent: false, skippedReason: "cooldown", channels: [] };
     }
   }
 
   const reasonText = getReasonText(opts.reason);
-  let title = `${opts.agent || 'agent'} em ${opts.project} precisa de você`;
-  title = title.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
-  title = redactSecrets(title);
-  let safeTask = opts.task;
-  if (safeTask) {
-    safeTask = safeTask.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
-    safeTask = redactSecrets(safeTask);
-  }
+  const title = sanitizeOutbound(`${opts.agent || 'agent'} em ${opts.project} precisa de você`, OUTBOUND_TITLE_LIMIT);
+  const safeTask = opts.task ? sanitizeOutbound(opts.task, OUTBOUND_TASK_LIMIT) : undefined;
   let body = safeTask ? `${safeTask.slice(0, 80)}: ${reasonText}` : reasonText;
   let safeTitle = title.startsWith("-") ? "· " + title : title;
   if (body.startsWith("-")) body = "· " + body;
@@ -366,38 +466,22 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         return { sent: false, skippedReason: "notification failed", channels: [] };
       }
       try {
-        renameSync(claimFile, stateFile);
-      } catch (e) {
-        try { writeFileSync(stateFile, JSON.stringify({ time: now })); } catch (err) {}
-      }
+        writeStateFile(stateFile, now);
+      } catch (e) {}
     } finally {
-      try { if (existsSync(claimFile)) unlinkSync(claimFile); } catch (e) {}
+      releaseClaim(claimFile, claimToken);
     }
     channels.push("herdr");
 
     const hook = resolveNotifyHook();
-    if (hook) {
-      if (process.env.HERDR_JEV_TEST_GUARD === '1' && !hook.startsWith(tmpdir())) {
-        channels.push("hook");
-      } else {
-        await new Promise<void>((resolve) => {
-          const child = spawn(hook, [safeTitle, body, opts.pane!, opts.reason!], { stdio: "ignore" });
-        let done = false;
-        const complete = () => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          resolve();
-        };
-        const timer = setTimeout(() => {
-          try { child.kill(); } catch (e) {}
-          complete();
-        }, 5000);
-        child.on("error", complete);
-        child.on("close", complete);
-        });
-        channels.push("hook");
-      }
+    if (hook && !(isTestGuardActive() && !isInsideDir(hook, resolveFakeBinDir()))) {
+      const ran = await runHook(
+        hook,
+        [safeTitle, body, opts.pane!, opts.reason!],
+        hooks.hookTimeoutMs ?? HOOK_TIMEOUT_MS,
+        hooks.hookKillGraceMs ?? HOOK_KILL_GRACE_MS,
+      );
+      if (ran) channels.push("hook");
     }
   } else {
     channels.push("herdr");
@@ -415,32 +499,52 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
       opts.agent && opts.agent !== "unknown"
     ) {
       if (!opts.dryRun) {
-        const repRes = await runner([herdrBin, "pane", "report-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText]);
-        if (repRes.ok) {
-          const getRes = await runner([herdrBin, "agent", "get", opts.pane!]);
+        const escalationsFile = join(notifyDir, "escalations.json");
+        const record: EscalationRecord = { pane: opts.pane!, agent: opts.agent, time: now, attempts: 0 };
+        if (opts.owner) record.owner = opts.owner;
+        let displaced: EscalationRecord[] = [];
+        let recorded = false;
+        try {
+          await updateEscalations(escalationsFile, (records) => {
+            displaced = records.filter((e) => e.pane === opts.pane);
+            return [...records.filter((e) => e.pane !== opts.pane), record];
+          });
+          recorded = true;
+        } catch (e) {}
+        if (!recorded) {
+          escalationResult = "ineffective";
+        } else {
           let isBlocked = false;
-          if (getRes.ok) {
-            try {
-              const data = JSON.parse(getRes.stdout);
-              const status = data.result?.agent?.agent_status ?? data.agent?.agent_status ?? data.agent_status ?? data.result?.status ?? data.status;
-              if (status === "blocked") isBlocked = true;
-            } catch {}
-            if (!isBlocked && readHerdrObservedState(getRes) === "blocked") {
-              isBlocked = true;
+          try {
+            const repRes = await runner([herdrBin, "pane", "report-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText]);
+            if (repRes.ok) {
+              const getRes = await runner([herdrBin, "agent", "get", opts.pane!]);
+              if (getRes.ok) {
+                try {
+                  const data = JSON.parse(getRes.stdout);
+                  const status = data.result?.agent?.agent_status ?? data.agent?.agent_status ?? data.agent_status ?? data.result?.status ?? data.status;
+                  if (status === "blocked") isBlocked = true;
+                } catch {}
+                if (!isBlocked && readHerdrObservedState(getRes) === "blocked") {
+                  isBlocked = true;
+                }
+              }
             }
-          }
+          } catch (e) {}
           if (isBlocked) {
-            const escalationsFile = join(notifyDir, "escalations.json");
-            const record: EscalationRecord = { pane: opts.pane!, agent: opts.agent!, time: now, attempts: 0 };
-            if (opts.owner) record.owner = opts.owner;
-            await updateEscalations(escalationsFile, (records) => [...records.filter((e) => e.pane !== opts.pane), record]);
             channels.push("escalation");
             escalationResult = "applied";
           } else {
             escalationResult = "ineffective";
+            const key = recordKey(record);
+            try {
+              await updateEscalations(escalationsFile, (records) => {
+                const kept = records.filter((e) => recordKey(e) !== key);
+                const restore = kept.some((e) => e.pane === opts.pane) ? [] : displaced;
+                return [...kept, ...restore];
+              });
+            } catch (e) {}
           }
-        } else {
-          escalationResult = "ineffective";
         }
       } else {
         channels.push("escalation (unverified)");
@@ -476,11 +580,12 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
   if (!record) {
     return { sent: false, skippedReason: "no escalation", channels: [] };
   }
+  const key = recordKey(record);
 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
   const paneRes = await runner([herdrBin, "pane", "get", pane]);
   if (!paneRes.ok && isPaneGone(paneRes)) {
-    await updateEscalations(escalationsFile, (records) => records.filter((e) => e.pane !== pane));
+    await updateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key));
     return { sent: true, channels: ["release"] };
   }
 
@@ -488,12 +593,13 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
     ? await runner([herdrBin, "pane", "release-agent", pane, "--source", "herdr-jev", "--agent", record.agent])
     : paneRes;
   if (!res.ok) {
-    const key = recordKey(record);
-    await updateEscalations(escalationsFile, (records) => bumpAttempts(records, new Set([key])));
+    if (!isTransientFailure(res)) {
+      await updateEscalations(escalationsFile, (records) => bumpAttempts(records, new Set([key])));
+    }
     return { sent: false, skippedReason: "release failed", channels: [] };
   }
 
-  await updateEscalations(escalationsFile, (records) => records.filter((e) => e.pane !== pane));
+  await updateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key));
   return { sent: true, channels: ["release"] };
 }
 
@@ -519,7 +625,7 @@ async function releaseRecords(
       : paneRes;
     if (res.ok) {
       done.add(recordKey(record));
-    } else {
+    } else if (!isTransientFailure(res)) {
       failed.add(recordKey(record));
       if ((record.attempts || 0) + 1 >= MAX_RELEASE_ATTEMPTS) exhausted++;
     }

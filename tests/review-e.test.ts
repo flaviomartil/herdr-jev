@@ -82,12 +82,12 @@ function pastDate(ms: number): Date {
   return new Date(Date.now() - ms);
 }
 
-const failingPaneGet = (stderr = "connection refused") => async (argv: readonly string[]) => {
+const failingPaneGet = (stderr = "pane lookup failed") => async (argv: readonly string[]) => {
   if (argv.includes("pane") && argv.includes("get")) return { ok: false, code: 1, stdout: "", stderr };
   return createProcessCommandAdapter()(argv);
 };
 
-test("item 1: a transient pane get failure keeps the escalation record and counts an attempt on release", async () => {
+test("item 1: an unrecognised pane get failure keeps the escalation record and counts an attempt on release", async () => {
   writeFileSync(escalationsFile(), JSON.stringify([{ pane: "w1:p1", agent: "kiro", time: Date.now(), attempts: 0 }]));
   const res = await handleNotifyCommand({ release: true, pane: "w1:p1" }, failingPaneGet());
   expect(res.sent).toBe(false);
@@ -101,7 +101,7 @@ test("item 1: a transient pane get failure keeps the escalation record and count
   expect(readRecords()).toEqual([]);
 });
 
-test("item 1: a transient pane get failure keeps records on release-stale and release-all", async () => {
+test("item 1: an unrecognised pane get failure keeps records on release-stale and release-all", async () => {
   const old = Date.now() - 20 * 60 * 1000;
   writeFileSync(escalationsFile(), JSON.stringify([
     { pane: "w1:old", agent: "kiro", time: old, attempts: 0 },
@@ -288,7 +288,7 @@ test("item 5: records without a finite numeric time are dropped and attempts is 
   const seen: string[] = [];
   const runner = async (argv: readonly string[]) => {
     if (argv.includes("get")) seen.push(argv[argv.length - 1]);
-    return { ok: false, code: 1, stdout: "", stderr: "connection refused" };
+    return { ok: false, code: 1, stdout: "", stderr: "pane lookup failed" };
   };
   await handleNotifyCommand({ releaseStale: true }, runner);
   expect(seen).toEqual(["w1:good"]);
