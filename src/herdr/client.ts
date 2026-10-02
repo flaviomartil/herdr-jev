@@ -5,20 +5,30 @@ import { sep } from "node:path";
 import type { HerdrCommandResult } from "../types/index.js";
 import { ANSI_PATTERN } from "./pane-text.js";
 
-function resolveFakeBinDir(): string {
+const TRUSTED_TMP_ROOTS: readonly string[] = ["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"];
+
+export function resolveFakeBinDir(reported: string = tmpdir(), real: (path: string) => string = realpathSync): string {
   let candidate = "/tmp";
   try {
-    const reported = tmpdir().replace(/\/+$/, "");
-    if (reported === "/tmp" || reported === "/var/tmp" || reported.startsWith("/private/var/folders/")) candidate = reported;
+    const resolved = real(reported.replace(/\/+$/, "") || "/");
+    if (TRUSTED_TMP_ROOTS.includes(resolved) || resolved.startsWith("/private/var/folders/")) candidate = resolved;
   } catch {}
   try {
-    return realpathSync(candidate);
+    return real(candidate);
   } catch {
     return candidate;
   }
 }
 
 const FAKE_BIN_DIR = resolveFakeBinDir();
+
+export function isTestSafeBinary(path: string): boolean {
+  try {
+    return realpathSync(path).startsWith(FAKE_BIN_DIR + sep);
+  } catch {
+    return false;
+  }
+}
 
 export type RunCommand = (argv: readonly string[]) => Promise<HerdrCommandResult>;
 
@@ -73,11 +83,7 @@ export function createProcessCommandAdapter(
         return;
       }
       if (process.env.HERDR_JEV_TEST_GUARD === '1' && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
-        let isTempBin = false;
-        try {
-          isTempBin = realpathSync(command).startsWith(FAKE_BIN_DIR + sep);
-        } catch {}
-        if (!isTempBin) {
+        if (!isTestSafeBinary(command)) {
           const cmdPath = args.join(" ");
           const isReadOnly = /^(?:agent|pane) (?:get|list|read|layout|current)\b/.test(cmdPath);
           if (!isReadOnly) {
@@ -181,19 +187,35 @@ export function classifyHerdrCommandFailure(result: HerdrCommandResult): "reject
 
 export type PaneBlockKind = "trust" | "selection";
 
-const SELECTION_FOOTER = /\b(?:enter|return)\s+(?:to\s+)?(?:confirm|select|choose)\b|\besc\s+to\s+cancel\b|↑\s*\/?\s*↓|\bnavigate\b/i;
+const SELECTION_FOOTER = /\b(?:enter|return)\s+(?:to\s+)?(?:confirm|select|choose)\b|\besc\s+to\s+cancel\b|↑\s*\/?\s*↓/i;
+const SELECTION_FOOTER_LINES = 5;
+const NUMBERED_CURSOR_LINE = /^[ \t│┃|]*[❯›>]\s*\d+[.)]\s+\S/;
+const NUMBERED_OPTION_LINE = /(^|\n)[ \t│┃|]*(?!\s*[❯›>])\d+[.)]\s+\S/;
+const CURSOR_LINE = /^[ \t│┃|]*[❯›>][ \t]+\S/;
 
 export function normalizePaneText(text: string): string {
   return text.replace(ANSI_PATTERN, "").replace(/\r/g, "").replace(/\u00a0/g, " ");
 }
 
+function lastLineIndex(lines: readonly string[], pattern: RegExp): number {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (pattern.test(lines[i])) return i;
+  }
+  return -1;
+}
+
+function hasFooterAfter(lines: readonly string[], cursorIndex: number): boolean {
+  const tail = lines.slice(cursorIndex + 1).filter((line) => line.trim() !== "").slice(-SELECTION_FOOTER_LINES);
+  return SELECTION_FOOTER.test(tail.join(" ").replace(/\s+/g, " "));
+}
+
 export function looksLikeSelectionMenu(text: string): boolean {
   const clean = normalizePaneText(text);
-  const hasFooter = SELECTION_FOOTER.test(clean.replace(/\s+/g, " "));
-  if (/(^|\n)[ \t│┃|]*[❯›>]\s*\d+[.)]\s+\S/.test(clean)) {
-    return hasFooter || /(^|\n)[ \t│┃|]*(?!\s*[❯›>])\d+[.)]\s+\S/.test(clean);
-  }
-  return hasFooter && /(^|\n)[ \t│┃|]*[❯›>][ \t]+\S/.test(clean);
+  const lines = clean.split("\n");
+  const numberedCursor = lastLineIndex(lines, NUMBERED_CURSOR_LINE);
+  if (numberedCursor !== -1) return hasFooterAfter(lines, numberedCursor) || NUMBERED_OPTION_LINE.test(clean);
+  const cursor = lastLineIndex(lines, CURSOR_LINE);
+  return cursor !== -1 && hasFooterAfter(lines, cursor);
 }
 
 export function classifyPaneBlock(result: HerdrCommandResult): PaneBlockKind | null {
