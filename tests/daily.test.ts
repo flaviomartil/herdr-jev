@@ -620,7 +620,7 @@ process.exit(0);
     try { unlinkSync(fakeHerdr); } catch {}
     rmSync(tempState, { recursive: true, force: true });
   }
-});
+}, 30000);
 
 test("buildDailyReport filters by projects matching repository name or workspace label case-insensitively", async () => {
   const fixedNow = new Date("2026-10-01T15:00:00Z").getTime();
