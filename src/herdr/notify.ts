@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { readHerdrObservedState, type RunCommand } from "./client.js";
 import { redactSecrets } from "./pane-text.js";
+import { resolveStateDir } from "./state-dir.js";
 
 export interface NotifyOptions {
   pane?: string;
@@ -24,10 +25,24 @@ export interface NotifyOptions {
   now?: number;
 }
 
-import { resolveStandupEnvironment } from "./standup.js";
-
-function getStateDir() {
-  return resolveStandupEnvironment().stateDir;
+export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.HERDR_JEV_NOTIFY_HOOK !== undefined) {
+    if (env.HERDR_JEV_NOTIFY_HOOK === "" || env.HERDR_JEV_NOTIFY_HOOK === "off") {
+      return undefined;
+    }
+    return env.HERDR_JEV_NOTIFY_HOOK;
+  }
+  const configDir = (env.HERDR_PLUGIN_ID === "herdr-jev" && env.HERDR_PLUGIN_CONFIG_DIR)
+    ? env.HERDR_PLUGIN_CONFIG_DIR
+    : join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev");
+  const defaultHook = join(configDir, "notify-hook");
+  try {
+    if (existsSync(defaultHook) && statSync(defaultHook).isFile()) {
+      accessSync(defaultHook, constants.X_OK);
+      return defaultHook;
+    }
+  } catch {}
+  return undefined;
 }
 
 function readEscalations(file: string): any[] {
@@ -99,7 +114,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     return { sent: false, skippedReason: "missing required arguments", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
 
-  const stateDir = getStateDir();
+  const stateDir = resolveStateDir();
   const notifyDir = join(stateDir, "notify");
   if (!opts.dryRun) {
     mkdirSync(notifyDir, { recursive: true });
@@ -173,7 +188,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     }
     channels.push("herdr");
 
-    const hook = process.env.HERDR_JEV_NOTIFY_HOOK;
+    const hook = resolveNotifyHook();
     if (hook) {
       if (process.env.HERDR_JEV_TEST_GUARD === '1' && !hook.startsWith(tmpdir())) {
         channels.push("hook");
@@ -199,7 +214,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     }
   } else {
     channels.push("herdr");
-    if (process.env.HERDR_JEV_NOTIFY_HOOK) {
+    if (resolveNotifyHook()) {
       channels.push("hook");
     }
   }
@@ -265,7 +280,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
 }
 
 async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[] }> {
-  const notifyDir = join(getStateDir(), "notify");
+  const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) {
     return { sent: false, skippedReason: "no escalation", channels: [] };
@@ -306,7 +321,7 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
 
 async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ sent: boolean; channels: string[] }> {
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  const notifyDir = join(getStateDir(), "notify");
+  const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
@@ -349,7 +364,7 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
 
 async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; channels: string[] }> {
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  const notifyDir = join(getStateDir(), "notify");
+  const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
