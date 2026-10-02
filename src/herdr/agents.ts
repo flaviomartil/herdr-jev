@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, type GridWorkerRecord } from "./launcher.js";
+import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, settleClosedWorkerRuns, type GridWorkerRecord } from "./launcher.js";
 import { readOverview, matchRunForPane, formatOverviewRun } from "./overview.js";
 import { listRunHistory, type RunHistoryEntry } from "../orchestration/run-history.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
@@ -183,7 +183,7 @@ export async function buildAgentsView(
     }
     if (deadWorkerIds.length > 0) {
       workers = liveWorkers;
-      pruneGridWorkers(deadWorkerIds, deps?.stateDir);
+      settleClosedWorkerRuns(pruneGridWorkers(deadWorkerIds, deps?.stateDir));
     }
   }
 

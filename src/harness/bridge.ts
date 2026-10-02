@@ -312,7 +312,7 @@ export interface ModelResolution {
   cliModel: string;
   effort: string | null;
   effortArgs: string[];
-  bypassArgs: string[];
+  bypassArgs: string[] | null;
   readonlyArgs: string[];
 }
 
@@ -344,9 +344,9 @@ function stringArray(value: unknown): string[] | null {
 export function parseModelResolution(value: any): ModelResolution | null {
   if (!value || typeof value !== "object" || typeof value.cliModel !== "string" || !value.cliModel.trim()) return null;
   const effortArgs = stringArray(value.effortArgs ?? []);
-  const bypassArgs = stringArray(value.bypassArgs ?? []);
+  const bypassArgs = value.bypassArgs === undefined || value.bypassArgs === null ? null : stringArray(value.bypassArgs);
   const readonlyArgs = stringArray(value.readonlyArgs ?? []);
-  if (!effortArgs || !bypassArgs || !readonlyArgs) return null;
+  if (!effortArgs || !readonlyArgs || (bypassArgs === null && value.bypassArgs != null)) return null;
   return { client: String(value.client ?? ""), known: value.known === true, model: typeof value.model === "string" ? value.model : value.cliModel,
     cliModel: value.cliModel.trim(), effort: typeof value.effort === "string" ? value.effort : null, effortArgs, bypassArgs, readonlyArgs };
 }
