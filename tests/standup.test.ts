@@ -814,9 +814,7 @@ test("Finding 4: parseStandupFile handles empty front matter and strictly closed
   expect(parsedEmpty.options.max).toBe(12);
 
   const looseTerminator = "---\nmax: 5\n----\nGlobal message.";
-  const parsedLoose = parseStandupFile(looseTerminator);
-  expect(parsedLoose.options.max).toBe(12);
-  expect(parsedLoose.global).toContain("Global message.");
+  expect(() => parseStandupFile(looseTerminator)).toThrow("not closed");
 });
 
 test("Finding 5: executeStandupCommand auto mode with force propagates claim write failure", async () => {

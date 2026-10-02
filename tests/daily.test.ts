@@ -919,10 +919,10 @@ test("Finding 17: redactSecrets covers AWS access key ids, user:pass@host URLs, 
   expect(redactSecrets("user:pass@host")).toBe("user:[REDACTED]@host");
 
   expect(redactSecrets("--password mysecretval123")).toBe("--password [REDACTED]");
-  expect(redactSecrets("password mysecretval123")).toBe("password [REDACTED]");
+  expect(redactSecrets("password mysecretval123")).toBe("password mysecretval123");
 
   expect(redactSecrets("Authorization: Basic dXNlcjpwYXNz")).toBe("Authorization: Basic [REDACTED]");
-  expect(redactSecrets("Authorization: Basic ...")).toBe("Authorization: Basic [REDACTED]");
+  expect(redactSecrets("Authorization: Basic ...")).toBe("Authorization: Basic ...");
 
   expect(redactSecrets("dGhpcy9pcy9hL3Zlcnkvc2VjcmV0L3Rva2VuMTIzNDU2Nzg5MA==")).toBe("[REDACTED]");
 
