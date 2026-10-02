@@ -9,6 +9,7 @@ import { pile, dirtBadge, dirtWords, PILE_MAX } from './dirt.mjs';
 import { pressure, headBadge, headWords } from './head.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
 import { deskScene } from './desk-scene.mjs';
+import { monitorLabel as shortMonitorLabel } from './monitor-label.mjs';
 // Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
 // one divide the same numbers the same way and cannot disagree about which slice won a
 // rounding contest.
@@ -464,8 +465,7 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   // A working desk whose foreground command herdr could name shows the command
   // instead of the generic scrolling code: same two rows, same twelve cells, but
   // now the monitor says `npm test` and the bar underneath chugs.
-  const shortAct = formatShortActivity(person.jevActivity);
-  const monitorLabel = shortAct ? shortAct : formatCommand(person.command, person.kind);
+  const monitorLabel = shortMonitorLabel(person, SCREEN_W);
   const scr = person.status === 'working' && monitorLabel
     ? runningScreen(monitorLabel, frame)
     : screen(person.status, frame);

@@ -123,3 +123,26 @@ test("reduced motion freezes the scene, full motion animates it", () => {
   const moving = [0, 320, 640].map((dt) => strip(run(["--demo"], 140, { clock: CLOCK + dt })));
   expect(new Set(moving).size).toBeGreaterThan(1);
 });
+
+test("monitor label is the activity or the first word of the command, never the agent", async () => {
+  const { monitorLabel } = await import("../herdr-plugin/office/src/monitor-label.mjs");
+  expect(monitorLabel({ jevActivity: "testing", command: "cargo build", kind: "kiro" })).toBe("testing");
+  expect(monitorLabel({ jevActivity: "waiting_approval" })).toBe("approval?");
+  expect(monitorLabel({ jevActivity: "waiting_answer" })).toBe("answer?");
+  for (const a of ["editing", "reading", "running", "planning", "error", "idle", "done"]) expect(monitorLabel({ jevActivity: a })).toBe(a);
+  expect(monitorLabel({ jevActivity: "unknown", command: "bun test" })).toBe("bun");
+  expect(monitorLabel({ command: "cargo build", kind: "kiro" })).toBe("cargo");
+  expect(monitorLabel({ command: "claude --model x bun test", kind: "claude" })).toBe("bun");
+  expect(monitorLabel({ command: "node /home/u/.local/share/codex.js", kind: "codex" })).toBeNull();
+  expect(monitorLabel({ command: "/usr/bin/pytest -x" })).toBe("pytest");
+  expect(monitorLabel({ command: null })).toBeNull();
+});
+
+test("working monitors show a short label without an ellipsis", () => {
+  const plain = strip(run(["--demo"], 140));
+  const labels = DEMO_TILES.filter((t) => t.state === "working").map((t) => sceneRows(plain, t)[3]);
+  expect(labels.length).toBe(3);
+  for (const row of labels) expect(row).not.toContain("…");
+  expect(plain).not.toContain("claude · bu");
+  expect(plain).not.toContain("kiro · carg");
+});

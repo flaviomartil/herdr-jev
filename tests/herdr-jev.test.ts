@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterAll } from "bun:test";
+import { describe, expect, it, beforeEach, afterEach, afterAll } from "bun:test";
 import { planExecution } from "../src/pipelines/planner.js";
 import {
   buildAgentCommand,
@@ -27,7 +27,7 @@ import {
   writeAutoConfigEnv,
   type DetectedHarness,
 } from "../src/discovery/harness-detector.js";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,7 +53,35 @@ describe("Model Matrix", () => {
   });
 });
 
+const HERMETIC_ENV = ["HERDR_JEV_CONFIG_DIR", "HERDR_JEV_CROSS_HARNESS"];
+
+function isolateConfig(quotaObservations: unknown[] = []) {
+  const roleOverrides = Object.keys(process.env).filter((k) => /^HERDR_JEV_[A-Z0-9_]+_(ADVISOR|IMPLEMENTER|REVIEWER|RESEARCHER)$/.test(k));
+  const keys = [...HERMETIC_ENV, ...roleOverrides];
+  const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+  for (const k of roleOverrides) delete process.env[k];
+  const dir = mkdtempSync(join(tmpdir(), "herdr-jev-config-"));
+  writeFileSync(join(dir, "herdr-jev-quotas.json"), JSON.stringify(quotaObservations));
+  writeFileSync(join(dir, "herdr-jev-models.json"), "{}");
+  process.env.HERDR_JEV_CONFIG_DIR = dir;
+  delete process.env.HERDR_JEV_CROSS_HARNESS;
+  return () => {
+    for (const k of keys) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+    rmSync(dir, { recursive: true, force: true });
+  };
+}
+
 describe("Pipeline Planner", () => {
+  let restoreConfig: () => void;
+  beforeEach(() => {
+    restoreConfig = isolateConfig();
+  });
+  afterEach(() => {
+    restoreConfig();
+  });
   const trivialTriage: TriageDecision = {
     complexity: "trivial",
     confidence: 0.95,
@@ -177,12 +205,18 @@ describe("AI-Harness Bridge", () => {
 
 describe("Dynamic Model Matrix & Quota Cascade", () => {
   const savedEnv = { ...process.env };
+  let restoreConfig: () => void;
 
   beforeEach(() => {
+    restoreConfig = isolateConfig([]);
     delete process.env.HERDR_JEV_ANTIGRAVITY_ADVISOR;
     delete process.env.HERDR_JEV_ANTIGRAVITY_IMPLEMENTER;
     delete process.env.HERDR_JEV_ANTIGRAVITY_REVIEWER;
     delete process.env.HERDR_JEV_ANTIGRAVITY_RESEARCHER;
+  });
+
+  afterEach(() => {
+    restoreConfig();
   });
 
   afterAll(() => {
