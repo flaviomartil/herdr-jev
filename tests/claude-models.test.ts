@@ -26,6 +26,6 @@ describe("Claude model resolution", () => {
     expect(buildAgentCommand("claude", { role: "implementer", model: "fable", effort: undefined, extraFlags: [], description: "" })).toEqual(["claude", "--model", "fable", "--effort", undefined, "--dangerously-skip-permissions"]);
   });
   it("applies in reviewer command of the claude client", () => {
-    expect(buildAgentCommand("claude", { role: "reviewer", model: "fable-5.1", effort: undefined, extraFlags: [], description: "" })).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", undefined]);
+    expect(buildAgentCommand("claude", { role: "reviewer", model: "fable-5.1", effort: undefined, extraFlags: [], description: "" })).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", undefined, "--tools", "Read,Glob,Grep"]);
   });
 });

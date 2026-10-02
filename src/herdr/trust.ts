@@ -22,10 +22,12 @@ const FOOTER_LINE = /\b(?:enter|return)\b.*\b(?:confirm|select|choose|continue)\
 const TRUST_OPTION = /^(?:Yes,\s*I\s+trust\b|Trust\s+and\s+continue\b)/i;
 const NUMBER_MARKER = /^\d+[.)]\s+/;
 const MAX_MOVES = 6;
+const MAX_READS = 8;
 const DISMISS_POLLS = 20;
+const READ_INTERVAL_MS = 150;
 
 export function autoTrustEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !["0", "false", "off", "no"].includes((env.HERDR_JEV_AUTO_TRUST ?? "").trim().toLowerCase());
+  return ["", "1", "true", "on", "yes"].includes((env.HERDR_JEV_AUTO_TRUST ?? "").trim().toLowerCase());
 }
 
 export function parseTrustMenu(rawText: string): TrustMenu | null {
@@ -64,6 +66,7 @@ export interface TrustConfirmation {
   clock: { now: () => number; sleep: (ms: number) => Promise<void> };
   env?: NodeJS.ProcessEnv;
   lookup?: (path: string) => TrustPolicy | null;
+  ready?: (screenText: string) => boolean;
 }
 
 export async function confirmWorkspaceTrust(input: TrustConfirmation): Promise<TrustOutcome> {
@@ -78,27 +81,56 @@ export async function confirmWorkspaceTrust(input: TrustConfirmation): Promise<T
     const screen = await herdr.readAgent!(target);
     return screen.ok ? screen : null;
   };
+  const settle = () => input.clock.sleep(READ_INTERVAL_MS);
+
+  let previous: string | null = null;
+  let pending: string | null = null;
+  let stale = 0;
+  let moves = 0;
   let aligned = false;
-  for (let move = 0; move <= MAX_MOVES; move++) {
+  for (let reads = 0; reads < MAX_READS * (MAX_MOVES + 2); reads++) {
     const screen = await read();
     if (!screen) return { confirmed: false, reason: "pane_unreadable" };
     if (classifyPaneBlock(screen) !== "trust") return { confirmed: false, reason: "not_trust_dialog" };
+    const frame = normalizePaneText(screen.stdout);
+    if (pending !== null) {
+      if (frame === pending) {
+        if (++stale >= MAX_READS) break;
+      } else {
+        pending = null;
+        previous = frame;
+      }
+      await settle();
+      continue;
+    }
+    if (frame !== previous) {
+      previous = frame;
+      await settle();
+      continue;
+    }
     const menu = parseTrustMenu(screen.stdout);
     if (!menu || menu.trustIndex < 0) return { confirmed: false, reason: "trust_option_not_found" };
     if (menu.cursorIndex === menu.trustIndex) { aligned = true; break; }
-    if (move === MAX_MOVES) break;
+    if (moves >= MAX_MOVES) break;
     const sent = await herdr.sendKeys(target, [menu.trustIndex > menu.cursorIndex ? "down" : "up"]);
     if (!sent.ok) return { confirmed: false, reason: "send_keys_failed" };
-    await input.clock.sleep(150);
+    moves++;
+    pending = frame;
+    stale = 0;
+    await settle();
   }
   if (!aligned) return { confirmed: false, reason: "trust_cursor_unverified" };
 
   const entered = await herdr.sendKeys(target, ["enter"]);
   if (!entered.ok) return { confirmed: false, reason: "send_keys_failed" };
+  let dismissed = false;
   for (let poll = 0; poll < DISMISS_POLLS; poll++) {
     const screen = await read();
-    if (screen && classifyPaneBlock(screen) !== "trust") return { confirmed: true, reason: policy.reason };
+    if (screen && classifyPaneBlock(screen) !== "trust") {
+      dismissed = true;
+      if (!input.ready || input.ready(`${screen.stdout}\n${screen.stderr}`)) return { confirmed: true, reason: policy.reason };
+    }
     await input.clock.sleep(250);
   }
-  return { confirmed: false, reason: "trust_dialog_persisted" };
+  return { confirmed: false, reason: dismissed ? "agent_not_ready_after_trust" : "trust_dialog_persisted" };
 }

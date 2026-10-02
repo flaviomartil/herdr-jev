@@ -1,16 +1,20 @@
-import { mkdirSync, openSync, closeSync } from "node:fs";
+import { mkdirSync, openSync, closeSync, rmSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveStateDir } from "./state-dir.js";
 
 function reservationPath(key: string) {
-  const root = join(process.env.HERDR_JEV_STATE_DIR ?? join(process.env.XDG_STATE_HOME ?? join(homedir(), ".local/state"), "herdr-jev"), "peer-locks");
+  const root = join(resolveStateDir(), "peer-locks");
   mkdirSync(root, { recursive: true, mode: 0o700 });
   return join(root, createHash("sha256").update(`${process.env.HERDR_SOCKET_PATH ?? "default"}:${key}`).digest("hex"));
 }
 
 export function claimHerdrSpawn(key: string) {
   closeSync(openSync(`${reservationPath(key)}.dispatch`, "wx", 0o600));
+}
+
+export function releaseHerdrSpawn(key: string) {
+  rmSync(`${reservationPath(key)}.dispatch`, { force: true });
 }
 
 export async function reserveHerdrHandle(key: string) {

@@ -14,7 +14,7 @@ import {
   nativeStageEffort,
   listAllGridWorkers,
   filterWorkerClosePlan,
-  executeWorkerClose,
+  closeWorkerPanes,
   registerWorkerRun,
   builtinLaunchArgs,
   type SplitDirectionOption,
@@ -514,14 +514,9 @@ program
       }
 
       if (worktreePath && worktreeBranch && result.paneId) {
-        const { readGridWorkerRecords, writeGridWorkers } = await import("./herdr/launcher.js");
-        const records = readGridWorkerRecords(context.sourcePaneId || "");
-        const idx = records.findIndex(r => r.paneId === result.paneId);
-        if (idx !== -1) {
-          records[idx].cwd = worktreePath;
-          records[idx].branch = worktreeBranch;
-          writeGridWorkers(context.sourcePaneId || "", records);
-        }
+        const { updateGridWorkers } = await import("./herdr/launcher.js");
+        updateGridWorkers(context.sourcePaneId || "", (records) => records.some(r => r.paneId === result.paneId)
+          ? records.map(r => r.paneId === result.paneId ? { ...r, cwd: worktreePath, branch: worktreeBranch } : r) : null);
       }
 
       const runId = result.paneId && result.agentName
@@ -964,9 +959,15 @@ workers
       return;
     }
 
-    const settlements = await executeWorkerClose(client, plan);
+    const outcome = await closeWorkerPanes(client, plan);
     for (const item of plan) {
-      const settlement = settlements.find((candidate) => candidate.paneId === item.paneId);
+      const failure = outcome.failed.find((candidate) => candidate.paneId === item.paneId);
+      if (failure) {
+        console.error(`Could not close ${item.paneId} (${item.status}): ${failure.error}`);
+        process.exitCode = 1;
+        continue;
+      }
+      const settlement = outcome.settlements.find((candidate) => candidate.paneId === item.paneId);
       console.log(`Closed ${item.paneId} (${item.status})${settlement ? ` run ${settlement.runId} ${settlement.settled ? "settled" : "not settled"}` : ""}`);
     }
   });

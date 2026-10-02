@@ -1,10 +1,10 @@
 import { mkdirSync, writeFileSync, renameSync, chmodSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { homedir } from "node:os";
 import { externalRun, harnessCommand, recordAutoImprovement, type DelegationInput } from "../harness/bridge.js";
 import { buildInlineCommand, launchStageInHerdr, readonlyReviewerArgs, type SplitDirectionOption } from "../herdr/launcher.js";
 import { createHerdrClient, readHerdrObservedState, requiresTrustConfirmation } from "../herdr/client.js";
+import { resolveStateDir } from "../herdr/state-dir.js";
 import type { PipelinePlan, StageSpec } from "../types/index.js";
 import { assertRunId, retryableStages } from "./run-history.js";
 
@@ -25,7 +25,7 @@ const digest = (text: string) => createHash("sha256").update(text).digest("hex")
 export function projectRun(id: string): string {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("invalid_run_id");
   const projection = externalRun("project", { id });
-  const dir = join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), id);
+  const dir = join(resolveStateDir(), id);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   chmodSync(dir, 0o700);
   const path = join(dir, "run.json");
@@ -37,9 +37,8 @@ export function projectRun(id: string): string {
 
 export function reviewerCommand(client: string, stage: StageSpec, prompt: string): string[] {
   const reviewStage: StageSpec = { ...stage, role: "reviewer" };
-  const readonly = readonlyReviewerArgs(client, reviewStage);
-  if (!readonly.length) throw new Error("readonly_reviewer_adapter_unavailable");
-  return [...buildInlineCommand(client, reviewStage, prompt, true), ...readonly];
+  if (!readonlyReviewerArgs(client, reviewStage).length) throw new Error("readonly_reviewer_adapter_unavailable");
+  return buildInlineCommand(client, reviewStage, prompt, true);
 }
 
 export async function runPipeline(plan: PipelinePlan, options: RunOptions) {
@@ -52,7 +51,7 @@ export async function runPipeline(plan: PipelinePlan, options: RunOptions) {
   const run = externalRun("create", { client: plan.client, model: options.delegation.model,
     availableModels: options.delegation.availableModels ?? [], role: options.delegation.role ?? "advisor",
     work: "substantive", cwd: options.cwd ?? process.cwd(), objectiveDigest: digest(plan.task) });
-  const dir = join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), run.id);
+  const dir = join(resolveStateDir(), run.id);
   projectRun(run.id);
   writeFileSync(join(dir, "objective.md"), plan.task, { mode: 0o600 });
   return continueRun(run, plan.task, options);
@@ -63,14 +62,14 @@ export async function resumePipeline(id: string, options: RunOptions) {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000 || options.timeoutMs > 3_600_000) throw new Error("invalid_timeout");
   const run = externalRun("status", { id });
   if (realpathSync(resolve(options.cwd ?? run.cwd)) !== realpathSync(resolve(run.cwd))) throw new Error("resume_repository_mismatch");
-  const task = readFileSync(join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), id, "objective.md"), "utf8");
+  const task = readFileSync(join(resolveStateDir(), id, "objective.md"), "utf8");
   if (Buffer.byteLength(task) > 16_384 || digest(task) !== run.objectiveDigest) throw new Error("resume_objective_changed");
   if (process.env.HERDR_ENV !== "1") return { mode: "preview", run, projection: projectRun(id) };
   return continueRun(run, task, options);
 }
 
 async function continueRun(run: any, task: string, options: RunOptions) {
-  const dir = join(process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev"), run.id);
+  const dir = join(resolveStateDir(), run.id);
   const herdr = createHerdrClient();
   let outcome: "success" | "partial" | "failed" = "partial";
   let launchError: string | undefined;
