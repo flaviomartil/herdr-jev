@@ -27,7 +27,7 @@ export function assertNoRealHomeStateLeaks(): void {
 }
 
 import { writeFileSync, chmodSync } from "node:fs";
-export function createFakeHerdr(dir: string): string {
+export function createFakeHerdr(dir: string, options?: { defaultAgentStatus?: string }): string {
   const fakeHerdr = join(dir, "herdr");
   const script = `#!/usr/bin/env node
 const args = process.argv.slice(2);
@@ -46,12 +46,24 @@ for (const arg of args) {
     process.exit(2);
   }
 }
+if (args[0] === "pane" && (args[1] === "report-agent" || args[1] === "release-agent")) {
+  if (args[2] && args[2].startsWith("-")) {
+    console.error("unknown option: " + (args[3] || args[2]));
+    process.exit(1);
+  }
+}
 if (args[0] === "pane" && args[1] === "get") {
   const paneId = args[args.length - 1];
   if (paneId === "missing:pane" || paneId === "unknown:pane" || paneId === "w1:missing" || paneId === "wZZ:missing" || paneId === "w1:stale") {
     console.log(JSON.stringify({ error: "pane_not_found" }));
     process.exit(1);
   }
+}
+if (args[0] === "agent" && args[1] === "get") {
+  const paneId = args[2] || args[args.length - 1];
+  const status = process.env.FAKE_HERDR_AGENT_STATUS || "${options?.defaultAgentStatus || 'idle'}";
+  console.log(JSON.stringify({ result: { agent: { pane_id: paneId, agent_status: status } } }));
+  process.exit(0);
 }
 process.exit(0);
 `;
