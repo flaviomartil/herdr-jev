@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { createFakeHerdr } from "./helpers.ts";
+import { createFakeHerdr, createTempHome } from "./helpers.ts";
 import { createProcessCommandAdapter } from "../src/herdr/client.ts";
 import { handleNotifyCommand } from "../src/herdr/notify.ts";
 import * as classifier from "../src/triage/pane-classifier.ts";
@@ -102,7 +102,7 @@ function blockedPerson(overrides: Record<string, unknown> = {}): any {
 
 function runCli(args: string[], input?: string) {
   return spawnSync(process.execPath, [CLI, ...args], {
-    env: { ...process.env } as NodeJS.ProcessEnv,
+    env: { ...process.env, HOME: createTempHome() } as NodeJS.ProcessEnv,
     input,
     encoding: "utf-8",
     timeout: 30000,
@@ -357,7 +357,7 @@ test("N4: concurrent processes keep every escalation record and leave no temp or
   const codes = await Promise.all(Array.from({ length: 6 }, (_, i) =>
     new Promise<number | null>((resolveCode) => {
       const argv = (notifyArgs as any).buildNotifyArgs(blockedPerson({ id: `w1:c${i}` }), owner);
-      const child = spawn(process.execPath, [CLI, ...argv], { env: { ...process.env } as NodeJS.ProcessEnv, stdio: "ignore" });
+      const child = spawn(process.execPath, [CLI, ...argv], { env: { ...process.env, HOME: createTempHome() } as NodeJS.ProcessEnv, stdio: "ignore" });
       child.on("close", resolveCode);
     }),
   ));

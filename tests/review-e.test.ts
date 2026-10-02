@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
-import { createFakeHerdr } from "./helpers.ts";
+import { createFakeHerdr, createTempHome } from "./helpers.ts";
 import { createProcessCommandAdapter } from "../src/herdr/client.ts";
 import { handleNotifyCommand, updateEscalations } from "../src/herdr/notify.ts";
 import * as classifier from "../src/triage/pane-classifier.ts";
@@ -71,7 +71,7 @@ function herdrCalls(): string[][] {
 
 function runCli(args: string[], input?: string) {
   return spawnSync(process.execPath, [CLI, ...args], {
-    env: { ...process.env } as NodeJS.ProcessEnv,
+    env: { ...process.env, HOME: createTempHome() } as NodeJS.ProcessEnv,
     input,
     encoding: "utf-8",
     timeout: 30000,
