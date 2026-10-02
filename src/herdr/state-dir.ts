@@ -1,8 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
-const STARTUP_CWD = process.cwd();
+function startupCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return homedir();
+  }
+}
+
+const STARTUP_CWD = startupCwd();
 
 export function isTestGuardActive(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.HERDR_JEV_TEST_GUARD === "1" || env.AI_HARNESS_TEST_GUARD === "1";
@@ -51,6 +59,64 @@ export function legacyStateDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.HOME?.trim() || homedir(), ".local", "state", "herdr-jev");
 }
 
+function moveEntries(source: string, target: string): void {
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  for (const name of readdirSync(source)) {
+    const from = join(source, name);
+    const to = join(target, name);
+    try {
+      if (lstatSync(from).isDirectory()) {
+        if (!existsSync(to)) {
+          try {
+            renameSync(from, to);
+            continue;
+          } catch (error) {
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+          }
+        }
+        if (lstatSync(to).isDirectory()) moveEntries(from, to);
+        continue;
+      }
+      try {
+        linkSync(from, to);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "EEXIST" || code === "ENOENT") continue;
+        if (code !== "EXDEV" && code !== "EPERM") throw error;
+        copyFileSync(from, to, constants.COPYFILE_EXCL);
+      }
+      unlinkSync(from);
+    } catch {
+    }
+  }
+  try {
+    rmdirSync(source);
+  } catch {
+  }
+}
+
+export function migrateLegacyState(legacy: string, configured: string): void {
+  if (legacy === configured || !existsSync(legacy)) return;
+  try {
+    mkdirSync(dirname(configured), { recursive: true, mode: 0o700 });
+    if (!existsSync(configured)) {
+      try {
+        renameSync(legacy, configured);
+        return;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") return;
+        if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EXDEV") return;
+      }
+    }
+    moveEntries(legacy, configured);
+  } catch {
+  }
+}
+
+const resolvedRoots = new Map<string, string>();
+
 export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = absoluteDir(env.HERDR_JEV_STATE_DIR);
   if (explicit) return explicit;
@@ -62,8 +128,13 @@ export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
   }
   const legacy = legacyStateDir(env);
   const configured = readToolEnv(env).stateDir;
-  if (!configured) return legacy;
-  return configured !== legacy && !existsSync(configured) && existsSync(legacy) ? legacy : configured;
+  if (!configured || configured === legacy) return legacy;
+  const key = `${legacy}\0${configured}`;
+  if (!resolvedRoots.has(key)) {
+    migrateLegacyState(legacy, configured);
+    resolvedRoots.set(key, configured);
+  }
+  return resolvedRoots.get(key)!;
 }
 
 export function legacyConfigDir(): string {
@@ -71,7 +142,7 @@ export function legacyConfigDir(): string {
 }
 
 export function resolveConfigDirs(env: NodeJS.ProcessEnv = process.env): string[] {
-  const override = env.HERDR_JEV_CONFIG_DIR?.trim();
+  const override = absoluteDir(env.HERDR_JEV_CONFIG_DIR);
   if (override) return [override];
   const configured = readToolEnv(env).configDir;
   return configured ? [configured, legacyConfigDir()] : [legacyConfigDir()];

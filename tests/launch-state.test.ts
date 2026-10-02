@@ -41,7 +41,7 @@ interface FakeSwarm extends HerdrClient {
   created: string[];
 }
 
-function swarm(overrides: Partial<HerdrClient> = {}): FakeSwarm {
+function swarm(overrides: Partial<HerdrClient> = {}, callerId = "caller-A"): FakeSwarm {
   const created: string[] = [];
   const last = new Map<string, string>();
   let counter = 0;
@@ -49,7 +49,7 @@ function swarm(overrides: Partial<HerdrClient> = {}): FakeSwarm {
     created,
     paneLayout: async () => {
       await sleep(3);
-      const panes = [{ pane_id: "caller-A", rect: { x: 0, y: 0, width: 100, height: 50 } },
+      const panes = [{ pane_id: callerId, rect: { x: 0, y: 0, width: 100, height: 50 } },
         ...created.map((id, index) => ({ pane_id: id, rect: { x: 100, y: index * 10, width: 100, height: 10 } }))];
       return ok(JSON.stringify({ result: { layout: { area: { x: 0, y: 0, width: 200, height: 50 }, panes } } }));
     },
@@ -125,7 +125,7 @@ for (let i = 0; i < 25; i++) updateGridWorkers("shared", (records) => [...record
     expect(readGridWorkerRecords("caller-A").map((record) => record.paneId)).toEqual(["w-9"]);
   });
 
-  it("breaks a stale lock instead of blocking forever", () => {
+  it("breaks a stale legacy directory lock instead of blocking forever", () => {
     const path = gridStatePath("caller-A");
     mkdirSync(`${path}.lock`, { recursive: true });
     const old = new Date(Date.now() - 60_000);
@@ -274,7 +274,7 @@ describe("close and prune reconcile with the real pane state", () => {
   it("settles the run of a record the launch layout filter drops", async () => {
     install();
     const runId = repoWithWorker("gone-1");
-    const herdr = swarm();
+    const herdr = swarm({}, "caller-1");
     expect((await launchStageInHerdr({ client: "claude", stage, handoffPrompt: "next task", herdr, agentName: "next-peer", sourcePaneId: "caller-1", cwd: sandbox })).ok).toBe(true);
     expect(readGridWorkerRecords("caller-1").map((record) => record.paneId)).toEqual(["w-1"]);
     expect(settleCalls()).toHaveLength(1);
@@ -346,13 +346,14 @@ describe("one state root for every module", () => {
     expect(listRuns(toolEnv(configured))).toEqual([RUN_ID]);
   });
 
-  it("keeps using the existing default state directory until the configured one exists", () => {
+  it("moves the default state directory over when the configured one is first used", () => {
     const configured = join(sandbox, "configured-state");
     const legacy = join(sandbox, ".local", "state", "herdr-jev");
     seedRun(legacy);
     expect(listRuns(toolEnv(configured))).toEqual([RUN_ID]);
-    mkdirSync(configured);
-    expect(listRuns(toolEnv(configured))).toEqual([]);
+    expect(existsSync(legacy)).toBe(false);
+    expect(existsSync(join(configured, RUN_ID, "run.json"))).toBe(true);
+    expect(listRuns(toolEnv(configured))).toEqual([RUN_ID]);
   });
 
   describe("resolveStateDir", () => {
@@ -363,15 +364,17 @@ describe("one state root for every module", () => {
     };
     const writeToolEnv = (stateDir: string) => writeFileSync(join(sandbox, "generated", "tool-env.json"), JSON.stringify({ tools: { "herdr-jev": { stateDir } } }));
 
-    it("falls back to the default state directory only when the configured one is missing", () => {
+    it("moves the default state over once the configured directory is resolved and keeps answering the configured one", () => {
       const legacy = join(sandbox, ".local", "state", "herdr-jev");
       const configured = join(sandbox, "configured");
       const env = generatedEnv();
       writeToolEnv(configured);
+      mkdirSync(join(legacy, "grid"), { recursive: true });
+      writeFileSync(join(legacy, "grid", "caller.json"), "{}");
       expect(resolveStateDir(env)).toBe(configured);
+      expect(readFileSync(join(configured, "grid", "caller.json"), "utf8")).toBe("{}");
+      expect(existsSync(legacy)).toBe(false);
       mkdirSync(legacy, { recursive: true });
-      expect(resolveStateDir(env)).toBe(legacy);
-      mkdirSync(configured);
       expect(resolveStateDir(env)).toBe(configured);
       expect(resolveStateDir({ ...env, HERDR_JEV_STATE_DIR: join(sandbox, "explicit") })).toBe(join(sandbox, "explicit"));
     });

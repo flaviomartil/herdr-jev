@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, settleClosedWorkerRuns, type GridWorkerRecord } from "./launcher.js";
+import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, settleDeadRecords, type GridWorkerRecord } from "./launcher.js";
 import { readOverview, matchRunForPane, formatOverviewRun } from "./overview.js";
 import { listRunHistory, type RunHistoryEntry } from "../orchestration/run-history.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
@@ -115,7 +115,7 @@ function parseLivePaneIds(stdout: string): Set<string> | null {
     const ids = panes
       .map((p: any) => (typeof p === "string" ? p : p?.pane_id ?? p?.id))
       .filter((id: any): id is string => typeof id === "string" && id.length > 0);
-    return new Set(ids);
+    return ids.length > 0 ? new Set(ids) : null;
   }
   return null;
 }
@@ -153,6 +153,8 @@ export async function buildAgentsView(
 
   const herdr = deps?.client ?? deps?.herdrClient ?? (deps?.workers || deps?.stateDir ? undefined : createHerdrClient());
   let livePaneIds: Set<string> | null = null;
+  let liveScope: "all" | "tab" = "all";
+  const fallbackCaller = callerPaneId ?? process.env.HERDR_PANE_ID;
   if (herdr) {
     try {
       if (herdr.listPanes) {
@@ -161,10 +163,11 @@ export async function buildAgentsView(
           livePaneIds = parseLivePaneIds(res.stdout);
         }
       }
-      if (!livePaneIds && herdr.paneLayout) {
-        const res = await herdr.paneLayout(callerPaneId ?? "");
+      if (!livePaneIds && herdr.paneLayout && fallbackCaller) {
+        const res = await herdr.paneLayout(fallbackCaller);
         if (res.ok) {
           livePaneIds = parseLivePaneIds(res.stdout);
+          liveScope = "tab";
         }
       }
     } catch {
@@ -172,18 +175,25 @@ export async function buildAgentsView(
   }
 
   if (livePaneIds) {
-    const deadWorkerIds: string[] = [];
+    const live = livePaneIds;
+    const deadWorkers: GridWorkerRecord[] = [];
     const liveWorkers: GridWorkerRecord[] = [];
     for (const w of workers) {
-      if (livePaneIds.has(w.paneId)) {
+      const caller = w.callerPaneId ?? fallbackCaller;
+      const verifiable = !!caller && live.has(caller) && !(liveScope === "tab" && w.layout === "tab");
+      if (!verifiable || live.has(w.paneId)) {
         liveWorkers.push(w);
       } else {
-        deadWorkerIds.push(w.paneId);
+        deadWorkers.push(w);
       }
     }
-    if (deadWorkerIds.length > 0) {
+    if (deadWorkers.length > 0) {
       workers = liveWorkers;
-      settleClosedWorkerRuns(pruneGridWorkers(deadWorkerIds, deps?.stateDir));
+      try {
+        const { kept } = settleDeadRecords(deadWorkers);
+        pruneGridWorkers(deadWorkers.map((w) => w.paneId), deps?.stateDir, { kept });
+      } catch {
+      }
     }
   }
 

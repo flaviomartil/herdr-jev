@@ -62,7 +62,13 @@ export async function resumePipeline(id: string, options: RunOptions) {
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000 || options.timeoutMs > 3_600_000) throw new Error("invalid_timeout");
   const run = externalRun("status", { id });
   if (realpathSync(resolve(options.cwd ?? run.cwd)) !== realpathSync(resolve(run.cwd))) throw new Error("resume_repository_mismatch");
-  const task = readFileSync(join(resolveStateDir(), id, "objective.md"), "utf8");
+  let task: string;
+  try {
+    task = readFileSync(join(resolveStateDir(), id, "objective.md"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("resume_objective_missing");
+    throw error;
+  }
   if (Buffer.byteLength(task) > 16_384 || digest(task) !== run.objectiveDigest) throw new Error("resume_objective_changed");
   if (process.env.HERDR_ENV !== "1") return { mode: "preview", run, projection: projectRun(id) };
   return continueRun(run, task, options);

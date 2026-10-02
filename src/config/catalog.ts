@@ -124,6 +124,7 @@ export function markModelExhausted(client: string, model: string, durationMinute
 }
 
 export function resetQuotas(filterClient?: string, filterModel?: string): void {
+  mkdirSync(userConfigDir(), { recursive: true });
   if (!filterClient && !filterModel) {
     writeFileSync(userQuotasFile(), JSON.stringify([], null, 2), "utf-8");
     return;
