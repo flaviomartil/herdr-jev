@@ -230,7 +230,8 @@ describe("legacy state migration", () => {
       writeFileSync(join(configured, "present"), "configured");
       writeFileSync(join(legacy, "present"), "legacy");
       writeFileSync(join(legacy, "fresh"), "legacy");
-      expect(migrateLegacyState(legacy, configured)).toEqual([]);
+      expect(migrateLegacyState(legacy, configured)).toEqual(["present: conflict"]);
+      expect(readFileSync(join(legacy, "present"), "utf8")).toBe("legacy");
       expect(readFileSync(join(configured, "present"), "utf8")).toBe("configured");
       expect(readFileSync(join(configured, "fresh"), "utf8")).toBe("legacy");
       expect(readdirSync(configured).filter((name) => name.endsWith(".migrating"))).toEqual([]);

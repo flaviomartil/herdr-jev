@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, type Stats, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, type Stats, readFileSync, writeFileSync, readdirSync, rmSync, rmdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
@@ -67,7 +67,10 @@ type PaneLayout = { area?: Partial<PaneRect>; panes?: PaneLayoutPane[] };
 
 function layoutPanes(input: PaneLayoutInput): Array<{ id: string; rect: PaneRect; owner?: string }> {
   const layout = input.result?.layout ?? input.layout ?? input;
-  return (layout.panes ?? []).flatMap((pane) => {
+  const panes: unknown = layout.panes;
+  if (!Array.isArray(panes)) return [];
+  return (panes as Array<PaneLayoutPane | null | undefined>).flatMap((pane) => {
+    if (!pane || typeof pane !== "object") return [];
     const id = pane.pane_id ?? pane.id;
     const rect = pane.rect;
     return id && rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number"
@@ -181,14 +184,16 @@ interface ParsedGridFile {
   records: GridWorkerRecord[];
   callerPaneId?: string;
   corrupt: boolean;
+  unreadable?: string;
 }
 
 function parseGridFile(filePath: string): ParsedGridFile {
   let raw: string;
   try {
     raw = readFileSync(filePath, "utf8");
-  } catch {
-    return { records: [], corrupt: false };
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? { records: [], corrupt: false } : { records: [], corrupt: false, unreadable: String(code ?? errorText(error)) };
   }
   let value: unknown;
   try {
@@ -306,11 +311,17 @@ export function withGridLock<T>(filePath: string, action: () => T, hooks: GridLo
       if (held && Date.now() - held.mtimeMs > staleMs) {
         hooks.afterStaleSeen?.();
         if (held.isDirectory()) {
-          rmSync(lock, { recursive: true, force: true });
-          continue;
+          try {
+            rmdirSync(lock);
+            continue;
+          } catch (removeError) {
+            const code = (removeError as NodeJS.ErrnoException).code;
+            if (code === "ENOENT" || code === "ENOTDIR") continue;
+          }
+        } else {
+          const outcome = takeOverStale(lock, (snapshot) => Date.now() - statSync(snapshot).mtimeMs > staleMs);
+          if (outcome === "taken" || outcome === "missing") continue;
         }
-        const outcome = takeOverStale(lock, (snapshot) => Date.now() - statSync(snapshot).mtimeMs > staleMs);
-        if (outcome === "taken" || outcome === "missing") continue;
       }
       if (Date.now() > deadline) throw new Error("grid_state_lock_timeout");
       hooks.onWait?.();
@@ -375,6 +386,7 @@ export function updateGridWorkers(
   const path = gridStatePath(callerPaneId, stateDir);
   return withGridLock(path, () => {
     const current = parseGridFile(path);
+    if (current.unreadable) throw new Error(`grid_state_unreadable: ${current.unreadable}`);
     if (current.corrupt) {
       try {
         renameSync(path, `${path}.corrupt`);
@@ -503,6 +515,7 @@ export function pruneGridWorkers(
     try {
       withGridLock(filePath, () => {
         const current = parseGridFile(filePath);
+        if (current.unreadable) throw new Error(`grid_state_unreadable: ${current.unreadable}`);
         if (current.corrupt) return;
         const closing = current.records.filter((r) => closedSet.has(r.paneId));
         if (closing.length === 0) return;
@@ -1268,6 +1281,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
       if (paneClosed && callerPaneId) {
         try { pruneGridWorkers([paneId]); } catch {}
       }
+      if (paneClosed) releaseFence();
     }
     return { ok: false, ackStatus, paneCreated: ackStatus === "unknown" || (ackStatus === "rejected" && !paneClosed), promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
   }

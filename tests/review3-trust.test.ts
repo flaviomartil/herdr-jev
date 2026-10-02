@@ -215,9 +215,10 @@ describe("the policy path is the directory the dialog is about", () => {
     }
   });
 
-  it("still confirms a dialog whose top scrolled away, because no directory is shown to compare", async () => {
+  it("does not confirm a dialog whose top scrolled away, because no directory is shown to compare", async () => {
     const pane = scripted(({ enters, sinceEnter }) => enters > 0 ? (sinceEnter >= 2 ? READY : "Starting...\n") : DIALOG_YES);
-    expect((await confirm(pane)).confirmed).toBe(true);
+    expect(await confirm(pane)).toEqual({ confirmed: false, reason: "trust_path_unverified" });
+    expect(pane.keys).toEqual([]);
   });
 });
 
@@ -242,11 +243,8 @@ describe("directories shown in a trust dialog", () => {
       else process.env.HOME = previous;
       rmSync(home, { recursive: true, force: true });
     }
-    expect(dialogMatchesPath("…/work/project\n", "/home/dev/work/project")).toBe(true);
     expect(dialogMatchesPath("…/work/other\n", "/home/dev/work/project")).toBe(false);
-    expect(dialogMatchesPath("/home/dev/wo…\n", "/home/dev/work/project")).toBe(true);
     expect(dialogMatchesPath("/home/dev/xx…\n", "/home/dev/work/project")).toBe(false);
     expect(dialogMatchesPath("/home/dev/work/project/\n", "/home/dev/work/project")).toBe(true);
-    expect(dialogMatchesPath("no path here\n", "/home/dev/work/project")).toBe(true);
   });
 });

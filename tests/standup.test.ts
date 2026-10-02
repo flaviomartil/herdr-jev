@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { join } from "node:path";
-import { homedir } from "node:os";
-import { mkdirSync, writeFileSync, rmSync, readFileSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, readFileSync, statSync } from "node:fs";
 import {
   parseStandupFile,
   planStandup,
@@ -407,8 +407,18 @@ test("executeStandupCommand json mode outputs json object", async () => {
   expect(res.results.length).toBe(1);
 });
 
+function isolatedHome(): { HOME: string; AI_HARNESS_GENERATED_DIR: string; cleanup: () => void } {
+  const root = mkdtempSync(join(tmpdir(), "standup-home-"));
+  const generated = join(root, "generated");
+  mkdirSync(generated);
+  return { HOME: join(root, "home"), AI_HARNESS_GENERATED_DIR: generated, cleanup: () => rmSync(root, { recursive: true, force: true }) };
+}
+
 test("resolveStandupEnvironment handles foreign plugin env correctly", () => {
+  const isolated = isolatedHome();
   const foreignEnv = {
+    HOME: isolated.HOME,
+    AI_HARNESS_GENERATED_DIR: isolated.AI_HARNESS_GENERATED_DIR,
     HERDR_PLUGIN_ID: "herdr-routines",
     HERDR_PLUGIN_CONFIG_DIR: "/routines/config",
     HERDR_PLUGIN_STATE_DIR: "/routines/state",
@@ -418,7 +428,7 @@ test("resolveStandupEnvironment handles foreign plugin env correctly", () => {
   const res = resolveStandupEnvironment(foreignEnv);
   expect(res.configDir).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev"));
   expect(res.defaultFile).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev", "standup.md"));
-  expect(res.stateDir).toBe(join(homedir(), ".local", "state", "herdr-jev"));
+  expect(res.stateDir).toBe(join(isolated.HOME, ".local", "state", "herdr-jev"));
   expect(res.callerPaneId).toBeUndefined();
 
   const foreignWithAuth = {
@@ -432,6 +442,7 @@ test("resolveStandupEnvironment handles foreign plugin env correctly", () => {
   expect(resAuth.defaultFile).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev", "standup.md"));
   expect(resAuth.stateDir).toBe("/custom/auth/state");
   expect(resAuth.callerPaneId).toBe("%auth-pane");
+  isolated.cleanup();
 });
 
 test("resolveStandupEnvironment handles herdr-jev plugin env correctly", () => {
@@ -450,7 +461,10 @@ test("resolveStandupEnvironment handles herdr-jev plugin env correctly", () => {
 });
 
 test("resolveStandupEnvironment handles no plugin env correctly", () => {
+  const isolated = isolatedHome();
+  const base = { HOME: isolated.HOME, AI_HARNESS_GENERATED_DIR: isolated.AI_HARNESS_GENERATED_DIR };
   const plainEnv = {
+    ...base,
     HERDR_PLUGIN_CONFIG_DIR: "/plain/config",
     HERDR_PLUGIN_STATE_DIR: "/plain/state",
     HERDR_PANE_ID: "%plain-pane",
@@ -462,10 +476,27 @@ test("resolveStandupEnvironment handles no plugin env correctly", () => {
   expect(res.stateDir).toBe("/plain/state");
   expect(res.callerPaneId).toBe("%plain-pane");
 
-  const emptyRes = resolveStandupEnvironment({});
+  const emptyRes = resolveStandupEnvironment({ ...base });
   expect(emptyRes.configDir).toBe(join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev"));
-  expect(emptyRes.stateDir).toBe(join(homedir(), ".local", "state", "herdr-jev"));
+  expect(emptyRes.stateDir).toBe(join(isolated.HOME, ".local", "state", "herdr-jev"));
   expect(emptyRes.callerPaneId).toBeUndefined();
+  isolated.cleanup();
+});
+
+test("resolveStandupEnvironment never reads or moves the real state directory when the harness configures another one", () => {
+  const isolated = isolatedHome();
+  try {
+    const configured = join(isolated.AI_HARNESS_GENERATED_DIR, "..", "configured-state");
+    writeFileSync(join(isolated.AI_HARNESS_GENERATED_DIR, "tool-env.json"), JSON.stringify({ tools: { "herdr-jev": { stateDir: configured } } }));
+    const legacy = join(isolated.HOME, ".local", "state", "herdr-jev");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "marker"), "kept");
+    const res = resolveStandupEnvironment({ HOME: isolated.HOME, AI_HARNESS_GENERATED_DIR: isolated.AI_HARNESS_GENERATED_DIR });
+    expect(res.stateDir).toBe(configured);
+    expect(readFileSync(join(configured, "marker"), "utf8")).toBe("kept");
+  } finally {
+    isolated.cleanup();
+  }
 });
 
 test("planStandup ignores stale caller pane under foreign plugin env", async () => {
