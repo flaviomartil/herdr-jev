@@ -5,6 +5,7 @@ import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, type GridWorkerR
 import { readOverview, matchRunForPane, formatOverviewRun } from "./overview.js";
 import { listRunHistory, type RunHistoryEntry } from "../orchestration/run-history.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
+import { listHarnessRuns, type HarnessWorkerRun } from "../harness/bridge.js";
 
 export type AgentState = "blocked" | "working" | "idle" | "done" | "unknown";
 
@@ -21,6 +22,8 @@ export interface AgentRow {
   run: string | null;
   paneId?: string;
   callerPaneId?: string;
+  runId?: string;
+  runState?: string;
 }
 
 export interface AgentProjectGroup {
@@ -44,6 +47,7 @@ export interface AgentsViewDeps {
   workers?: readonly GridWorkerRecord[];
   client?: HerdrClient;
   herdrClient?: HerdrClient;
+  harnessRuns?: readonly HarnessWorkerRun[] | null;
 }
 
 export const defaultGitRunner: GitRunner = async (args: string[], cwd?: string) => {
@@ -211,6 +215,10 @@ export async function buildAgentsView(
     }
   }
 
+  const harnessRuns: readonly HarnessWorkerRun[] = workers.some((worker) => worker.runId)
+    ? deps?.harnessRuns ?? listHarnessRuns({ limit: 100, kind: "worker" }) ?? []
+    : [];
+
   const groupsMap = new Map<string, AgentRow[]>();
 
   for (let i = 0; i < workers.length; i++) {
@@ -277,6 +285,10 @@ export async function buildAgentsView(
       }
     }
 
+    const harnessRun = worker.runId ? harnessRuns.find((candidate) => candidate.id === worker.runId) : undefined;
+    const runState = harnessRun?.stages?.[0]?.state ?? (typeof harnessRun?.state === "string" ? harnessRun.state : undefined);
+    if (!run && runState) run = `worker: ${runState}`;
+
     const row: AgentRow = {
       slot,
       state,
@@ -290,6 +302,8 @@ export async function buildAgentsView(
       run,
       paneId: worker.paneId,
       callerPaneId: worker.callerPaneId ?? callerPaneId,
+      ...(worker.runId ? { runId: worker.runId } : {}),
+      ...(worker.runId && runState ? { runState } : {}),
     };
 
     const groupRows = groupsMap.get(project) ?? [];
