@@ -148,8 +148,8 @@ describe("trustConfirmed means the agent is ready", () => {
     expect(pane.keys).toEqual(["enter"]);
     expect(result.ok).toBe(false);
     expect(result.trustConfirmed).toBeUndefined();
-    expect(result.trustRequired).toBe(true);
-    expect(result.trustPolicyReason).toBe("agent_not_ready_after_trust");
+    expect(result.trustRequired).toBeUndefined();
+    expect(result.error).toBe("Agent prompt readiness timed out");
     expect(pane.prompts).toEqual([]);
   });
 
