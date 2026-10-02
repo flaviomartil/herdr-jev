@@ -13,7 +13,8 @@ const fixture = (name: string) => readFileSync(join(import.meta.dir, "fixtures",
 const CLAUDE_DIALOG_NO = fixture("claude-trust-dialog-27cols.txt");
 const CLAUDE_DIALOG_YES = CLAUDE_DIALOG_NO.replace("❯ No, exit\n  Yes, I trust this", "  No, exit\n❯ Yes, I trust this");
 const CLAUDE_READY = fixture("claude-ready-placeholder-30cols.txt");
-const AGY_DIALOG = fixture("agy-trust-dialog-27cols.txt");
+const AGY_FIXTURE = fixture("agy-trust-dialog-27cols.txt");
+const agyDialog = (path: string) => AGY_FIXTURE.replace("/tmp/jev-live-Mnv4-wt-t3", path);
 const AGY_READY = "Antigravity CLI\n\n> \n";
 const NUMBERED_MENU = "Pick the session model\n\n❯ 1. Opus\n  2. Sonnet\n\nEnter to confirm · Esc to cancel\n";
 const COMMAND_APPROVAL = "Would you like to run the following command?\n\n  $ rm -rf build\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\nPress enter to confirm or esc to cancel\n";
@@ -126,7 +127,7 @@ describe("trust menu parsing", () => {
   });
 
   it("finds the cursor already on the trust option in the wrapped agy dialog and ignores the footer", () => {
-    const menu = parseTrustMenu(AGY_DIALOG)!;
+    const menu = parseTrustMenu(AGY_FIXTURE)!;
     expect(menu.options.map((option) => option.text)).toEqual(["Yes, I trust this", "No, exit"]);
     expect([menu.cursorIndex, menu.trustIndex]).toEqual([0, 0]);
   });
@@ -163,7 +164,7 @@ describe("trust confirmation with the real dialog fixtures", () => {
 
   it("presses enter directly when the cursor already sits on the trust option (agy dialog)", async () => {
     install();
-    const pane = claudePane({ dialog: AGY_DIALOG, ready: AGY_READY, dialogKind: "agy" });
+    const pane = claudePane({ dialog: agyDialog(workdir), ready: AGY_READY, dialogKind: "agy" });
     const result = await launch(pane, "antigravity");
     expect(pane.keys).toEqual([["enter"]]);
     expect(result.trustConfirmed).toBe(true);
@@ -252,10 +253,10 @@ describe("trust confirmation with the real dialog fixtures", () => {
 
   it("reports a persisting dialog instead of claiming the confirmation", async () => {
     install();
-    const pane = claudePane({ dialog: AGY_DIALOG, ready: AGY_READY, dialogKind: "agy" });
+    const pane = claudePane({ dialog: agyDialog(workdir), ready: AGY_READY, dialogKind: "agy" });
     const stuck = { ...pane.client, sendKeys: async (_t: string, keys: readonly string[]) => { pane.keys.push([...keys]); return ok(); } };
     const outcome = await confirmWorkspaceTrust({ herdr: stuck, target: "peer", cwd: workdir, clock: clock() });
-    expect(outcome).toEqual({ confirmed: false, reason: "trust_dialog_persisted" });
+    expect(outcome).toEqual({ confirmed: false, reason: "trust_dialog_persisted", entered: true });
   });
 });
 

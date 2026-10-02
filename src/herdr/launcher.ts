@@ -244,10 +244,27 @@ export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): 
   return parseGridFile(gridStatePath(callerPaneId, stateDir)).records;
 }
 
+export function readAllGridWorkerRecords(stateDir?: string): GridWorkerRecord[] {
+  const dir = gridStateDir(stateDir);
+  const seen = new Set<string>();
+  const records: GridWorkerRecord[] = [];
+  for (const file of gridFiles(dir)) {
+    const parsed = parseGridFile(join(dir, file));
+    const fileCaller = parsed.callerPaneId ?? file.slice(0, -5);
+    for (const record of parsed.records) {
+      if (seen.has(record.paneId)) continue;
+      seen.add(record.paneId);
+      records.push({ ...record, callerPaneId: record.callerPaneId ?? fileCaller });
+    }
+  }
+  return records;
+}
+
 export function readGridWorkers(callerPaneId: string, stateDir?: string): string[] {
   return readGridWorkerRecords(callerPaneId, stateDir).map((r) => r.paneId);
 }
 
+const GIT_TIMEOUT_MS = 5_000;
 const GRID_LOCK_WAIT_MS = 15_000;
 const GRID_LOCK_STALE_MS = 10_000;
 
@@ -509,7 +526,7 @@ export interface WorkerSettlement {
 
 function gitRun(cwd: string, args: string[]): string | null {
   try {
-    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const text = result.status === 0 ? result.stdout.trim() : "";
     return /^[0-9a-f]{7,64}$/.test(text) ? text : null;
   } catch {
@@ -574,7 +591,7 @@ export interface WorkerCloseOutcome {
   pruneFailures: PruneFailure[];
 }
 
-const PANE_ALREADY_GONE = /\bpane_not_found\b|\bpane\b[^\n]*\bnot[_ ]found\b/i;
+const PANE_ALREADY_GONE = /\bpane_not_found\b|^\s*(?:error:\s*)?pane(?:\s+[\w:.-]+)?\s+not\s+found\.?\s*$/im;
 
 export function settleClosedWorkerRuns(records: readonly GridWorkerRecord[]): WorkerSettlement[] {
   return settleDeadRecords(records).settlements;
@@ -596,6 +613,16 @@ export function settleDeadRecords(records: readonly GridWorkerRecord[]): { settl
     if (!settled && attempts < MAX_SETTLE_ATTEMPTS) kept.set(record.paneId, { ...record, settleAttempts: attempts });
   }
   return { settlements, kept };
+}
+
+function reapDeadRecords(callerPaneId: string, deadPaneIds: ReadonlySet<string>): void {
+  const { before } = updateGridWorkers(callerPaneId, (records) => records.some((r) => deadPaneIds.has(r.paneId))
+    ? records.filter((r) => !deadPaneIds.has(r.paneId)) : null);
+  const claimed = before.filter((r) => deadPaneIds.has(r.paneId));
+  if (claimed.length === 0) return;
+  const { kept } = settleDeadRecords(claimed);
+  if (kept.size === 0) return;
+  updateGridWorkers(callerPaneId, (records) => [...records.filter((r) => !kept.has(r.paneId)), ...kept.values()]);
 }
 
 export async function closeWorkerPanes(
@@ -679,6 +706,23 @@ function hasReadyPattern(baseClient: string): boolean {
 
 const UNKNOWN_STATE_STABLE_MS = 1000;
 const UNKNOWN_STATE_GRACE_MS = 3000;
+
+function trustUnverifiedResult(
+  context: { agentName: string; paneId: string; commandText: string; direction: "right" | "down"; trustPolicyReason: string },
+): LaunchResult {
+  return {
+    ok: false,
+    ackStatus: "unknown",
+    completionState: "not_requested",
+    completionObserved: false,
+    workEvidence: "not_checked",
+    promptPending: true,
+    paneCreated: true,
+    hint: "inspect the pane, then send the task with peer-message",
+    error: "Trust confirmation was already sent; the pane still or again shows a dialog. Inspect it before dispatching work.",
+    ...context,
+  };
+}
 
 function paneBlockedResult(
   kind: PaneBlockKind,
@@ -877,7 +921,7 @@ const REVIEWER_FORBIDDEN_VALUED: ReadonlySet<string> = new Set([
   "--permission-mode", "--allowedTools", "--allowed-tools", "--tools", "--sandbox", "-s", "--ask-for-approval", "-a",
 ]);
 
-const REVIEWER_FORBIDDEN_CONFIG = /^(?:sandbox_mode|approval_policy)\s*=/;
+const REVIEWER_FORBIDDEN_CONFIG = /^\s*["']?(?:sandbox_mode|approval_policy)["']?\s*=/;
 
 function stripReviewerFlags(flags: readonly string[], profile: LaunchProfile): string[] {
   const forbidden = new Set([...REVIEWER_FORBIDDEN_FLAGS, ...profile.bypassArgs]);
@@ -891,6 +935,8 @@ function stripReviewerFlags(flags: readonly string[], profile: LaunchProfile): s
       const inline = flag.includes("=") ? flag.slice(name.length + 1) : flags[i + 1] ?? "";
       if (REVIEWER_FORBIDDEN_CONFIG.test(inline)) { if (!flag.includes("=")) i++; continue; }
     }
+    if (/^-c[^-c]/.test(flag) && REVIEWER_FORBIDDEN_CONFIG.test(flag.slice(2))) continue;
+    if (/^-[^-]./.test(flag) && valued.has(flag.slice(0, 2))) continue;
     if (forbidden.has(flag) || forbidden.has(name)) continue;
     if (valued.has(name)) {
       if (!flag.includes("=") && flags[i + 1] !== undefined && !flags[i + 1]!.startsWith("-")) i++;
@@ -1004,11 +1050,11 @@ export function formatHerdrAgentName(
 
 function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: string; gitDir?: string } {
   try {
-    const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+    const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const forkSha = rev.status === 0 && rev.stdout ? rev.stdout.trim() : undefined;
-    const branchRes = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf8" });
+    const branchRes = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const branch = branchRes.status === 0 && branchRes.stdout ? branchRes.stdout.trim() : undefined;
-    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, encoding: "utf8" });
+    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const gitDir = common.status === 0 && common.stdout.trim().startsWith("/") ? common.stdout.trim() : undefined;
     return {
       branch: branch || undefined,
@@ -1024,10 +1070,10 @@ interface TrustState {
   outcome?: TrustOutcome;
   failure?: string;
   attempted: boolean;
+  entered?: boolean;
+  reappeared?: boolean;
   trackingError?: string;
 }
-
-const TRUST_DIALOG_GONE: ReadonlySet<string> = new Set(["not_trust_dialog", "agent_not_ready_after_trust"]);
 
 const PANE_DECORATION = /[\s\u2500-\u257f|]+/g;
 
@@ -1060,7 +1106,7 @@ async function launchStageInHerdrAttempt(input: LaunchInput): Promise<LaunchResu
   const trust: TrustState = { attempted: false };
   const result = await launchStageCore(input, trust);
   const tracked = trust.trackingError ? { ...result, trackingError: trust.trackingError } : result;
-  return trust.outcome?.confirmed && !result.trustRequired ? { ...tracked, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : tracked;
+  return trust.outcome?.confirmed && !trust.reappeared && !result.trustRequired ? { ...tracked, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : tracked;
 }
 
 async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<LaunchResult> {
@@ -1099,8 +1145,13 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
         trust.outcome = outcome;
         return null;
       }
-      if (TRUST_DIALOG_GONE.has(outcome.reason)) return null;
+      if (outcome.reason === "not_trust_dialog") return null;
       trust.failure = outcome.reason;
+      if (outcome.entered) trust.entered = true;
+    }
+    if (kind === "trust" && (trust.entered || trust.outcome?.confirmed)) {
+      if (trust.outcome?.confirmed) trust.reappeared = true;
+      return trustUnverifiedResult({ agentName, commandText, ...context, trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" });
     }
     return paneBlockedResult(kind, { agentName, commandText, ...context, ...(kind === "trust" ? { trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" } : {}) });
   };
@@ -1146,6 +1197,14 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     splitRatio = plan.ratio;
   }
 
+  if (callerPaneId && deadPaneIds.size > 0) {
+    try { reapDeadRecords(callerPaneId, deadPaneIds); }
+    catch (error) {
+      trust.trackingError = errorText(error);
+      console.error(`[herdr-jev] Worker tracking unavailable for ${callerPaneId}: ${trust.trackingError}`);
+    }
+  }
+
   // 1. Split current pane with resolved direction
   const split = input.layout === "tab"
     ? await herdr.createTab?.({ label: agentName, cwd: workerCwd, workspaceId: input.workspaceId })
@@ -1174,11 +1233,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
       layout: input.layout === "tab" ? "tab" : splitLayout === "grid" ? "grid" : "split",
     };
     try {
-      const { kept } = settleDeadRecords(existingRecords.filter((r) => deadPaneIds.has(r.paneId)));
-      updateGridWorkers(callerPaneId, (records) => [
-        ...records.flatMap((r) => deadPaneIds.has(r.paneId) ? (kept.has(r.paneId) ? [kept.get(r.paneId)!] : []) : r.paneId === paneId ? [] : [r]),
-        newRecord,
-      ]);
+      updateGridWorkers(callerPaneId, (records) => [...records.filter((r) => r.paneId !== paneId), newRecord]);
     } catch (error) {
       trust.trackingError = errorText(error);
       console.error(`[herdr-jev] Worker tracking unavailable for ${paneId}: ${trust.trackingError}`);
@@ -1206,8 +1261,15 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   }
   if (startFailed) {
     const ackStatus = classifyHerdrCommandFailure(started);
-    if (ackStatus === "rejected") await herdr.closePane(paneId);
-    return { ok: false, ackStatus, paneCreated: ackStatus === "unknown", promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
+    let paneClosed = false;
+    if (ackStatus === "rejected") {
+      const closed = await herdr.closePane(paneId);
+      paneClosed = closed.ok || PANE_ALREADY_GONE.test(`${closed.stdout}\n${closed.stderr}`);
+      if (paneClosed && callerPaneId) {
+        try { pruneGridWorkers([paneId]); } catch {}
+      }
+    }
+    return { ok: false, ackStatus, paneCreated: ackStatus === "unknown" || (ackStatus === "rejected" && !paneClosed), promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
   }
 
   if (herdr.reportSpawn) {

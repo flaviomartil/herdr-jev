@@ -81,7 +81,7 @@ describe("subagent worktree helper", () => {
     mkdirSync(repoDir);
     
     spawnSync("git", ["init"], { cwd: repoDir });
-    spawnSync("git", ["commit", "--allow-empty", "-m", "init", "--author", "Test <test@example.com>"], { cwd: repoDir });
+    spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "init"], { cwd: repoDir });
     
     // We import defaultGitRunner from agents.js to test with real git commands
     const { defaultGitRunner } = await import("../src/herdr/agents.js");
