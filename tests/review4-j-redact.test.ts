@@ -19,8 +19,8 @@ test("round 4 finding 1: a hex prefix wrapped after a redacted token is dropped"
   expect(out).not.toContain(HEX.slice(26));
 });
 
-test("round 4 finding 1: a redacted line whose next line is unrelated is still shown", () => {
-  expect(lastMeaningfulLine("token: abcd1234efgh\nall_done")).toBe("token: [REDACTED]");
+test("round 4 finding 1: a line holding a secret is dropped instead of shown redacted", () => {
+  expect(lastMeaningfulLine("token: abcd1234efgh\nall_done")).toBe("");
   expect(lastMeaningfulLine("password=x\nall done")).toBe("done");
 });
 
@@ -32,7 +32,7 @@ test("round 4 finding 2: a key=value secret wrapped over three lines does not le
   expect(out).not.toContain(last);
   expect(out).not.toContain(middle);
   expect(out).not.toContain("Zx!");
-  expect(lastMeaningfulLine(`${first}\n${middle}\n${last}`)).toBe("password=[REDACTED]");
+  expect(lastMeaningfulLine(`${first}\n${middle}\n${last}`)).toBe("");
 });
 
 test("round 4 finding 2: a secret wrapped over four lines does not leak its tail", () => {

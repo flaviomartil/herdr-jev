@@ -16,7 +16,7 @@ test("finding 1: a base64 secret followed by a semicolon, colon or angle bracket
     expect(out).not.toContain(BASE64_SECRET);
     expect(out).toBe(`value [REDACTED]${next}tail`);
   }
-  expect(lastMeaningfulLine(`copied ${BASE64_SECRET};done`)).toBe("copied [REDACTED];done");
+  expect(lastMeaningfulLine(`copied ${BASE64_SECRET};done`)).toBe("");
 });
 
 test("finding 2: a quoted value with no closing quote is redacted", () => {
@@ -26,7 +26,7 @@ test("finding 2: a quoted value with no closing quote is redacted", () => {
   expect(redactSecrets("run --token 'abc def")).toBe("run --token '[REDACTED]");
   expect(redactSecrets('{"api_key": "abc def ghi')).toBe('{"api_key": "[REDACTED]');
   expect(redactSecrets('first line\nsecret: "abc def\nnext line')).toBe('first line\nsecret: "[REDACTED]\nnext line');
-  expect(lastMeaningfulLine('export API_KEY="hunter2abc')).toBe('export API_KEY="[REDACTED]');
+  expect(lastMeaningfulLine('export API_KEY="hunter2abc')).toBe("");
 });
 
 test("finding 2: closed quoted values keep their closing quote and the text after them", () => {

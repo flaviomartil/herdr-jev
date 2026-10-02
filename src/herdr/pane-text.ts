@@ -138,6 +138,7 @@ export function lastMeaningfulLine(text: string): string {
     let line = lines[i].trim();
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
+    if (!isSafeToShow(unboxLine(line))) continue;
 
     const before = precedingLines(lines, i);
     const nextLine = followingLine(lines, i);
@@ -163,6 +164,7 @@ export function lastMeaningfulLine(text: string): string {
     const stripped = line.replace(/^[•●·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
     if (!stripped) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(stripped))) continue;
+    if (!isSafeToShow(stripped)) continue;
 
     if (isAction && !lastActionLine) {
       lastActionLine = stripped;
@@ -174,24 +176,23 @@ export function lastMeaningfulLine(text: string): string {
   }
 
   const chosen = lastActionLine ?? lastFallbackLine ?? "";
-  const redacted = redactSecrets(chosen);
-  return redacted.length > 100 ? redacted.slice(0, 100) : redacted;
+  if (!isSafeToShow(chosen)) return "";
+  return chosen.length > 100 ? chosen.slice(0, 100) : chosen;
 }
 
 const KEY_CHAR = "[a-zA-Z0-9_.-]";
-const SECRET_WORD = "(?:password|token|secret|api[_-]?key)";
+const SECRET_WORD = "(?:pass(?:word|wd|wrd|phrase)|secret|token|api[_-]?key|bearer|credential)";
+const SEPARATOR = "(?:===|==(?!=)|=>|:=|!==|!=(?!=)|=(?![=>])|:(?!=))";
+const KEY_PART = `(?:(?=${KEY_CHAR}*?${SECRET_WORD})${KEY_CHAR}+|${KEY_CHAR}*?api[ ]key)`;
+const KEY_PREFIX = `(?<!${KEY_CHAR})${KEY_PART}["']?\\]?\\s*${SEPARATOR}`;
 const QUOTED_OR_OPEN = "(?<q>[\"'])(?:(?:\\\\.|(?!\\k<q>)[^\\\\])*(?<c>\\k<q>)|[^\\r\\n]*)";
 
-const QUOTED_KEY_VALUE = new RegExp(
-  `(?<!${KEY_CHAR})(?=${KEY_CHAR}*?${SECRET_WORD})(?<p>${KEY_CHAR}+["']?\\s*[:=]\\s*)${QUOTED_OR_OPEN}`,
-  "gi",
-);
-const PLAIN_VALUE = `(?:(?:bearer|basic)\\s+)?[^\\s"';&,}]+(?:[;&,](?=(?<seg>[^\\s"';&,}=:]+))\\k<seg>(?![=:]))*`;
+const QUOTED_KEY_VALUE = new RegExp(`(?<p>${KEY_PREFIX}\\s*)${QUOTED_OR_OPEN}`, "gi");
+const SPACED_KEY_VALUE = new RegExp(`(?<p>${KEY_PREFIX}[ \\t]+)(?=[^\\s"'])[^\\r\\n]+`, "gi");
+const VALUE_CHAR = `[^\\s"';&,}]`;
+const PLAIN_VALUE = `(?:(?:bearer|basic)\\s+)?${VALUE_CHAR}(?:${VALUE_CHAR}|[}"']+(?=${VALUE_CHAR}))*(?:[;&,](?=(?<seg>[^\\s"';&,}=:]+))\\k<seg>(?![=:]))*`;
 
-const PLAIN_KEY_VALUE = new RegExp(
-  `(?<!${KEY_CHAR})(?=${KEY_CHAR}*?${SECRET_WORD})(?<p>${KEY_CHAR}+["']?\\s*[:=]\\s*)${PLAIN_VALUE}`,
-  "gi",
-);
+const PLAIN_KEY_VALUE = new RegExp(`(?<p>${KEY_PREFIX}\\s*)${PLAIN_VALUE}`, "gi");
 const QUOTED_FLAG_VALUE = new RegExp(
   `(?<![a-z0-9_-])(?<p>--[a-z0-9_-]*${SECRET_WORD}\\b["']?\\s+)${QUOTED_OR_OPEN}`,
   "gi",
@@ -200,6 +201,14 @@ const PLAIN_FLAG_VALUE = new RegExp(
   `(?<![a-z0-9_-])(?<p>--[a-z0-9_-]*${SECRET_WORD}\\b["']?\\s+)${PLAIN_VALUE}`,
   "gi",
 );
+const SENSITIVE_LINE = new RegExp(
+  `(?:pass(?:word|wd|wrd|phrase)|secret|token|api[ _-]?key|authorization|credential|bearer)${KEY_CHAR}*["']?\\]?\\s*${SEPARATOR}|\\bbearer\\s+\\S`,
+  "i",
+);
+
+function isSafeToShow(text: string): boolean {
+  return redactSecrets(text) === text && !SENSITIVE_LINE.test(text) && !text.includes("[REDACTED]");
+}
 
 function looksLikeBasicCredential(token: string): boolean {
   return /[0-9+=]/.test(token) || /[A-Z]/.test(token.slice(1));
@@ -225,6 +234,7 @@ export function redactSecrets(text: string): string {
   if (bounded.truncated && bounded.text === "") return WHOLE_INPUT_REDACTED;
   let result = bounded.text;
   result = result.replace(QUOTED_KEY_VALUE, "$<p>$<q>[REDACTED]$<c>");
+  result = result.replace(SPACED_KEY_VALUE, "$<p>[REDACTED]");
   result = result.replace(PLAIN_KEY_VALUE, "$<p>[REDACTED]");
   result = result.replace(QUOTED_FLAG_VALUE, "$<p>$<q>[REDACTED]$<c>");
   result = result.replace(PLAIN_FLAG_VALUE, "$<p>[REDACTED]");
