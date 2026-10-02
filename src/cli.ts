@@ -15,6 +15,8 @@ import {
   listAllGridWorkers,
   filterWorkerClosePlan,
   executeWorkerClose,
+  registerWorkerRun,
+  builtinLaunchArgs,
   type SplitDirectionOption,
 } from "./herdr/launcher.js";
 import {
@@ -24,7 +26,8 @@ import {
 } from "./delegation/cross-harness.js";
 import { resolveStageSpec } from "./pipelines/matrix.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
-import { checkHarnessStatus, externalRun, readUsageQuota } from "./harness/bridge.js";
+import { checkHarnessStatus, externalRun, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
+import { formatReviewReport, runReview } from "./harness/review.js";
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
 import { resolveHerdrContext } from "./herdr/context.js";
 import { resolvePeerStage, converseWithPeer } from "./herdr/peer.js";
@@ -46,6 +49,7 @@ import {
   writeAutoConfigEnv,
 } from "./discovery/harness-detector.js";
 import type { ClientKind, RoleKind } from "./types/index.js";
+import { resolveBaseClientKind } from "./config/aliases.js";
 import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
 import { classifyPaneText, parseClassifyInput, readClassifyInput } from "./triage/pane-classifier.js";
@@ -54,12 +58,13 @@ import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
 import { buildDailyReport, formatDailyText, formatDailyMarkdown, writeDailyMarkdown } from "./herdr/daily.js";
 import { buildAgentsView, formatAgentsTable } from "./herdr/agents.js";
-import { assertRunId, formatRunHistory, listRunHistory } from "./orchestration/run-history.js";
+import { assertRunId, formatRunHistory, listRunHistory, mergeRunHistory } from "./orchestration/run-history.js";
 import { studio, studioEventPane } from "./herdr/studio.js";
 import { changeEffort } from "./herdr/effort.js";
 import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
 
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -372,7 +377,8 @@ runsCommand
   .option("--limit <n>", "Maximum number of runs", "20")
   .option("--json", "Output JSON")
   .action((options: { limit: string; json?: boolean }) => {
-    const runs = listRunHistory(undefined, Number(options.limit));
+    const limit = Number(options.limit);
+    const runs = mergeRunHistory(listRunHistory(undefined, limit), listHarnessRuns({ limit, kind: "all" }), limit);
     if (options.json) console.log(JSON.stringify(runs, null, 2));
     else for (const run of runs) console.log(formatRunHistory(run));
   });
@@ -518,8 +524,12 @@ program
         }
       }
 
+      const runId = result.paneId && result.agentName
+        ? registerWorkerRun({ client: effectiveClient, model: stage.model, role, cwd: finalCwd, pane: result.paneId, handle: result.agentName,
+          prompt: promptText, callerPaneId: context.sourcePaneId })
+        : null;
       console.log(`[herdr-jev] Subagent active in pane ${result.paneId} (${result.agentName})`);
-      console.log(JSON.stringify({ ...result, client: effectiveClient, model: stage.model, effort: nativeStageEffort(effectiveClient, stage.effort) ?? null,
+      console.log(JSON.stringify({ ...result, ...(runId ? { runId } : {}), client: effectiveClient, model: stage.model, effort: nativeStageEffort(effectiveClient, stage.effort) ?? null,
         recommendedEffort: stage.effort, effortApplied: nativeStageEffort(effectiveClient, stage.effort) !== undefined }));
       await herdr.notify("Herdr-Jev", `Subagent spawned in pane ${result.paneId}`, "done");
       return;
@@ -534,6 +544,35 @@ program
       process.exit(inlineResult.exitCode || 1);
     }
   
+  });
+
+program
+  .command("review")
+  .description("Verify with the repository tests, then run one independent read-only judge per scope through the AI Harness")
+  .option("--scopes <spec>", "Scopes as name=path1,path2;name2=path3; defaults to up to four scopes derived from the changed files")
+  .option("--timeout-ms <ms>", "Deadline for each judge", "600000")
+  .option("--verify-command-json <path>", "JSON argv file for the deterministic check; defaults to bun test when package.json has a test script")
+  .option("--client <client>", "Client whose reviewer profile is used; defaults to the caller agent")
+  .option("--cwd <path>", "Repository to review; defaults to the current repository")
+  .option("--session <id>", "Review session id; generated when omitted")
+  .option("--model <id>", "Exact current model used to resolve the delegation profile")
+  .option("--available-models <ids>", "Verified available exact model IDs, comma-separated")
+  .option("--json", "Output the full report as JSON")
+  .action(async (options: { scopes?: string; timeoutMs: string; verifyCommandJson?: string; client?: string; cwd?: string; session?: string; model?: string; availableModels?: string; json?: boolean }) => {
+    try {
+      const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: options.cwd ?? process.cwd(), encoding: "utf8" });
+      const cwd = options.cwd ?? (top.status === 0 && top.stdout.trim() ? top.stdout.trim() : process.cwd());
+      const context = await resolveHerdrContext({ client: options.client, model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) });
+      const report = await runReview({ cwd, client: context.client, session: options.session, scopes: options.scopes, timeoutMs: Number(options.timeoutMs),
+        verifyCommandJson: options.verifyCommandJson, model: options.model ?? context.delegation.model,
+        availableModels: options.availableModels?.split(",").filter(Boolean) ?? context.delegation.availableModels });
+      console.log(options.json ? JSON.stringify(report, null, 2) : formatReviewReport(report));
+      if (report.status !== "ready") process.exitCode = 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(options.json ? JSON.stringify({ error: message }) : `Review failed: ${message}`);
+      process.exitCode = 1;
+    }
   });
 
 program.command("peer-message [agent] [text]")
@@ -659,6 +698,19 @@ modelsCommand
     console.log(`Confidence: ${(result.classification.confidence * 100).toFixed(1)}%`);
     console.log(`Rationale: ${result.classification.rationale}`);
     console.log(`Latency: ${result.classification.latencyMs}ms\n`);
+  });
+
+modelsCommand
+  .command("catalog [client]")
+  .description("Print the model catalog answered by the AI Harness: CLI ids, efforts, bypass and read-only arguments")
+  .action((client?: string) => {
+    const probe = harnessModelCatalog(client ? resolveBaseClientKind(client) : undefined);
+    if (probe.ok) {
+      console.log(JSON.stringify(probe.value, null, 2));
+      return;
+    }
+    console.log(JSON.stringify({ available: false, reason: probe.error ?? "harness_unavailable", fallback: builtinLaunchArgs() }, null, 2));
+    process.exitCode = 1;
   });
 
 modelsCommand
@@ -912,9 +964,10 @@ workers
       return;
     }
 
-    await executeWorkerClose(client, plan);
+    const settlements = await executeWorkerClose(client, plan);
     for (const item of plan) {
-      console.log(`Closed ${item.paneId} (${item.status})`);
+      const settlement = settlements.find((candidate) => candidate.paneId === item.paneId);
+      console.log(`Closed ${item.paneId} (${item.status})${settlement ? ` run ${settlement.runId} ${settlement.settled ? "settled" : "not settled"}` : ""}`);
     }
   });
 

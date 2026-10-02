@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import type { HarnessWorkerRun } from "../harness/bridge.js";
 
 export const runIdPattern = /^[a-f0-9-]{36}$/;
 export const retryableStageStates = new Set(["failed", "unknown", "blocked"]);
@@ -79,6 +80,27 @@ export function formatRunAge(timestampMs: number, now = Date.now()): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
-export function formatRunHistory(entry: RunHistoryEntry, now = Date.now()): string {
-  return [entry.id, runStateSummary(entry.projection), runLocation(entry.projection), formatRunAge(entry.timestampMs, now)].filter(Boolean).join("  ");
+export type MergedRunEntry = RunHistoryEntry & { kind: string; source: "local" | "harness" | "both" };
+
+export function mergeRunHistory(local: readonly RunHistoryEntry[], remote: readonly HarnessWorkerRun[] | null, limit = 20): MergedRunEntry[] {
+  const merged = new Map<string, MergedRunEntry>();
+  for (const entry of local) merged.set(entry.id, { ...entry, kind: "pipeline", source: "local" });
+  for (const run of remote ?? []) {
+    const kind = typeof run.kind === "string" && run.kind ? run.kind : "pipeline";
+    const existing = merged.get(run.id);
+    if (existing) {
+      merged.set(run.id, { ...existing, kind, source: "both" });
+      continue;
+    }
+    const created = typeof run.createdAt === "string" ? Date.parse(run.createdAt) : NaN;
+    const timestampMs = Number.isFinite(created) ? created : 0;
+    const projection = { id: run.id, kind, cwd: run.cwd, created_at: run.createdAt,
+      tasks: (run.stages ?? []).map((stage) => ({ id: stage.role, state: stage.state })) };
+    merged.set(run.id, { id: run.id, projection, mtimeMs: timestampMs, timestampMs, kind, source: "harness" });
+  }
+  return [...merged.values()].sort((a, b) => b.timestampMs - a.timestampMs || b.mtimeMs - a.mtimeMs).slice(0, limit);
+}
+
+export function formatRunHistory(entry: RunHistoryEntry & { kind?: string }, now = Date.now()): string {
+  return [entry.id, entry.kind, runStateSummary(entry.projection), runLocation(entry.projection), formatRunAge(entry.timestampMs, now)].filter(Boolean).join("  ");
 }
