@@ -59,6 +59,7 @@ const LOCK_WAIT_MS = 3_000;
 const RELEASE_STALE_AGE_MS = 15 * 60 * 1000;
 const MAX_RELEASE_ATTEMPTS = 3;
 const LOCK_OVERTIME_TAKEOVERS = 3;
+const LOCK_LOST_RETRIES = 5;
 const HOOK_TIMEOUT_MS = 5_000;
 const HOOK_KILL_GRACE_MS = 1_000;
 const OUTBOUND_TITLE_LIMIT = 2_048;
@@ -143,11 +144,11 @@ function sleep(ms: number): Promise<void> {
 
 type TakeOver = "taken" | "missing" | "fresh" | "failed";
 
-function restoreGrave(file: string, grave: string) {
+export function restoreGrave(file: string, grave: string, link: (existing: string, created: string) => void = linkSync) {
   try {
-    linkSync(grave, file);
+    link(grave, file);
   } catch (e: any) {
-    if (e?.code !== "EEXIST") {
+    if (e?.code !== "EEXIST" && !existsSync(file)) {
       try {
         renameSync(grave, file);
         return;
@@ -228,13 +229,38 @@ function releaseLock(lockFile: string, token: string) {
 export async function updateEscalations(file: string, mutate: (records: EscalationRecord[]) => EscalationRecord[], hooks: EscalationLockHooks = {}): Promise<void> {
   mkdirSync(dirname(file), { recursive: true });
   const lockFile = `${file}.lock`;
-  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
   const deadline = Date.now() + (hooks.lockWaitMs ?? LOCK_WAIT_MS);
   let overtime = 0;
+  for (let attempt = 0; ; attempt++) {
+    const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
+    await acquireLock(lockFile, token, deadline, hooks, () => overtime++);
+    try {
+      const next = mutate(readEscalationsForUpdate(file));
+      if (!holdsLock(lockFile, token)) {
+        if (attempt >= LOCK_LOST_RETRIES) throw new Error("escalation_lock_lost");
+        continue;
+      }
+      writeEscalations(file, next);
+      return;
+    } finally {
+      releaseLock(lockFile, token);
+    }
+  }
+}
+
+function holdsLock(lockFile: string, token: string): boolean {
+  try {
+    return readFileSync(lockFile, "utf-8") === token;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function acquireLock(lockFile: string, token: string, deadline: number, hooks: EscalationLockHooks, countOvertime: () => number): Promise<void> {
   for (;;) {
     try {
       writeFileSync(lockFile, token, { flag: "wx" });
-      break;
+      return;
     } catch (e: any) {
       if (e?.code !== "EEXIST") throw e;
       const expired = Date.now() > deadline;
@@ -251,7 +277,7 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
       const stale = age > LOCK_STALE_MS;
       const future = age < -CLOCK_SKEW_MS;
       if (expired && !stale && !future) throw new Error("escalation_lock_timeout");
-      if (expired && overtime++ >= LOCK_OVERTIME_TAKEOVERS) throw new Error("escalation_lock_timeout");
+      if (expired && countOvertime() >= LOCK_OVERTIME_TAKEOVERS) throw new Error("escalation_lock_timeout");
       if (stale || (expired && future)) {
         await hooks.afterStaleLockSeen?.();
         const outcome = takeOverStale(lockFile, (snapshot) => {
@@ -262,11 +288,6 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
       }
       await sleep(15);
     }
-  }
-  try {
-    writeEscalations(file, mutate(readEscalationsForUpdate(file)));
-  } finally {
-    releaseLock(lockFile, token);
   }
 }
 
@@ -385,8 +406,11 @@ function claimStale(claimFile: string, now: number): boolean {
   return age > CLAIM_STALE_MS || age < -CLOCK_SKEW_MS;
 }
 
+const PANE_GONE_TEXT = /\bpane_not_found\b|^\s*(?:error:\s*)?pane(?:\s+[\w:.-]+)?\s+not\s+found\.?\s*$/im;
+
 function isPaneGone(res: { stdout?: string; stderr?: string }): boolean {
   for (const text of [res.stdout, res.stderr]) {
+    if (typeof text === "string" && PANE_GONE_TEXT.test(text)) return true;
     try {
       const error = JSON.parse(text as string)?.error;
       const code = typeof error === "string" ? error : error?.code;
@@ -496,6 +520,10 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   if (opts.reason && !REASONS.has(opts.reason)) {
     return { sent: false, skippedReason: "invalid reason", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
+  if (opts.dryRun && (opts.releaseAll || opts.releaseStale || opts.release)) {
+    return previewRelease(opts);
+  }
+
   if (opts.releaseAll) {
     return handleReleaseAll(runner, opts.owner);
   }
@@ -695,6 +723,24 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     result.escalation = escalationResult;
   }
   return result;
+}
+
+function previewRelease(opts: NotifyOptions): { sent: boolean; skippedReason?: string; channels: string[]; dryRun: true; wouldSend?: string[] } {
+  const escalationsFile = join(resolveStateDir(), "notify", "escalations.json");
+  const records = existsSync(escalationsFile) ? readEscalations(escalationsFile) : [];
+  const preview = (channel: string, count: number) =>
+    count > 0 ? { sent: false, dryRun: true as const, wouldSend: [channel], channels: [] } : { sent: false, dryRun: true as const, channels: [] };
+  if (opts.releaseAll) {
+    const eligible = records.filter((record) => (opts.owner !== undefined ? record.owner === opts.owner : !ownerAlive(record.owner)));
+    return preview("release-all", eligible.length);
+  }
+  if (opts.releaseStale) {
+    const now = opts.now || Date.now();
+    return preview("release-stale", records.filter((record) => now - record.time > RELEASE_STALE_AGE_MS).length);
+  }
+  if (!opts.pane) return { sent: false, skippedReason: "no pane specified for release", channels: [], dryRun: true };
+  if (!records.some((record) => record.pane === opts.pane)) return { sent: false, skippedReason: "no escalation", channels: [], dryRun: true };
+  return preview("release", 1);
 }
 
 async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[] }> {
