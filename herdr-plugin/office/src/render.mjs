@@ -8,6 +8,7 @@ import { terms } from './filter.mjs';
 import { pile, dirtBadge, dirtWords, PILE_MAX } from './dirt.mjs';
 import { pressure, headBadge, headWords } from './head.mjs';
 import { roomWall, roomOf, roomsShown } from './rooms.mjs';
+import { deskScene } from './desk-scene.mjs';
 // Shared with the pixel chart that covers the bar row, so the coarse bar and the fine
 // one divide the same numbers the same way and cannot disagree about which slice won a
 // rounding contest.
@@ -320,6 +321,26 @@ function eventSlab(label, kind) {
 }
 
 const SPARKLE_PATTERNS = ['  * ▄▄▄▄▄ + ', '  · ▄▄▄▄▄ * ', '  + ▄▄▄▄▄ · ', '  * ▄▄▄▄▄ o '];
+const SCENE_PILE_X = 11;
+const SCENE_BEZEL = '#343a40';
+const SCENE_ROWS = 6;
+const SCENE_ANSWER = ' [y]    [n] ';
+
+const sceneColors = () => (process.env.NO_COLOR !== undefined && process.env.NO_COLOR !== '' ? 'none' : 'true');
+
+const darken = (hex, k) => {
+  const n = parseInt(hex.slice(1), 16);
+  const ch = (v) => Math.round(v * k).toString(16).padStart(2, '0');
+  return `#${ch((n >> 16) & 255)}${ch((n >> 8) & 255)}${ch(n & 255)}`;
+};
+
+const stamp = (sceneRow, col, str, style) => {
+  const chars = [...sceneRow.text];
+  const put = [...str];
+  for (let i = 0; i < put.length; i += 1) if (col + i < chars.length) chars[col + i] = put[i];
+  sceneRow.text = chars.join('');
+  sceneRow.spans.push({ from: col, to: col + put.length, ...style });
+};
 const GAUGE_BLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█'];
 
 export function parseQuotaPercent(raw) {
@@ -548,6 +569,31 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   }
   runRow.gap(INNER);
 
+  const scene = deskScene({
+    person: bubble && !person.ask ? { ...person, ask: 'needs your OK' } : person,
+    frame,
+    width: INNER,
+    accent: darken(st.fg, 0.5),
+    label: person.status === 'blocked' ? 'APPROVE?' : person.status === 'working' ? monitorLabel : null,
+    sparkline: person.status === 'blocked' ? SCENE_ANSWER : person.hiredSparkle ? SPARKLE_PATTERNS[reducedMotion ? 0 : frame % SPARKLE_PATTERNS.length] : null,
+    reducedMotion,
+    colors: sceneColors(),
+  });
+  if (scene && scene.length !== SCENE_ROWS) throw new Error(`the desk scene is ${scene.length} rows, want ${SCENE_ROWS}`);
+  if (scene) {
+    if (!bubble && person.event?.label) {
+      const tint = eventTint(person.event.kind);
+      const text = ' ' + padEnd(truncate(person.event.label, INNER - MON_X - 1), INNER - MON_X - 1) + ' ';
+      stamp(scene[0], MON_X - 1, text, { bg: tint.bg, fg: tint.ink, bold: true });
+    }
+    const badge = headBadge(person.head?.used);
+    if (badge) {
+      const band = pressure(person.head?.used);
+      stamp(scene[2], MON_X + 1, ` ${band === 'brimming' ? '!' : ''}${badge} `, { fg: headTint(band) || P.soft, bg: SCENE_BEZEL, bold: true });
+    }
+    if (paper) stamp(scene[5], SCENE_PILE_X, PAPER[paper - 1].repeat(paper + PAPER_MIN - 1), { fg: person.dirt?.conflicts ? SNAG_FG : PAPER_FG });
+  }
+
   const topRows = [];
   if (needsAttention) {
     const banner = cells();
@@ -557,33 +603,38 @@ function tile(person, { selected, frame, now, lifted = false, dropTarget = false
   }
   topRows.push(row(plate.out().text, plate.out().spans, plateBg));
   topRows.push(card ? row(card.text, card.spans) : row(' '.repeat(INNER), []));
-  topRows.push(bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : row(' '.repeat(INNER), []));
+  if (!scene) topRows.push(bubble ? row(bubble.text, bubble.spans) : slab ? row(slab.text, slab.spans) : row(' '.repeat(INNER), []));
 
+  const artRowsOut = scene
+    ? scene.map((r, i) => row(r.text, r.spans, i === SCENE_ROWS - 1 ? P.deskTop : P.cubicle))
+    : [
+        row(art(hair, bezelTop(person.head?.used)), [
+          { from: 0, to: POSE_W, fg: person.hiredSparkle ? '#ffe6a8' : emoteFg, bold: Boolean(person.hiredSparkle) },
+          { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
+          ...(bubble ? [{ from: TAIL_X, to: TAIL_X + 1, fg: P.bubble }] : []),
+          { from: MON_X, to: INNER, fg: bezel },
+        ]),
+        row(art(body.rows[1], '│' + scr[0] + '│'), [{ from: 0, to: POSE_W, fg: who.skin }, ...mon]),
+        row(art(body.rows[2], '│' + scr[1] + '│'), [{ from: 0, to: POSE_W, fg: who.shirt }, ...mon]),
+        row(art(body.rows[ART_ROWS - 1], BEZEL_BOT), [
+          { from: 0, to: POSE_W, fg: who.shirt },
+          { from: MON_X, to: INNER, fg: bezel },
+        ]),
+        row(
+          paper ? over(DESK_TOP, PAPER[paper - 1].repeat(paper + PAPER_MIN - 1), PAPER_X) : DESK_TOP,
+          [
+            { from: NOTE_X, to: NOTE_X + 1, fg: '#f2d98a' },
+            ...(paper ? [{ from: PAPER_X, to: PAPER_X + paper + PAPER_MIN - 1, fg: person.dirt?.conflicts ? SNAG_FG : PAPER_FG }] : []),
+            { from: KEYS_X, to: KEYS_X + 10, fg: P.keys },
+            { from: MUG_X, to: MUG_X + 1, fg: '#e9e4d9' },
+          ],
+          P.deskTop,
+        ),
+      ];
   const rows = [
     edge('╭', '╮', TILE_W, chrome),
     ...topRows,
-    row(art(hair, bezelTop(person.head?.used)), [
-      { from: 0, to: POSE_W, fg: person.hiredSparkle ? '#ffe6a8' : emoteFg, bold: Boolean(person.hiredSparkle) },
-      { from: HAIR_FROM, to: HAIR_TO, fg: who.hair },
-      ...(bubble ? [{ from: TAIL_X, to: TAIL_X + 1, fg: P.bubble }] : []),
-      { from: MON_X, to: INNER, fg: bezel },
-    ]),
-    row(art(body.rows[1], '│' + scr[0] + '│'), [{ from: 0, to: POSE_W, fg: who.skin }, ...mon]),
-    row(art(body.rows[2], '│' + scr[1] + '│'), [{ from: 0, to: POSE_W, fg: who.shirt }, ...mon]),
-    row(art(body.rows[ART_ROWS - 1], BEZEL_BOT), [
-      { from: 0, to: POSE_W, fg: who.shirt },
-      { from: MON_X, to: INNER, fg: bezel },
-    ]),
-    row(
-      paper ? over(DESK_TOP, PAPER[paper - 1].repeat(paper + PAPER_MIN - 1), PAPER_X) : DESK_TOP,
-      [
-        { from: NOTE_X, to: NOTE_X + 1, fg: '#f2d98a' },
-        ...(paper ? [{ from: PAPER_X, to: PAPER_X + paper + PAPER_MIN - 1, fg: person.dirt?.conflicts ? SNAG_FG : PAPER_FG }] : []),
-        { from: KEYS_X, to: KEYS_X + 10, fg: P.keys },
-        { from: MUG_X, to: MUG_X + 1, fg: '#e9e4d9' },
-      ],
-      P.deskTop,
-    ),
+    ...artRowsOut,
     row(runRow.out().text, runRow.out().spans),
     ...(needsAttention ? [] : [row(bar.out().text, bar.out().spans)]),
     row(foot.out().text, foot.out().spans),
