@@ -143,7 +143,7 @@ describe("Agent Command Builder", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high"]);
+    expect(cmd).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", "--dangerously-skip-permissions"]);
   });
 
   it("builds codex command with reasoning effort config flag", () => {
@@ -154,7 +154,7 @@ describe("Agent Command Builder", () => {
       extraFlags: ["-c", 'model_reasoning_effort="xhigh"'],
       description: "implementer",
     });
-    expect(cmd).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="xhigh"']);
+    expect(cmd).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="xhigh"', "--dangerously-bypass-approvals-and-sandbox"]);
   });
 
   it("builds antigravity command and maps to agy kind", () => {
@@ -165,7 +165,7 @@ describe("Agent Command Builder", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["agy", "--model", "gemini-3.8-flash-high"]);
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions"]);
     expect(mapClientToHerdrKind("antigravity")).toBe("agy");
   });
 });
@@ -316,10 +316,10 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
     };
 
     const interactiveCmd = buildInlineCommand("claude", stage, "Analyze authentication flow");
-    expect(interactiveCmd).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "medium", "Analyze authentication flow"]);
+    expect(interactiveCmd).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "medium", "--dangerously-skip-permissions", "Analyze authentication flow"]);
 
     const nonInteractiveCmd = buildInlineCommand("claude", stage, "Analyze authentication flow", true);
-    expect(nonInteractiveCmd).toEqual(["claude", "-p", "Analyze authentication flow", "--model", "claude-sonnet-5-5", "--effort", "medium"]);
+    expect(nonInteractiveCmd).toEqual(["claude", "-p", "Analyze authentication flow", "--model", "claude-sonnet-5-5", "--effort", "medium", "--dangerously-skip-permissions"]);
   });
 
   it("builds inline commands for codex with extra flags in both modes", () => {
@@ -338,6 +338,7 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
       "gpt-5.6-luna",
       "-c",
       'model_reasoning_effort="xhigh"',
+      "--dangerously-bypass-approvals-and-sandbox",
       "Implement API endpoint",
     ]);
 
@@ -350,6 +351,7 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
       "gpt-5.6-luna",
       "-c",
       'model_reasoning_effort="xhigh"',
+      "--dangerously-bypass-approvals-and-sandbox",
     ]);
   });
 
@@ -363,10 +365,10 @@ describe("Subagent Execution Mode: Split vs Inline", () => {
     };
 
     const interactiveCmd = buildInlineCommand("antigravity", stage, "Scan repository structure");
-    expect(interactiveCmd).toEqual(["agy", "-i", "Scan repository structure", "--model", "gemini-3.8-flash-high"]);
+    expect(interactiveCmd).toEqual(["agy", "-i", "Scan repository structure", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions"]);
 
     const nonInteractiveCmd = buildInlineCommand("antigravity", stage, "Scan repository structure", true);
-    expect(nonInteractiveCmd).toEqual(["agy", "-p", "Scan repository structure", "--model", "gemini-3.8-flash-high"]);
+    expect(nonInteractiveCmd).toEqual(["agy", "-p", "Scan repository structure", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions"]);
   });
 });
 
@@ -602,7 +604,7 @@ describe("Client Aliases & Executable Resolution", () => {
       description: "implementer",
     };
     const cmd = buildAgentCommand("claude-px", stage);
-    expect(cmd).toEqual(["claude-px", "--model", "claude-sonnet-5-5", "--effort", "high"]);
+    expect(cmd).toEqual(["claude-px", "--model", "claude-sonnet-5-5", "--effort", "high", "--dangerously-skip-permissions"]);
 
     delete process.env.HERDR_JEV_ALLOW_ALIASES;
   });

@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { hasExhaustedUsageQuota } from "../harness/bridge.js";
+import { resolveConfigDir, resolveConfigDirs } from "../herdr/state-dir.js";
 import type { ClientKind, RoleKind, ReasoningEffort } from "../types/index.js";
 
 export interface ModelCatalogEntry {
@@ -31,8 +31,15 @@ const DEFAULT_CONFIG_PATH = join(
 );
 
 function userConfigDir(): string {
-  const override = process.env.HERDR_JEV_CONFIG_DIR?.trim();
-  return override ? override : join(homedir(), ".config", "herdr");
+  return resolveConfigDir();
+}
+
+function readableUserFile(name: string): string {
+  for (const dir of resolveConfigDirs()) {
+    const candidate = join(dir, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return join(userConfigDir(), name);
 }
 
 function userConfigFile(): string {
@@ -52,7 +59,7 @@ export function loadBaseCatalog(): CatalogSchema {
 }
 
 export function loadUserOverrides(): Record<string, string> {
-  const file = userConfigFile();
+  const file = readableUserFile("herdr-jev-models.json");
   if (existsSync(file)) {
     try {
       return JSON.parse(readFileSync(file, "utf-8"));
@@ -74,7 +81,7 @@ export function saveUserOverride(clientRoleKey: string, newModel: string): void 
 }
 
 export function loadQuotaRecords(): QuotaEntry[] {
-  const file = userQuotasFile();
+  const file = readableUserFile("herdr-jev-quotas.json");
   if (existsSync(file)) {
     try {
       const records = JSON.parse(readFileSync(file, "utf-8")) as QuotaEntry[];

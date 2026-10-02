@@ -6,8 +6,10 @@ import { dirname, join } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
 import { classifyHerdrCommandFailure, classifyPaneBlock, createHerdrClient, isTestSafeBinary, looksLikeSelectionMenu, normalizePaneText, readHerdrObservedState, readHerdrStructuredState, type HerdrClient, type HerdrObservedState, type PaneBlockKind } from "./client.js";
 import { ANSI_PATTERN } from "./pane-text.js";
-import { resolveStateDir } from "./state-dir.js";
+import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
 import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
+import { autoTrustEnabled, confirmWorkspaceTrust, type TrustOutcome } from "./trust.js";
+import { createWorkerRun, harnessModelResolve, settleWorkerRun, type HarnessRole } from "../harness/bridge.js";
 
 export interface LaunchResult {
   ok: boolean;
@@ -19,6 +21,8 @@ export interface LaunchResult {
   paneCreated?: boolean;
   promptPending?: boolean;
   trustRequired?: boolean;
+  trustConfirmed?: boolean;
+  trustPolicyReason?: string;
   selectionRequired?: boolean;
   promptDelivered?: boolean;
   hint?: string;
@@ -147,6 +151,7 @@ export interface GridWorkerRecord {
   cwd?: string | null;
   branch?: string | null;
   forkSha?: string | null;
+  runId?: string | null;
 }
 
 export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): GridWorkerRecord[] {
@@ -192,6 +197,7 @@ export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): 
           cwd: typeof rec.cwd === "string" ? rec.cwd : null,
           branch: typeof rec.branch === "string" ? rec.branch : null,
           forkSha: typeof rec.forkSha === "string" ? rec.forkSha : typeof rec.fork_sha === "string" ? rec.fork_sha : null,
+          ...(typeof rec.runId === "string" && rec.runId ? { runId: rec.runId } : {}),
         });
       }
     }
@@ -237,6 +243,7 @@ export function writeGridWorkers(callerPaneId: string, workers: Array<string | G
               cwd: item.cwd ?? null,
               branch: item.branch ?? null,
               forkSha: item.forkSha ?? (item as any).fork_sha ?? null,
+              ...(item.runId ? { runId: item.runId } : {}),
             },
       );
     }
@@ -350,15 +357,71 @@ export function pruneGridWorkers(closedPaneIds: readonly string[], stateDir?: st
   }
 }
 
+export interface WorkerSettlement {
+  paneId: string;
+  runId: string;
+  settled: boolean;
+}
+
+function gitHead(cwd: string | null | undefined, branch?: string | null): string | null {
+  if (!cwd) return null;
+  for (const ref of ["HEAD", ...(branch ? [`refs/heads/${branch}`] : [])]) {
+    try {
+      const rev = spawnSync("git", ["rev-parse", "--verify", ref], { cwd, encoding: "utf8" });
+      const sha = rev.status === 0 ? rev.stdout.trim() : "";
+      if (/^[0-9a-f]{7,64}$/.test(sha)) return sha;
+    } catch {
+    }
+  }
+  return null;
+}
+
+export function recordGridWorkerRun(callerPaneId: string, paneId: string, runId: string, stateDir?: string): void {
+  const records = readGridWorkerRecords(callerPaneId, stateDir);
+  const index = records.findIndex((record) => record.paneId === paneId);
+  if (index === -1) return;
+  records[index] = { ...records[index]!, runId };
+  writeGridWorkers(callerPaneId, records, stateDir);
+}
+
+export function registerWorkerRun(input: {
+  client: ClientKind;
+  model: string;
+  role: string;
+  cwd: string;
+  pane: string;
+  handle: string;
+  prompt: string;
+  callerPaneId?: string;
+  stateDir?: string;
+}): string | null {
+  const record = input.callerPaneId ? readGridWorkerRecords(input.callerPaneId, input.stateDir).find((item) => item.paneId === input.pane) : undefined;
+  const git = record?.branch && record?.forkSha ? {} : resolveGitBranchAndForkSha(input.cwd);
+  const run = createWorkerRun({
+    client: resolveBaseClientKind(input.client), model: input.model, role: input.role, cwd: input.cwd,
+    branch: record?.branch ?? git.branch ?? null, forkSha: record?.forkSha ?? git.forkSha ?? null,
+    pane: input.pane, handle: input.handle, objectiveDigest: createHash("sha256").update(input.prompt).digest("hex"),
+  });
+  if (!run) return null;
+  if (input.callerPaneId) recordGridWorkerRun(input.callerPaneId, input.pane, run.id, input.stateDir);
+  return run.id;
+}
+
 export async function executeWorkerClose(
   client: HerdrClient,
   plan: readonly ClosePlanItem[],
   stateDir?: string,
-): Promise<void> {
+): Promise<WorkerSettlement[]> {
+  const runs = plan.flatMap((item) => {
+    const record = readGridWorkerRecords(item.callerPaneId, stateDir).find((candidate) => candidate.paneId === item.paneId);
+    return record?.runId ? [{ paneId: item.paneId, runId: record.runId, head: gitHead(record.cwd, record.branch) }] : [];
+  });
   for (const item of plan) {
     await client.closePane(item.paneId);
   }
   pruneGridWorkers(plan.map((p) => p.paneId), stateDir);
+  return runs.map((run) => ({ paneId: run.paneId, runId: run.runId,
+    settled: settleWorkerRun({ id: run.runId, state: "closed", head: run.head }) !== null }));
 }
 
 /**
@@ -546,7 +609,70 @@ export function nativeStageEffort(client: ClientKind, effort: ReasoningEffort): 
   return effort === "standard" ? "medium" : effort;
 }
 
-function stageFlags(client: ClientKind, stage: StageSpec): string[] {
+const FALLBACK_BYPASS_ARGS: Readonly<Record<string, readonly string[]>> = {
+  claude: ["--dangerously-skip-permissions"],
+  codex: ["--dangerously-bypass-approvals-and-sandbox"],
+  antigravity: ["--dangerously-skip-permissions"],
+  kiro: ["--trust-all-tools"],
+  kimi: ["--yolo"],
+};
+
+const FALLBACK_READONLY_ARGS: Readonly<Record<string, readonly string[]>> = {
+  codex: ["--sandbox", "read-only"],
+  claude: ["--tools", "Read,Glob,Grep"],
+};
+
+const CATALOG_CLIENTS: ReadonlySet<string> = new Set(["claude", "codex", "antigravity"]);
+
+export function bypassEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !["0", "false", "off", "no"].includes((env.HERDR_JEV_BYPASS ?? "").trim().toLowerCase());
+}
+
+function harnessRole(role: RoleKind): HarnessRole {
+  return role === "implementer" ? "executor" : role;
+}
+
+interface LaunchProfile {
+  model: string;
+  effortArgs: string[];
+  bypassArgs: string[];
+  readonlyArgs: string[];
+}
+
+function localEffortArgs(client: ClientKind, stage: StageSpec): string[] {
+  const base = resolveBaseClientKind(client);
+  const effort = nativeStageEffort(client, stage.effort)!;
+  if (base !== "codex" && base !== "claude") return [];
+  return base === "codex" ? ["-c", `model_reasoning_effort="${effort}"`] : ["--effort", effort];
+}
+
+function resolveLaunchProfile(client: ClientKind, stage: StageSpec): LaunchProfile {
+  const base = resolveBaseClientKind(client);
+  const resolution = CATALOG_CLIENTS.has(base)
+    ? harnessModelResolve({ client: base, model: stage.model, effort: stage.effort, role: harnessRole(stage.role) }) : null;
+  const known = resolution?.known === true;
+  const fallbackModel = base === "claude" ? resolveClaudeModel(stage.model)
+    : base === "antigravity" ? resolveAntigravityModel(stage.model, stage.effort) : stage.model;
+  const native = base === "codex" || base === "claude";
+  return {
+    model: known ? resolution!.cliModel : fallbackModel,
+    effortArgs: known && native ? resolution!.effortArgs : localEffortArgs(client, stage),
+    bypassArgs: resolution?.bypassArgs.length ? resolution.bypassArgs : [...(FALLBACK_BYPASS_ARGS[base] ?? [])],
+    readonlyArgs: resolution?.readonlyArgs.length ? resolution.readonlyArgs : [...(FALLBACK_READONLY_ARGS[base] ?? [])],
+  };
+}
+
+export function builtinLaunchArgs(): { bypass_args: Record<string, string[]>; readonly_args: Record<string, string[]> } {
+  const copy = (source: Readonly<Record<string, readonly string[]>>) =>
+    Object.fromEntries(Object.entries(source).map(([client, args]) => [client, [...args]]));
+  return { bypass_args: copy(FALLBACK_BYPASS_ARGS), readonly_args: copy(FALLBACK_READONLY_ARGS) };
+}
+
+export function readonlyReviewerArgs(client: ClientKind, stage: StageSpec): string[] {
+  return resolveLaunchProfile(client, { ...stage, role: "reviewer" }).readonlyArgs;
+}
+
+function stageFlags(client: ClientKind, stage: StageSpec, profile: LaunchProfile): string[] {
   const base = resolveBaseClientKind(client);
   if (base !== "codex" && base !== "claude" && base !== "antigravity") return stage.extraFlags;
   const flags: string[] = [];
@@ -556,28 +682,36 @@ function stageFlags(client: ClientKind, stage: StageSpec): string[] {
     flags.push(stage.extraFlags[i]);
   }
   if (base === "antigravity") return flags;
-  const effort = nativeStageEffort(client, stage.effort)!;
-  return [...flags, ...(base === "codex" ? ["-c", `model_reasoning_effort="${effort}"`] : ["--effort", effort])];
+  return [...flags, ...profile.effortArgs];
+}
+
+function bypassFlags(client: ClientKind, stage: StageSpec, profile: LaunchProfile, present: readonly string[]): string[] {
+  const base = resolveBaseClientKind(client);
+  if (stage.role === "reviewer" || !bypassEnabled() || !(base in FALLBACK_BYPASS_ARGS)) return [];
+  return profile.bypassArgs.filter((arg) => !present.includes(arg));
+}
+
+interface PreparedLaunch {
+  model: string;
+  flags: string[];
+  bypass: string[];
+}
+
+function prepareLaunch(client: ClientKind, stage: StageSpec, structural: readonly string[] = []): PreparedLaunch {
+  const profile = resolveLaunchProfile(client, stage);
+  const flags = stageFlags(client, stage, profile);
+  return { model: profile.model, flags, bypass: bypassFlags(client, stage, profile, [...structural, ...flags]) };
 }
 
 export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[] {
-  stage = { ...stage, extraFlags: stageFlags(client, stage) };
   const base = resolveBaseClientKind(client);
   const bin = resolveClientExecutable(client);
+  const launch = prepareLaunch(client, stage, base === "kiro" ? ["--trust-all-tools"] : []);
   switch (base) {
-    case "claude": {
-      const args = [bin, "--model", resolveClaudeModel(stage.model)];
-      if (stage.extraFlags.length > 0) {
-        args.push(...stage.extraFlags);
-      }
-      return args;
-    }
-    case "codex": {
-      const args = [bin, "--model", stage.model];
-      if (stage.extraFlags.length > 0) {
-        args.push(...stage.extraFlags);
-      }
-      return args;
+    case "claude":
+    case "codex":
+    case "antigravity": {
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass];
     }
     case "cursor": {
       return [bin, "--model", stage.model];
@@ -585,18 +719,11 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
     case "opencode": {
       return [bin, "--model", stage.model];
     }
-    case "antigravity": {
-      return [bin, "--model", resolveAntigravityModel(stage.model, stage.effort), ...stage.extraFlags];
-    }
     case "kimi": {
-      const args = [bin, "-m", stage.model, "--yolo"];
-      if (stage.extraFlags.length > 0) {
-        args.push(...stage.extraFlags);
-      }
-      return args;
+      return [bin, "-m", stage.model, ...launch.bypass, ...launch.flags];
     }
     case "kiro": {
-      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...stage.extraFlags];
+      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...launch.flags];
     }
   }
 }
@@ -646,7 +773,12 @@ function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: s
   }
 }
 
-async function launchStageInHerdrAttempt(input: {
+interface TrustState {
+  outcome?: TrustOutcome;
+  attempted: boolean;
+}
+
+type LaunchInput = {
   client: ClientKind;
   stage: StageSpec;
   handoffPrompt: string;
@@ -663,7 +795,15 @@ async function launchStageInHerdrAttempt(input: {
   workspaceId?: string;
   cwd?: string;
   clock?: { now: () => number; sleep: (ms: number) => Promise<void> };
-}): Promise<LaunchResult> {
+};
+
+async function launchStageInHerdrAttempt(input: LaunchInput): Promise<LaunchResult> {
+  const trust: TrustState = { attempted: false };
+  const result = await launchStageCore(input, trust);
+  return trust.outcome?.confirmed ? { ...result, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : result;
+}
+
+async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<LaunchResult> {
   const clock = input.clock ?? { now: Date.now, sleep: (ms: number) => new Promise(r => setTimeout(r, ms)) };
   const herdr = input.herdr ?? createHerdrClient();
   const effectiveClient = input.stage.client ?? input.client;
@@ -684,6 +824,17 @@ async function launchStageInHerdrAttempt(input: {
   }
 
   const agentName = input.agentName ?? formatHerdrAgentName(effectiveClient, input.stage.role, input.stage.model);
+  const resolveBlock = async (kind: PaneBlockKind, context: { paneId: string; direction: "right" | "down" }): Promise<LaunchResult | null> => {
+    if (kind === "trust" && !trust.attempted) {
+      trust.attempted = true;
+      const outcome = await confirmWorkspaceTrust({ herdr, target: agentName, cwd: input.cwd ?? process.cwd(), clock });
+      if (outcome.confirmed) {
+        trust.outcome = outcome;
+        return null;
+      }
+    }
+    return paneBlockedResult(kind, { agentName, commandText, ...context });
+  };
   if (input.reuseExisting) {
     if (!input.agentName || !herdr.getAgent) return { ok: false, ackStatus: "rejected", error: "A stable agent name and native lookup are required for retry recovery", commandText };
     const existing = await herdr.getAgent(agentName);
@@ -765,7 +916,12 @@ async function launchStageInHerdrAttempt(input: {
     agentArgs: command.slice(1),
   });
 
-  if (!started.ok) {
+  let startFailed = !started.ok;
+  if (startFailed && autoTrustEnabled() && herdr.readAgent && /agent_not_ready/.test(`${started.stdout}\n${started.stderr}`)) {
+    const screen = await herdr.readAgent(agentName);
+    if (screen.ok && classifyPaneBlock(screen) === "trust") startFailed = false;
+  }
+  if (startFailed) {
     const ackStatus = classifyHerdrCommandFailure(started);
     if (ackStatus === "rejected") await herdr.closePane(paneId);
     return { ok: false, ackStatus, paneCreated: ackStatus === "unknown", promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
@@ -787,7 +943,10 @@ async function launchStageInHerdrAttempt(input: {
   if (herdr.readAgent) {
     const screen = await herdr.readAgent(agentName);
     const initialBlock = screen.ok ? classifyPaneBlock(screen) : null;
-    if (initialBlock) return paneBlockedResult(initialBlock, { agentName, paneId, commandText, direction: splitDirection });
+    if (initialBlock) {
+      const blocked = await resolveBlock(initialBlock, { paneId, direction: splitDirection });
+      if (blocked) return blocked;
+    }
   }
   let promptDelivered = false;
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
@@ -806,7 +965,13 @@ async function launchStageInHerdrAttempt(input: {
         ]);
         if (screenRes && screenRes.ok) {
           const block = classifyPaneBlock(screenRes);
-          if (block) return paneBlockedResult(block, { agentName, paneId, commandText, direction: splitDirection });
+          if (block) {
+            const blocked = await resolveBlock(block, { paneId, direction: splitDirection });
+            if (blocked) return blocked;
+            unknownSince = null;
+            await clock.sleep(500);
+            continue;
+          }
         }
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
@@ -1026,39 +1191,20 @@ export function buildInlineCommand(
   promptText: string,
   nonInteractive = false,
 ): string[] {
-  stage = { ...stage, extraFlags: stageFlags(client, stage) };
   const base = resolveBaseClientKind(client);
   const bin = resolveClientExecutable(client);
+  const launch = prepareLaunch(client, stage, base === "kiro" ? ["--trust-all-tools"] : []);
   switch (base) {
     case "claude": {
-      const model = resolveClaudeModel(stage.model);
-      if (nonInteractive) {
-        const args = [bin, "-p", promptText, "--model", model];
-        if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
-        return args;
-      }
-      const args = [bin, "--model", model];
-      if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
-      args.push(promptText);
-      return args;
+      if (nonInteractive) return [bin, "-p", promptText, "--model", launch.model, ...launch.flags, ...launch.bypass];
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, promptText];
     }
     case "codex": {
-      if (nonInteractive) {
-        const args = [bin, "exec", promptText, "--model", stage.model];
-        if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
-        return args;
-      }
-      const args = [bin, "--model", stage.model];
-      if (stage.extraFlags.length > 0) args.push(...stage.extraFlags);
-      args.push(promptText);
-      return args;
+      if (nonInteractive) return [bin, "exec", promptText, "--model", launch.model, ...launch.flags, ...launch.bypass];
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, promptText];
     }
     case "antigravity": {
-      const model = resolveAntigravityModel(stage.model, stage.effort);
-      if (nonInteractive) {
-        return [bin, "-p", promptText, "--model", model, ...stage.extraFlags];
-      }
-      return [bin, "-i", promptText, "--model", model, ...stage.extraFlags];
+      return [bin, nonInteractive ? "-p" : "-i", promptText, "--model", launch.model, ...launch.flags, ...launch.bypass];
     }
     case "cursor": {
       return [bin, "--model", stage.model, promptText];
@@ -1070,10 +1216,10 @@ export function buildInlineCommand(
       if (nonInteractive) {
         return [bin, "-m", stage.model, "-p", promptText];
       }
-      return [bin, "-m", stage.model, "--yolo", promptText];
+      return [bin, "-m", stage.model, ...launch.bypass, promptText];
     }
     case "kiro": {
-      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...stage.extraFlags, ...(nonInteractive ? ["--no-interactive"] : []), promptText];
+      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...launch.flags, ...(nonInteractive ? ["--no-interactive"] : []), promptText];
     }
   }
 }
@@ -1091,7 +1237,7 @@ export function runAgentInline(input: {
   const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, input.nonInteractive);
   const commandText = args.join(" ");
 
-  if (process.env.HERDR_JEV_TEST_GUARD === "1") {
+  if (isTestGuardActive()) {
     if (!isTestSafeBinary(args[0])) {
       return { ok: false, exitCode: 126, error: "blocked_by_test_guard", commandText };
     }
@@ -1137,7 +1283,7 @@ export function runAgentCaptured(input: {
   const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, true);
   const commandText = args.join(" ");
 
-  if (process.env.HERDR_JEV_TEST_GUARD === "1") {
+  if (isTestGuardActive()) {
     if (!isTestSafeBinary(args[0])) {
       return { ok: false, output: "", exitCode: 126, error: "blocked_by_test_guard", commandText };
     }

@@ -120,7 +120,7 @@ describe("Herdr launch acknowledgement", () => {
   it("preserves the stage effort in interactive and captured commands", () => {
     expect(buildAgentCommand("codex", stage)).toContain('model_reasoning_effort="xhigh"');
     expect(buildInlineCommand("codex", stage, "task", true)).toContain('model_reasoning_effort="xhigh"');
-    expect(buildAgentCommand("claude", { ...stage, effort: "high" })).toEqual(["claude", "--model", stage.model, "--effort", "high"]);
+    expect(buildAgentCommand("claude", { ...stage, effort: "high" })).toEqual(["claude", "--model", stage.model, "--effort", "high", "--dangerously-skip-permissions"]);
   });
 
   it("reads tab root panes and rejects unrelated JSON instead of using it as a pane ID", () => {
@@ -534,7 +534,7 @@ describe("Antigravity model and effort resolution", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["agy", "--model", "gemini-3.8-flash-high"]);
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions"]);
     expect(cmd).not.toContain("--effort");
   });
 
@@ -563,7 +563,7 @@ describe("Antigravity model and effort resolution", () => {
       extraFlags: [],
       description: "advisor",
     });
-    expect(cmd).toEqual(["agy", "--model", "claude-opus-4-6-thinking"]);
+    expect(cmd).toEqual(["agy", "--model", "claude-opus-4-6-thinking", "--dangerously-skip-permissions"]);
     expect(cmd).not.toContain("--effort");
   });
 
@@ -576,7 +576,7 @@ describe("Antigravity model and effort resolution", () => {
       extraFlags: [],
       description: "implementer",
     });
-    expect(cmd).toEqual(["agy", "--model", "gemini-3.1-pro-high"]);
+    expect(cmd).toEqual(["agy", "--model", "gemini-3.1-pro-high", "--dangerously-skip-permissions"]);
     expect(cmd).not.toContain("--effort");
   });
 
@@ -590,7 +590,7 @@ describe("Antigravity model and effort resolution", () => {
       extraFlags: ["--effort", "high"],
       description: "implementer",
     });
-    expect(cmd).toEqual(["agy", "--model", "claude-sonnet-4-6"]);
+    expect(cmd).toEqual(["agy", "--model", "claude-sonnet-4-6", "--dangerously-skip-permissions"]);
     expect(cmd).not.toContain("--effort");
   });
 
@@ -602,8 +602,8 @@ describe("Antigravity model and effort resolution", () => {
       extraFlags: ["--effort", "high"],
       description: "implementer",
     };
-    expect(buildInlineCommand("antigravity", stage, "task", false)).toEqual(["agy", "-i", "task", "--model", "gemini-3.8-flash-high"]);
-    expect(buildInlineCommand("antigravity", stage, "task", true)).toEqual(["agy", "-p", "task", "--model", "gemini-3.8-flash-high"]);
+    expect(buildInlineCommand("antigravity", stage, "task", false)).toEqual(["agy", "-i", "task", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions"]);
+    expect(buildInlineCommand("antigravity", stage, "task", true)).toEqual(["agy", "-p", "task", "--model", "gemini-3.8-flash-high", "--dangerously-skip-permissions"]);
   });
 });
 
