@@ -1071,6 +1071,7 @@ interface TrustState {
   failure?: string;
   attempted: boolean;
   entered?: boolean;
+  reappeared?: boolean;
   trackingError?: string;
 }
 
@@ -1105,7 +1106,7 @@ async function launchStageInHerdrAttempt(input: LaunchInput): Promise<LaunchResu
   const trust: TrustState = { attempted: false };
   const result = await launchStageCore(input, trust);
   const tracked = trust.trackingError ? { ...result, trackingError: trust.trackingError } : result;
-  return trust.outcome?.confirmed && !result.trustRequired ? { ...tracked, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : tracked;
+  return trust.outcome?.confirmed && !trust.reappeared && !result.trustRequired ? { ...tracked, trustConfirmed: true, trustPolicyReason: trust.outcome.reason } : tracked;
 }
 
 async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<LaunchResult> {
@@ -1149,6 +1150,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
       if (outcome.entered) trust.entered = true;
     }
     if (kind === "trust" && (trust.entered || trust.outcome?.confirmed)) {
+      if (trust.outcome?.confirmed) trust.reappeared = true;
       return trustUnverifiedResult({ agentName, commandText, ...context, trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" });
     }
     return paneBlockedResult(kind, { agentName, commandText, ...context, ...(kind === "trust" ? { trustPolicyReason: trust.failure ?? "trust_dialog_reappeared" } : {}) });
