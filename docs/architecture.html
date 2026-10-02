@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 2.16.0">
-  <title>Herdr-Jev Architecture Diagram</title>
+  <title>Herdr-Jev Overview Diagram</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -4955,11 +4955,11 @@
            data-preset-badge-blueprint="BLUEPRINT / REV 01"
            data-preset-badge-editorial="EDITORIAL / FIELD NOTE">
         <div class="pulse-dot"></div>
-        <h1>Herdr-Jev Architecture</h1>
+        <h1>Herdr-Jev Overview</h1>
       </div>
     </div>
 
-    <script id="archify-guided-views-data" type="application/json">[{"id":"full-flow","label":"Full Orchestration Flow","focus":["user","herdr","aliases","triage","advisor","implementer","reviewer","catalog","detector","harness"],"note":"End-to-end task journey from operator prompt to verified outcome."},{"id":"triage-plane","label":"Triage and Quota Plane","focus":["triage","vault","catalog","detector"],"note":"TypeSafe System One classifier, dynamic quota cascade circuit breaker, and harness discovery."},{"id":"triad-pipeline","label":"Multi-Model Triad","focus":["advisor","implementer","reviewer","catalog"],"note":"Staged pipeline (Advisor -\u003e Implementer -\u003e Reviewer) executed inside Herdr panes."},{"id":"cross-harness","label":"Cross-Harness Delegation","focus":["herdr","aliases","triage","advisor","implementer","catalog","detector"],"note":"Subagents, split direction, client aliases gate, and cross-harness peering matrix."}]</script>
+    <script id="archify-guided-views-data" type="application/json">[{"id":"commands","label":"Commands to modules","focus":["operator","routines","office_poll","cli","triage","classifier","launcher","peers","reports","notify","pipeline"],"note":"Operator, scheduler and Office call one CLI that fans out by purpose."},{"id":"triage","label":"Jev decisions","focus":["cli","triage","classifier","typesafe_jev","vault","office_poll"],"note":"Task triage and pane classification both use TypeSafe Jev."},{"id":"panes","label":"Panes and agents","focus":["launcher","peers","herdr_panes","agent_kiro","agent_antigravity","agent_claude","agent_codex"],"note":"Grid launch, readiness wait, trust check and peer messages reach the agent harnesses."},{"id":"delivery","label":"Harness and review","focus":["pipeline","harness_bridge","review_gate","harness_core","agent_codex"],"note":"Triad pipeline through the AI Harness bridge and review gate."}]</script>
 
     <script id="archify-i18n-data" type="application/json">{"locale":"en","messages":{"viewer.kind.frontend":"Frontend","viewer.kind.backend":"Backend","viewer.kind.database":"Database","viewer.kind.cloud":"Cloud","viewer.kind.security":"Security","viewer.kind.messagebus":"Message bus","viewer.kind.external":"External","viewer.kind.neutral":"Neutral","viewer.kind.node":"Node","viewer.kind.start":"Start","viewer.kind.active":"Active","viewer.kind.waiting":"Waiting","viewer.kind.decision":"Decision","viewer.kind.success":"Success","viewer.kind.failure":"Failure","viewer.toolbar.actions":"Diagram actions","viewer.theme.toggle.title":"Toggle theme (T)","viewer.theme.toggle":"Toggle color theme","viewer.theme.dark":"Dark","viewer.theme.light":"Light","viewer.preset.choose.title":"Choose visual style (S cycles)","viewer.preset.choose":"Choose visual style","viewer.preset.style":"Style","viewer.preset.menu":"Visual style","viewer.preset.identity":"Visual identity","viewer.preset.cycles":"S cycles","viewer.preset.classic":"Classic","viewer.preset.classic.short":"Classic","viewer.preset.classic.hint":"Stable technical default","viewer.preset.flow":"Signal Flow","viewer.preset.flow.short":"Flow","viewer.preset.flow.hint":"Motion-forward presentation","viewer.preset.blueprint":"Blueprint","viewer.preset.blueprint.hint":"Engineering review","viewer.preset.editorial":"Editorial","viewer.preset.editorial.hint":"Publication and launch notes","viewer.preset.badge.signalFlow":"SIGNAL FLOW","viewer.preset.badge.blueprint":"BLUEPRINT / REV 01","viewer.preset.badge.editorial":"EDITORIAL / FIELD NOTE","viewer.preset.badge.editorialPlate":"ARCHIFY / PLATE 04","viewer.preset.current":"Visual style: {style}. Choose visual style","viewer.motion.live":"Live","viewer.motion.still":"Still","viewer.motion.pause":"Pause motion","viewer.motion.resume":"Resume motion","viewer.motion.reduced":"Motion paused by reduced-motion preference","viewer.motion.hidden":"Motion paused while this page is hidden","viewer.motion.yielding":"Pause motion; currently yielding to {owner}","viewer.motion.yielding.title":"Live preview enabled · yielding to {owner}","viewer.owner.story":"the guided story","viewer.owner.chapter":"the active chapter","viewer.owner.chapterPreview":"the chapter delta preview","viewer.owner.handoff":"the chapter handoff","viewer.owner.route":"Route Probe","viewer.owner.lens":"Semantic Lens","viewer.owner.relationship":"Relationship Preview","viewer.owner.intent":"Intent Trace","viewer.owner.focus":"semantic focus","viewer.owner.legend":"legend preview","viewer.owner.reader":"reader interaction","viewer.present.enter":"Enter presentation stage","viewer.present.enter.title":"Presentation stage (F)","viewer.present.exit":"Exit presentation stage","viewer.present.exit.title":"Exit presentation stage (F or Escape)","viewer.present.present":"Present","viewer.present.exit.label":"Exit","viewer.export.button":"Export","viewer.export.button.title":"Export diagram (E)","viewer.export.diagram":"Export diagram","viewer.export.menu":"Export","viewer.export.subtitle":"Portable, clean outputs","viewer.export.share":"Share","viewer.export.shareCard":"Share Card","viewer.export.routeShareCard":"Route Share Card","viewer.export.reachShareCard":"Reach Share Card","viewer.export.copyShareCard":"Copy Share Card","viewer.export.copyDiagram":"Copy diagram","viewer.export.clipboardPng":"PNG to clipboard","viewer.export.raster":"Raster images","viewer.export.image":"Image","viewer.export.lossless":"Lossless image","viewer.export.compact":"Compact image","viewer.export.modern":"Modern image","viewer.export.vectorMotion":"Vector and motion","viewer.export.vectorMotion.heading":"Vector \u0026 motion","viewer.export.editable":"Editable vector","viewer.export.motion6s":"6s motion","viewer.export.unsupported":"Not supported by this browser","viewer.export.clipboardUnsupported":"Clipboard image write not supported by this browser","viewer.export.clipboardUnsupported.period":"Clipboard image write not supported by this browser.","viewer.export.clipboardUnsupported.short":"Clipboard image write not supported in this browser.","viewer.export.motionUnavailable":"Motion capture unavailable in this browser","viewer.export.webmUnavailable":"WebM unavailable in this browser","viewer.export.failed":"Export failed: {message}","viewer.export.unknownVariant":"Unknown Share Card variant: {variant}","viewer.export.routeRequired":"Trace a route before exporting a Route Share Card","viewer.export.reachRequired":"Trace authored reach before exporting a Reach Share Card","viewer.export.unknown":"unknown","viewer.export.routeFailed":"Route Share Card export failed: {message}","viewer.export.reachFailed":"Reach Share Card export failed: {message}","viewer.export.copyFailed":"Copy failed: {message}","viewer.export.copiedPng":"Copied PNG to clipboard","viewer.export.copiedShare":"Copied Share Card","viewer.export.downloadedShare":"Downloaded Share Card","viewer.export.downloadedRoute":"Downloaded Route Share Card","viewer.export.downloadedReach":"Downloaded Reach Share Card","viewer.export.downloadedWebm":"Downloaded WebM","viewer.export.recording":"Recording 6 seconds of motion…","viewer.export.card.routeSummary.one":"Route: {source} → {target} · {count} directed hop","viewer.export.card.routeSummary.other":"Route: {source} → {target} · {count} directed hops","viewer.export.card.reachSummary":"Authored {direction} from {origin} · {nodes} · {links} · max {hops}","viewer.export.card.node.one":"{count} node","viewer.export.card.node.other":"{count} nodes","viewer.export.card.link.one":"{count} link","viewer.export.card.link.other":"{count} links","viewer.export.card.hop.one":"{count} hop","viewer.export.card.hop.other":"{count} hops","viewer.export.card.routeBadge":"ARCHIFY · ROUTE · {hops}","viewer.export.card.reachBadge":"ARCHIFY · {direction} REACH","viewer.export.card.defaultBadge":"ARCHIFY · {preset} · {theme}","viewer.export.direction.upstream":"Upstream","viewer.export.direction.downstream":"Downstream","viewer.export.error.canvasUnavailable":"Canvas unavailable for {label}","viewer.export.error.contextUnavailable":"2D canvas context unavailable for {label}","viewer.export.error.toBlobUnavailable":"canvas.toBlob unavailable for {label}","viewer.export.error.toBlobNull":"canvas.toBlob returned no data for {label}","viewer.export.error.variantsCombined":"Share Card variants cannot be combined","viewer.export.error.viewerState":"Share Card export could not remove temporary viewer state","viewer.export.error.routeState":"Route Card export could not preserve the resolved route safely","viewer.export.error.reachState":"Reach Card export could not preserve authored reach safely","viewer.export.error.webmRequirements":"WebM motion export requires a trace animation and browser MediaRecorder support","viewer.export.error.mediaRecorder":"MediaRecorder failed","viewer.export.error.emptyWebm":"MediaRecorder produced an empty WebM","viewer.export.error.webmBackground":"SVG background could not be loaded for WebM export","viewer.guided.region":"Guided diagram views","viewer.guided.previous":"Previous guided view","viewer.guided.previous.title":"Previous guided view ([)","viewer.guided.next":"Next guided view","viewer.guided.next.title":"Next guided view (])","viewer.guided.views":"Guided views","viewer.guided.explore":"Explore this system","viewer.guided.intro":"Step through curated paths without changing the source diagram.","viewer.guided.trail":"Story trail","viewer.guided.beat":"Beat","viewer.guided.nextBeat":"Next","viewer.guided.play":"Play guided story","viewer.guided.play.title":"Play guided story (P)","viewer.guided.pause":"Pause guided story","viewer.guided.pause.title":"Pause guided story (P)","viewer.guided.replay":"Replay guided story","viewer.guided.replay.title":"Replay guided story (P)","viewer.guided.playStory":"Play story","viewer.guided.pauseStory":"Pause","viewer.guided.replayStory":"Replay story","viewer.guided.motionUnavailable":"Story playback unavailable while motion is Still","viewer.guided.enableMotion":"Switch motion to Live to play the guided story","viewer.guided.selectBeatLink":"Select a Story Beat to copy its exact link","viewer.guided.copyMoment":"Copy moment","viewer.guided.momentCopied":"Moment link copied","viewer.guided.momentCopyFailed":"Could not copy story moment link","viewer.guided.copied":"Copied","viewer.guided.copyFailed":"Copy failed","viewer.guided.showAll":"Show all","viewer.guided.showAll.aria":"Show entire diagram","viewer.guided.chapters":"Story chapters","viewer.guided.storyTrail":"Story trail for {label}: {count} beats","viewer.guided.chapter.open":"Open chapter {index} of {total}: {label}, {count} stops","viewer.guided.chapter.current":"Current chapter {index} of {total}: {label}, {count} stops","viewer.guided.chapter.selectedNodes":"{count} selected nodes","viewer.guided.chapter.stops":"{count} stops","viewer.guided.chapter.stop.one":"{count} stop","viewer.guided.chapter.stop.other":"{count} stops","viewer.guided.chapter.current.title":"{label} — current chapter, {count} stops","viewer.guided.chapter.delta.expanded":"{stay} stay, {enter} enter, {leave} leave","viewer.guided.chapter.delta.aria":"Open chapter {index} of {total}: {label}. Chapter focus delta: {delta}","viewer.guided.chapter.delta.title":"{label} — {delta} chapter focus","viewer.guided.handoff":"{from} → {to} · via {label}","viewer.guided.share.chapter":"Chapter {index} / {total}","viewer.guided.share.initial":"Chapter 01 / 01","viewer.guided.share.default":"Guided chapter","viewer.guided.state.ready":"Ready","viewer.guided.state.playing":"Playing","viewer.guided.state.settled":"Settled","viewer.guided.state.paused":"Paused","viewer.guided.state.pinned":"Pinned","viewer.guided.state.still":"Still","viewer.guided.share.step":"Step {index} / {total} · {label}","viewer.guided.share.staticMoment":"{step} · Static moment","viewer.guided.share.complete":"{count} steps complete · {note}","viewer.guided.share.settled":"Path settled for reading.","viewer.guided.share.staticPath":"{count} steps · Static path","viewer.guided.share.ready":"{count} steps · Ready","viewer.guided.share.aria":"{state} chapter {index} of {total}: {label}. {beat}. {route}","viewer.guided.beat.start":"Beat {index} / {total} · {label} · starting point","viewer.guided.beat.forward":"Beat {index} / {total} · {from} → {to}","viewer.guided.beat.reverse":"Beat {index} / {total} · {from} → {to} · reverse authored link","viewer.guided.beat.multiple":"Beat {index} / {total} · {from} ⇄ {to} · {count} authored links","viewer.guided.beat.group":"Beat {index} / {total} · {from} · {to} · grouped · no direct link","viewer.guided.beat.aria.prefix":"Story beat {index} of {total}: {label}. ","viewer.guided.beat.aria.start":"Starting point.","viewer.guided.beat.aria.forward":"From {from} through one authored forward relationship.","viewer.guided.beat.aria.reverse":"From {from}; the authored relationship points from {to} to {from}.","viewer.guided.beat.aria.multiple":"From {from} through {count} authored relationships; shown without arbitrary motion.","viewer.guided.beat.aria.group":"Grouped from {from} with no direct authored relationship.","viewer.guided.caption.start":"Starting point","viewer.guided.caption.grouped":"Grouped transition · no direct authored link","viewer.guided.caption.more":" +{count} more","viewer.guided.caption.reverse":"Reverse authored relationship","viewer.guided.caption.relationships":"{count} authored relationships","viewer.guided.caption.relationship":"Authored relationship","viewer.guided.caption.direction":"authored direction: {from} → {to}","viewer.guided.caption.starting":"Authored starting point","viewer.guided.beatLink":"Copy link to current story moment: Beat {index} of {total}: {label}","viewer.guided.noStory":"This diagram has no authored guided story.","viewer.guide.eyebrow":"Diagram guide","viewer.guide.close":"Close diagram guide","viewer.guide.inspecting":"Inspecting compiled semantics","viewer.guide.actions":"Diagram exploration actions","viewer.guide.find":"Find any node","viewer.guide.find.hint":"Search labels, responsibilities, kinds, and stable IDs.","viewer.guide.route":"Trace a route","viewer.guide.route.aria":"Trace a directed route","viewer.guide.route.hint":"Ask how two semantic nodes connect in authored direction.","viewer.guide.map":"See the whole system","viewer.guide.map.hint":"Open Semantic Radar with a live viewport and stable nodes.","viewer.guide.lens":"Compare semantic kinds","viewer.guide.lens.hint":"Count roles, reveal their traffic, and compare direct authored links.","viewer.guide.story":"Play the guided story","viewer.guide.story.hint":"Walk the authored chapters and real relationships.","viewer.guide.present":"Enter Presentation Stage","viewer.guide.present.hint":"Give the live diagram the viewport without changing export.","viewer.guide.shortcuts":"Additional keyboard shortcuts","viewer.guide.shortcut.export":"Export","viewer.guide.shortcut.theme":"Theme","viewer.guide.shortcut.style":"Style","viewer.guide.shortcut.reset":"Reset","viewer.guide.shortcut.zoomIn":"Zoom in","viewer.guide.shortcut.zoomOut":"Zoom out","viewer.guide.shortcut.close":"Close","viewer.guide.facts":"{nodes} · {relationships} · {views}","viewer.guide.fact.node.one":"{count} semantic node","viewer.guide.fact.node.other":"{count} semantic nodes","viewer.guide.fact.relationship.one":"{count} relationship","viewer.guide.fact.relationship.other":"{count} relationships","viewer.guide.fact.view.one":"{count} guided view","viewer.guide.fact.view.other":"{count} guided views","viewer.guide.story.available.one":"Walk {count} authored chapter and its real relationships.","viewer.guide.story.available.other":"Walk {count} authored chapters and their real relationships.","viewer.guide.story.unavailable":"No authored guided story in this diagram.","viewer.guide.open":"Open diagram guide","viewer.guide.noStory":"This diagram has no authored guided story.","viewer.finder.title":"Find a node","viewer.finder.close":"Close node finder","viewer.finder.placeholder":"Search labels or IDs","viewer.finder.search":"Search diagram nodes","viewer.finder.results":"Diagram nodes","viewer.finder.empty":"No matching nodes","viewer.finder.result.focus":"Focus {label}","viewer.finder.result.routeStart":"Choose {label} as route start","viewer.finder.result.routeTarget":"Choose {label} as route destination, {links}","viewer.finder.status.empty":"No matching nodes","viewer.finder.status.count.one":"{count} matching node","viewer.finder.status.count.other":"{count} matching nodes","viewer.finder.noun.nodes":"nodes","viewer.finder.link.one":"{count} link","viewer.finder.link.other":"{count} links","viewer.finder.result.focus.one":"Focus {label}, {count} related connection","viewer.finder.result.focus.other":"Focus {label}, {count} related connections","viewer.finder.status.filtered":"{visible} of {available} {noun}","viewer.finder.status.all":"{available} {noun}","viewer.passport.eyebrow":"Semantic passport","viewer.passport.metadata":"Node metadata","viewer.passport.evidence":"Verified source evidence","viewer.passport.verified":"Verified source","viewer.passport.reach":"Authored reach","viewer.passport.reach.trace":"Trace authored reachability","viewer.passport.upstream":"Upstream","viewer.passport.downstream":"Downstream","viewer.passport.upstream.trace":"Trace upstream authored reachability","viewer.passport.downstream.trace":"Trace downstream authored reachability","viewer.passport.close":"Close semantic passport","viewer.passport.copy":"Copy link","viewer.passport.copy.focus":"Copy link to focused node","viewer.passport.relations":"Relations","viewer.passport.relations.show":"Show connected relationships","viewer.passport.relations.hide":"Hide connected relationships","viewer.passport.relations.list":"Connected relationships","viewer.passport.copyRelation":"Copy relation","viewer.passport.copyNode":"Copy node","viewer.passport.copyPinned":"Copy link to pinned relationship","viewer.passport.copySource":"Copy link to source node","viewer.passport.copy.focused.success":"Focused node link copied","viewer.passport.copy.pinned.success":"Pinned relationship link copied","viewer.passport.copy.focused.failed":"Could not copy focused node link","viewer.passport.copy.pinned.failed":"Could not copy pinned relationship link","viewer.passport.relationship.none":"No connected relationships","viewer.passport.relationship.count.one":"{count} relation","viewer.passport.relationship.count.other":"{count} relations","viewer.passport.relationship.show.one":"Show {count} connected relationship","viewer.passport.relationship.show.other":"Show {count} connected relationships","viewer.passport.relationship.summary":"{out} outgoing · {in} incoming{loops}","viewer.passport.relationship.loops":" · {count} loop","viewer.passport.relationship.explorer":"Direct relationship explorer","viewer.passport.relationship.help":"Use arrow keys to explore relationships. Press Enter or Space to pin details; Escape clears.","viewer.passport.relationship.loopsBack":"loops back","viewer.passport.relationship.connectsTo":"connects to","viewer.passport.relationship.connectsFrom":"connects from","viewer.passport.relationship.pinned":"Pinned relationship · {from} → {to} · {label}","viewer.passport.relationship.inspect":"Inspect relationship {index} of {total}: {from} to {to}, {label}. Press Enter for details.","viewer.passport.relationship.group.out":"Outgoing","viewer.passport.relationship.group.in":"Incoming","viewer.passport.relationship.group.loop":"Self loops","viewer.passport.relationship.row":"{group}: {relationship}, {neighbor}","viewer.passport.relationship.direction.out":"OUT →","viewer.passport.relationship.direction.in":"← IN","viewer.passport.relationship.direction.loop":"LOOP","viewer.passport.sourceCount.one":"{count} verified source reference","viewer.passport.sourceCount.other":"{count} verified source references","viewer.passport.sourceMarker":"SRC","viewer.passport.beacon.one":"{count} verified source; focus this node to inspect","viewer.passport.beacon.other":"{count} verified sources; focus this node to inspect","viewer.passport.repository.open":"Open verified repository revision {revision}","viewer.passport.source.open":"Open verified source {path} at revision {revision}","viewer.passport.source.openLink":"Open ↗","viewer.passport.reach.upstream.one":"Trace {count} upstream authored node","viewer.passport.reach.upstream.other":"Trace {count} upstream authored nodes","viewer.passport.reach.downstream.one":"Trace {count} downstream authored node","viewer.passport.reach.downstream.other":"Trace {count} downstream authored nodes","viewer.passport.reach.noUpstream":"No upstream authored nodes","viewer.passport.reach.noDownstream":"No downstream authored nodes","viewer.passport.reach.status":"{direction} · {nodes} nodes · {links} links · max {hops} hops","viewer.route.eyebrow":"Route probe","viewer.route.start":"Choose a start node","viewer.route.start.find":"Find start","viewer.route.start.find.aria":"Find a route start","viewer.route.copy":"Copy link","viewer.route.copy.aria":"Copy link to traced route","viewer.route.clear":"Clear","viewer.route.clear.aria":"Clear route probe","viewer.route.traced":"Traced route","viewer.route.pickTwo":"Pick two semantic nodes on the diagram","viewer.route.pickOne":"Pick a semantic node on the diagram","viewer.route.controls":"Route journey controls","viewer.route.previous":"Previous route position","viewer.route.play":"Play route journey","viewer.route.pause":"Pause route journey","viewer.route.replay":"Replay route journey","viewer.route.next":"Next route position","viewer.route.journey":"Journey","viewer.route.pause.label":"Pause","viewer.route.replay.label":"Replay","viewer.route.overview":"Overview","viewer.route.overview.aria":"Show complete route overview","viewer.route.instructions":"Choose the source, then the destination. Direction matters.","viewer.route.destination":"Choose a destination from {label}","viewer.route.destination.find":"Find target","viewer.route.destination.find.aria":"Find a reachable route destination","viewer.route.differentDestination":"Choose a different destination","viewer.route.distinct":"A route needs two distinct semantic nodes.","viewer.route.unreachable":"No directed route to {label}","viewer.route.unreachable.detail":"{target} is not reachable from {source}. Pick a highlighted destination.","viewer.route.start.instructions":"Select the source. The next step will reveal only directed destinations.","viewer.route.copy.success":"Traced route link copied","viewer.route.copy.failed":"Could not copy traced route link","viewer.route.position":"Route position {index} of {total}: {label}","viewer.route.step":"Step {index} of {total} · {phase} · {label}","viewer.route.motionRequired":"Automatic journey requires Live motion","viewer.route.trigger.clear":"Clear traced route","viewer.route.overview.status":"{nodes} · {hops} · shortest authored route","viewer.route.overview.node.one":"{count} node","viewer.route.overview.node.other":"{count} nodes","viewer.route.overview.hop.one":"{count} directed hop","viewer.route.overview.hop.other":"{count} directed hops","viewer.route.phase.playing":"Playing","viewer.route.phase.complete":"Complete","viewer.route.phase.inspecting":"Inspecting","viewer.route.destination.count.one":"{count} directed destination available. Pick a highlighted node.","viewer.route.destination.count.other":"{count} directed destinations available. Pick a highlighted node.","viewer.route.noOutgoing":"No outgoing route starts here. Clear and choose another source.","viewer.route.result.title":"{source} to {target}","viewer.route.finder.source.title":"Choose route start","viewer.route.finder.source.placeholder":"Search route sources","viewer.route.finder.source.empty":"No matching route sources","viewer.route.finder.source.results":"Nodes that can start a route","viewer.route.finder.source.noun":"route sources","viewer.route.finder.source.badge":"start","viewer.route.finder.target.title":"Destination from {label}","viewer.route.finder.target.placeholder":"Search reachable destinations","viewer.route.finder.target.empty":"No matching reachable destinations","viewer.route.finder.target.results":"Reachable route destinations","viewer.route.finder.target.noun":"reachable destinations","viewer.route.hop.one":"{count} hop","viewer.route.hop.other":"{count} hops","viewer.lens.eyebrow":"Semantic lens","viewer.lens.title":"Compare system roles","viewer.lens.close":"Close semantic lens","viewer.lens.instruction":"Choose up to two semantic kinds. One reveals its real traffic; two compare only direct authored relationships.","viewer.lens.kinds":"Semantic kinds","viewer.lens.choose":"Choose a kind to inspect its nodes and touching relationships.","viewer.lens.copy":"Copy link to semantic lens","viewer.lens.clear":"Clear semantic lens","viewer.lens.open":"Open semantic lens","viewer.lens.openActive":"Open active semantic lens","viewer.lens.legend":"Semantic legend","viewer.lens.legend.inspect.one":"Inspect {label}, {count} node","viewer.lens.legend.inspect.other":"Inspect {label}, {count} nodes","viewer.lens.kind.count.one":"{label}, {count} node","viewer.lens.kind.count.other":"{label}, {count} nodes","viewer.lens.compare.one":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationship","viewer.lens.compare.other":"{first} → {second}: {forward} · {second} → {first}: {reverse} · {count} direct relationships","viewer.lens.single":"{nodes} · {relationships} · connected peers remain visible","viewer.lens.node.one":"{count} {label} node","viewer.lens.node.other":"{count} {label} nodes","viewer.lens.relationship.one":"{count} touching relationship","viewer.lens.relationship.other":"{count} touching relationships","viewer.radar.title":"Semantic radar","viewer.radar.building":"Building overview","viewer.radar.openFull":"Open full semantic radar","viewer.radar.open":"Open radar","viewer.radar.close":"Close semantic radar","viewer.radar.surface":"Diagram overview. Click a node to focus it, or use arrow keys to pan.","viewer.radar.click":"Click node","viewer.radar.drag":"Drag to pan","viewer.radar.space":"Semantic radar needs more MAP space.","viewer.radar.nodes":"Semantic diagram radar nodes","viewer.radar.focus":"Focus {label} from Semantic Radar","viewer.radar.status":"{count} nodes · {viewport}","viewer.radar.fullMap":"{count} nodes · full map","viewer.radar.compacted":"Radar compacted to avoid covering the Semantic Passport or MAP controls.","viewer.radar.cancelWaiting":"Cancel semantic radar waiting for more MAP space","viewer.radar.needsSpace":"Semantic radar needs more visible MAP space","viewer.radar.viewport.full":"full map","viewer.radar.viewport.width":"{percent}% width","viewer.radar.viewport.scale":"{percent}% viewport","viewer.nav.controls":"Diagram view controls","viewer.nav.route":"Trace a directed route","viewer.nav.route.title":"Trace route (R)","viewer.nav.route.short":"PATH","viewer.nav.radar":"Open semantic radar","viewer.nav.radar.title":"Semantic radar (M)","viewer.nav.radar.short":"MAP","viewer.nav.lens":"Open semantic lens","viewer.nav.lens.title":"Semantic lens (L)","viewer.nav.lens.short":"LENS","viewer.nav.find":"Find a node","viewer.nav.find.title":"Find a node (/)","viewer.nav.guide":"Open diagram guide","viewer.nav.guide.title":"Diagram guide (?)","viewer.nav.zoomOut":"Zoom out","viewer.nav.zoomOut.title":"Zoom out (-)","viewer.nav.reset":"Reset diagram view","viewer.nav.reset.title":"Reset view (0)","viewer.nav.read":"READ","viewer.nav.zoomIn":"Zoom in","viewer.nav.zoomIn.title":"Zoom in (+)","viewer.nav.camera":"{hint}. Reset diagram view","viewer.nav.camera.title":"{semantic}{hint} · reset view (0)","viewer.nav.camera.semantic":"Semantic camera active · ","viewer.nav.level.map":"MAP","viewer.nav.level.read":"READ","viewer.nav.level.full":"FULL","viewer.nav.level.auto":"AUTO","viewer.nav.detail.map":"Zoom in to reveal relationship labels and node context","viewer.nav.detail.read":"Zoom in again to reveal tags and annotations","viewer.nav.detail.full":"Full diagram detail","viewer.intent.summary":"{label}. {out} outgoing, {in} incoming{loops}. {total} connections. Press Enter for details.","viewer.intent.loops":", {count} self loop","viewer.common.copied":"Copied","viewer.common.copyFailed":"Copy failed","viewer.common.copyLink":"Copy link","viewer.common.clear":"Clear","viewer.common.close":"Close"}}</script>
     <div class="guided-views no-print" id="guided-views" hidden aria-label="Guided diagram views">
@@ -5004,8 +5004,8 @@
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / PLATE 04">
-      <svg viewBox="0 0 1150 598" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
-        <title id="archify-diagram-title">Herdr-Jev Architecture</title>
+      <svg viewBox="0 0 1358 908" role="img" lang="en" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="archify-diagram-title">Herdr-Jev Overview</title>
         <desc id="archify-diagram-description">An architecture diagram generated by Archify.</desc>
         <!-- Definitions -->
         <defs>
@@ -5030,232 +5030,502 @@
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Herdr Multiplexer Environment (HERDR_ENV=1)" x="210" y="48" width="690" height="482" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="Callers" x="10" y="146" width="208" height="346" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="1" data-composition-frame-label="Semantic Triage and Quota Plane" x="440" y="60" width="200" height="470" rx="8" class="c-security-group" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="Jev Office" x="10" y="610" width="208" height="230" rx="12" class="c-region" stroke-width="1"/>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="2" data-composition-frame-label="Agent Harnesses" x="916" y="262" width="208" height="462" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="user" data-edge-to="herdr" data-edge-label="task" data-edge-key="0" data-edge-id="user-to-herdr" data-composition-points="160,300;240,300" d="M 160 300 L 240 300" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="aliases" data-edge-to="herdr" data-edge-label="binary sanitizer" data-edge-key="1" data-edge-id="aliases-to-herdr" data-composition-points="310,150;310,270" d="M 310 150 L 310 270" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="detector" data-edge-to="catalog" data-edge-label="probe quotas" data-edge-key="2" data-edge-id="detector-to-catalog" data-composition-points="380,480;470,480" d="M 380 480 L 470 480" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="herdr" data-edge-to="triage" data-edge-label="route" data-edge-key="3" data-edge-id="herdr-to-triage" data-composition-points="380,300;470,300" d="M 380 300 L 470 300" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="vault" data-edge-to="triage" data-edge-label="secret" data-edge-key="4" data-edge-id="vault-to-triage" data-composition-points="540,150;540,270" d="M 540 150 L 540 270" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="triage" data-edge-to="advisor" data-edge-label="triad plan" data-edge-key="5" data-edge-id="triage-to-advisor" data-composition-points="610,300;665,300;665,120;720,120" d="M 610 300 L 657 300 Q 665 300 665 292 L 665 128 Q 665 120 673 120 L 720 120" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="advisor" data-edge-to="implementer" data-edge-label="handoff" data-edge-key="6" data-edge-id="advisor-to-implementer" data-composition-points="795,150;795,270" d="M 795 150 L 795 270" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="implementer" data-edge-to="reviewer" data-edge-label="review" data-edge-key="7" data-edge-id="implementer-to-reviewer" data-composition-points="795,330;795,450" d="M 795 330 L 795 450" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="catalog" data-edge-to="implementer" data-edge-label="quota cascade" data-edge-key="8" data-edge-id="catalog-to-implementer" data-composition-points="610,480;665,480;665,300;720,300" d="M 610 480 L 657 480 Q 665 480 665 472 L 665 308 Q 665 300 673 300 L 720 300" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="reviewer" data-edge-to="harness" data-edge-label="learnings" data-edge-key="9" data-edge-id="reviewer-to-harness" data-composition-points="870,480;920,480;920,300;970,300" d="M 870 480 L 912 480 Q 920 480 920 472 L 920 308 Q 920 300 928 300 L 970 300" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="operator" data-edge-to="cli" data-edge-label="run" data-edge-key="0" data-edge-id="op-cli" data-composition-points="188,208;226,208;226,433;264,433" d="M 188 208 L 218 208 Q 226 208 226 216 L 226 425 Q 226 433 234 433 L 264 433" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="routines" data-edge-to="cli" data-edge-label="cron" data-edge-key="1" data-edge-id="cron-cli" data-composition-points="188,440;264,440" d="M 188 440 L 264 440" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="office_poll" data-edge-to="cli" data-edge-label="classify" data-edge-key="2" data-edge-id="poll-cli" data-composition-points="188,672;226,672;226,447;264,447" d="M 188 672 L 218 672 Q 226 672 226 664 L 226 455 Q 226 447 234 447 L 264 447" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="office_app" data-edge-to="office_poll" data-edge-label="tick" data-edge-key="3" data-edge-id="office-poll" data-composition-points="114,756;114,704" d="M 114 756 L 114 704" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="test_guard" data-edge-to="cli" data-edge-label="guard" data-edge-key="4" data-edge-id="guard-cli" data-composition-points="338,756;338,472" d="M 338 756 L 338 472" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="cli" data-edge-to="triage" data-edge-key="5" data-edge-id="cli-triage" data-composition-points="412,424;450,424;450,92;488,92" d="M 412 424 L 442 424 Q 450 424 450 416 L 450 100 Q 450 92 458 92 L 488 92" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cli" data-edge-to="classifier" data-edge-key="6" data-edge-id="cli-classifier" data-composition-points="412,429.3333333333333;450,429.3333333333333;450,208;488,208" d="M 412 429.3333333333333 L 442 429.3333333333333 Q 450 429.3333333333333 450 421.3333333333333 L 450 216 Q 450 208 458 208 L 488 208" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cli" data-edge-to="launcher" data-edge-key="7" data-edge-id="cli-launcher" data-composition-points="412,434.6666666666667;450,434.6666666666667;450,324;488,324" d="M 412 434.6666666666667 L 442 434.6666666666667 Q 450 434.6666666666667 450 426.6666666666667 L 450 332 Q 450 324 458 324 L 488 324" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cli" data-edge-to="peers" data-edge-key="8" data-edge-id="cli-peers" data-composition-points="412,440;488,440" d="M 412 440 L 488 440" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cli" data-edge-to="reports" data-edge-key="9" data-edge-id="cli-reports" data-composition-points="412,445.3333333333333;450,445.3333333333333;450,556;488,556" d="M 412 445.3333333333333 L 442 445.3333333333333 Q 450 445.3333333333333 450 453.3333333333333 L 450 548 Q 450 556 458 556 L 488 556" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cli" data-edge-to="notify" data-edge-key="10" data-edge-id="cli-notify" data-composition-points="412,450.6666666666667;450,450.6666666666667;450,672;488,672" d="M 412 450.6666666666667 L 442 450.6666666666667 Q 450 450.6666666666667 450 458.6666666666667 L 450 664 Q 450 672 458 672 L 488 672" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="cli" data-edge-to="pipeline" data-edge-key="11" data-edge-id="cli-pipeline" data-composition-points="412,456;450,456;450,788;488,788" d="M 412 456 L 442 456 Q 450 456 450 464 L 450 780 Q 450 788 458 788 L 488 788" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="triage" data-edge-to="typesafe_jev" data-edge-label="triage" data-edge-key="12" data-edge-id="triage-jev" data-composition-points="636,92;679,92;679,143;722,143" d="M 636 92 L 671 92 Q 679 92 679 100 L 679 135 Q 679 143 687 143 L 722 143" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="classifier" data-edge-to="typesafe_jev" data-edge-label="classify" data-edge-key="13" data-edge-id="classifier-jev" data-composition-points="636,208;679,208;679,157;722,157" d="M 636 208 L 671 208 Q 679 208 679 200 L 679 165 Q 679 157 687 157 L 722 157" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="vault" data-edge-to="typesafe_jev" data-edge-label="api key" data-edge-key="14" data-edge-id="vault-jev" data-composition-points="946,150;870,150" d="M 946 150 L 870 150" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="launcher" data-edge-to="herdr_panes" data-edge-label="spawn" data-edge-key="15" data-edge-id="launcher-panes" data-composition-points="636,324;679,324;679,375;722,375" d="M 636 324 L 671 324 Q 679 324 679 332 L 679 367 Q 679 375 687 375 L 722 375" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="peers" data-edge-to="herdr_panes" data-edge-label="pane io" data-edge-key="16" data-edge-id="peers-panes" data-composition-points="636,440;679,440;679,389;722,389" d="M 636 440 L 671 440 Q 679 440 679 432 L 679 397 Q 679 389 687 389 L 722 389" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="reports" data-edge-to="state_dir" data-edge-label="files" data-edge-key="17" data-edge-id="reports-state" data-composition-points="636,556;722,556" d="M 636 556 L 722 556" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="notify" data-edge-to="herdr_notify" data-edge-label="alert" data-edge-key="18" data-edge-id="notify-herdr" data-composition-points="636,672;722,672" d="M 636 672 L 722 672" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="pipeline" data-edge-to="harness_bridge" data-edge-label="run" data-edge-key="19" data-edge-id="pipeline-bridge" data-composition-points="636,788;722,788" d="M 636 788 L 722 788" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="harness_bridge" data-edge-to="review_gate" data-edge-label="verify" data-edge-key="20" data-edge-id="bridge-gate" data-composition-points="870,788;946,788" d="M 870 788 L 946 788" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="review_gate" data-edge-to="harness_core" data-edge-label="judge" data-edge-key="21" data-edge-id="gate-core" data-composition-points="1094,788;1170,788" d="M 1094 788 L 1170 788" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="review_gate" data-edge-to="agent_codex" data-edge-label="reviewer" data-edge-key="22" data-edge-id="gate-codex" data-composition-points="1020,756;1020,704" d="M 1020 756 L 1020 704" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="herdr_panes" data-edge-to="agent_kiro" data-edge-key="23" data-edge-id="panes-kiro" data-composition-points="870,366;908,366;908,324;946,324" d="M 870 366 L 900 366 Q 908 366 908 358 L 908 332 Q 908 324 916 324 L 946 324" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="herdr_panes" data-edge-to="agent_antigravity" data-edge-key="24" data-edge-id="panes-antigravity" data-composition-points="870,376.6666666666667;908,376.6666666666667;908,440;946,440" d="M 870 376.6666666666667 L 900 376.6666666666667 Q 908 376.6666666666667 908 384.6666666666667 L 908 432 Q 908 440 916 440 L 946 440" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="herdr_panes" data-edge-to="agent_claude" data-edge-key="25" data-edge-id="panes-claude" data-composition-points="870,387.3333333333333;908,387.3333333333333;908,556;946,556" d="M 870 387.3333333333333 L 900 387.3333333333333 Q 908 387.3333333333333 908 395.3333333333333 L 908 548 Q 908 556 916 556 L 946 556" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="herdr_panes" data-edge-to="agent_codex" data-edge-key="26" data-edge-id="panes-codex" data-composition-points="870,398;908,398;908,672;946,672" d="M 870 398 L 900 398 Q 908 398 908 406 L 908 664 Q 908 672 916 672 L 946 672" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
 
         <!-- Components -->
-        <g id="node-user" data-node-id="user" data-node-label="Operator" tabindex="0" role="button" aria-label="Focus Operator, Herdr Keybinds / CLI, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="Herdr Keybinds / CLI" data-node-context="Architecture component">
-          <title>Operator · Herdr Keybinds / CLI · Architecture component</title>
-          <rect x="40" y="270" width="120" height="60" rx="6" class="c-mask"/>
-          <rect x="40" y="270" width="120" height="60" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(46 276) scale(0.6875)">
+        <g id="node-operator" data-node-id="operator" data-node-label="Operator" tabindex="0" role="button" aria-label="Focus Operator, CLI, actions, keybinds, Callers" aria-pressed="false" data-node-kind="external" data-node-sublabel="CLI, actions, keybinds" data-node-tag="caller" data-node-context="Callers">
+          <title>Operator · CLI, actions, keybinds · Callers · caller</title>
+          <rect x="40" y="176" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="40" y="176" width="148" height="64" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(46 182) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="100" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Operator</text>
-        <text data-detail="context" x="100" y="314" class="t-muted" font-size="9" text-anchor="middle">Herdr Keybinds / CLI</text>
+          <text data-node-label="" data-detail-anchor="" x="114" y="206" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Operator</text>
+        <text data-detail="context" x="114" y="222" class="t-muted" font-size="9" text-anchor="middle">CLI, actions, keybinds</text>
+        <text data-detail="fine" x="114" y="232" class="t-external" font-size="7" text-anchor="middle">caller</text>
         </g>
 
-        <g id="node-aliases" data-node-id="aliases" data-node-label="Aliases Gate" tabindex="0" role="button" aria-label="Focus Aliases Gate, HERDR_JEV_ALLOW_ALIASES, Herdr Multiplexer Environment (HERDR_ENV=1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="HERDR_JEV_ALLOW_ALIASES" data-node-tag="security-gate" data-node-context="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <title>Aliases Gate · HERDR_JEV_ALLOW_ALIASES · Herdr Multiplexer Environment (HERDR_ENV=1) · security-gate</title>
-          <rect x="240" y="90" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="240" y="90" width="140" height="60" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(246 96) scale(0.6875)">
-            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
-            <path d="m5.8 8 1.5 1.5 3-3"/>
+        <g id="node-routines" data-node-id="routines" data-node-label="Routines Scheduler" tabindex="0" role="button" aria-label="Focus Routines Scheduler, standup and daily, Callers" aria-pressed="false" data-node-kind="external" data-node-sublabel="standup and daily" data-node-tag="scheduler" data-node-context="Callers">
+          <title>Routines Scheduler · standup and daily · Callers · scheduler</title>
+          <rect x="40" y="408" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="40" y="408" width="148" height="64" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(46 414) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="310" y="118" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Aliases Gate</text>
-        <text data-detail="context" x="310" y="134" class="t-muted" font-size="9" text-anchor="middle">HERDR_JEV_ALLOW_ALIASES</text>
-        <text data-detail="fine" x="310" y="142" class="t-security" font-size="7" text-anchor="middle">security-gate</text>
+          <text data-node-label="" data-detail-anchor="" x="114" y="438" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Routines Scheduler</text>
+        <text data-detail="context" x="114" y="454" class="t-muted" font-size="9" text-anchor="middle">standup and daily</text>
+        <text data-detail="fine" x="114" y="464" class="t-external" font-size="7" text-anchor="middle">scheduler</text>
         </g>
 
-        <g id="node-herdr" data-node-id="herdr" data-node-label="Herdr Runtime" tabindex="0" role="button" aria-label="Focus Herdr Runtime, Overlay Panes &amp; Socket, Herdr Multiplexer Environment (HERDR_ENV=1)" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Overlay Panes &amp; Socket" data-node-context="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <title>Herdr Runtime · Overlay Panes &amp; Socket · Herdr Multiplexer Environment (HERDR_ENV=1)</title>
-          <rect x="240" y="270" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="240" y="270" width="140" height="60" rx="6" class="c-frontend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(246 276) scale(0.6875)">
+        <g id="node-office_poll" data-node-id="office_poll" data-node-label="Jev Classify Poll" tabindex="0" role="button" aria-label="Focus Jev Classify Poll, 60s, 20 per minute, Jev Office, Node.js" aria-pressed="false" data-node-kind="backend" data-node-sublabel="60s, 20 per minute" data-node-tag="rate-policy" data-node-context="Jev Office" data-node-brand="Node.js" data-node-brand-id="node-js" data-node-brand-status="preset" data-node-brand-source="https://nodejs.org/en/about/branding">
+          <title>Jev Classify Poll · 60s, 20 per minute · Jev Office · rate-policy · Node.js</title>
+          <rect x="40" y="640" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="40" y="640" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(46 646) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <g aria-hidden="true" data-brand-mark="node-js" data-brand-title="Node.js" data-brand-status="preset" data-brand-source="https://nodejs.org/en/about/branding" class="brand-mark" transform="translate(166 646)">
+            <rect width="16" height="16" rx="4" class="brand-mark-badge"/>
+            <path d="M11.998,24c-0.321,0-0.641-0.084-0.922-0.247l-2.936-1.737c-0.438-0.245-0.224-0.332-0.08-0.383 c0.585-0.203,0.703-0.25,1.328-0.604c0.065-0.037,0.151-0.023,0.218,0.017l2.256,1.339c0.082,0.045,0.197,0.045,0.272,0l8.795-5.076 c0.082-0.047,0.134-0.141,0.134-0.238V6.921c0-0.099-0.053-0.192-0.137-0.242l-8.791-5.072c-0.081-0.047-0.189-0.047-0.271,0 L3.075,6.68C2.99,6.729,2.936,6.825,2.936,6.921v10.15c0,0.097,0.054,0.189,0.139,0.235l2.409,1.392 c1.307,0.654,2.108-0.116,2.108-0.89V7.787c0-0.142,0.114-0.253,0.256-0.253h1.115c0.139,0,0.255,0.112,0.255,0.253v10.021 c0,1.745-0.95,2.745-2.604,2.745c-0.508,0-0.909,0-2.026-0.551L2.28,18.675c-0.57-0.329-0.922-0.945-0.922-1.604V6.921 c0-0.659,0.353-1.275,0.922-1.603l8.795-5.082c0.557-0.315,1.296-0.315,1.848,0l8.794,5.082c0.57,0.329,0.924,0.944,0.924,1.603 v10.15c0,0.659-0.354,1.273-0.924,1.604l-8.794,5.078C12.643,23.916,12.324,24,11.998,24z M19.099,13.993 c0-1.9-1.284-2.406-3.987-2.763c-2.731-0.361-3.009-0.548-3.009-1.187c0-0.528,0.235-1.233,2.258-1.233 c1.807,0,2.473,0.389,2.747,1.607c0.024,0.115,0.129,0.199,0.247,0.199h1.141c0.071,0,0.138-0.031,0.186-0.081 c0.048-0.054,0.074-0.123,0.067-0.196c-0.177-2.098-1.571-3.076-4.388-3.076c-2.508,0-4.004,1.058-4.004,2.833 c0,1.925,1.488,2.457,3.895,2.695c2.88,0.282,3.103,0.703,3.103,1.269c0,0.983-0.789,1.402-2.642,1.402 c-2.327,0-2.839-0.584-3.011-1.742c-0.02-0.124-0.126-0.215-0.253-0.215h-1.137c-0.141,0-0.254,0.112-0.254,0.253 c0,1.482,0.806,3.248,4.655,3.248C17.501,17.007,19.099,15.91,19.099,13.993z" transform="translate(3 3) scale(0.4166666666666667)" fill="#5FA04E"/>
+            <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="114" y="670" class="t-primary" font-size="9" font-weight="600" text-anchor="middle">Jev Classify Poll</text>
+        <text data-detail="context" x="114" y="686" class="t-muted" font-size="9" text-anchor="middle">60s, 20 per minute</text>
+        <text data-detail="fine" x="114" y="696" class="t-backend" font-size="7" text-anchor="middle">rate-policy</text>
+        </g>
+
+        <g id="node-office_app" data-node-id="office_app" data-node-label="Jev Office" tabindex="0" role="button" aria-label="Focus Jev Office, desks, swarm, ended, Jev Office, Node.js" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="desks, swarm, ended" data-node-tag="office-pane" data-node-context="Jev Office" data-node-brand="Node.js" data-node-brand-id="node-js" data-node-brand-status="preset" data-node-brand-source="https://nodejs.org/en/about/branding">
+          <title>Jev Office · desks, swarm, ended · Jev Office · office-pane · Node.js</title>
+          <rect x="40" y="756" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="40" y="756" width="148" height="64" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(46 762) scale(0.6875)">
             <rect x="2" y="3" width="12" height="10" rx="2"/>
             <path d="M2 6.5h12"/>
             <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
             <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="310" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Herdr Runtime</text>
-        <text data-detail="context" x="310" y="314" class="t-muted" font-size="9" text-anchor="middle">Overlay Panes &amp; Socket</text>
+          <g aria-hidden="true" data-brand-mark="node-js" data-brand-title="Node.js" data-brand-status="preset" data-brand-source="https://nodejs.org/en/about/branding" class="brand-mark" transform="translate(166 762)">
+            <rect width="16" height="16" rx="4" class="brand-mark-badge"/>
+            <path d="M11.998,24c-0.321,0-0.641-0.084-0.922-0.247l-2.936-1.737c-0.438-0.245-0.224-0.332-0.08-0.383 c0.585-0.203,0.703-0.25,1.328-0.604c0.065-0.037,0.151-0.023,0.218,0.017l2.256,1.339c0.082,0.045,0.197,0.045,0.272,0l8.795-5.076 c0.082-0.047,0.134-0.141,0.134-0.238V6.921c0-0.099-0.053-0.192-0.137-0.242l-8.791-5.072c-0.081-0.047-0.189-0.047-0.271,0 L3.075,6.68C2.99,6.729,2.936,6.825,2.936,6.921v10.15c0,0.097,0.054,0.189,0.139,0.235l2.409,1.392 c1.307,0.654,2.108-0.116,2.108-0.89V7.787c0-0.142,0.114-0.253,0.256-0.253h1.115c0.139,0,0.255,0.112,0.255,0.253v10.021 c0,1.745-0.95,2.745-2.604,2.745c-0.508,0-0.909,0-2.026-0.551L2.28,18.675c-0.57-0.329-0.922-0.945-0.922-1.604V6.921 c0-0.659,0.353-1.275,0.922-1.603l8.795-5.082c0.557-0.315,1.296-0.315,1.848,0l8.794,5.082c0.57,0.329,0.924,0.944,0.924,1.603 v10.15c0,0.659-0.354,1.273-0.924,1.604l-8.794,5.078C12.643,23.916,12.324,24,11.998,24z M19.099,13.993 c0-1.9-1.284-2.406-3.987-2.763c-2.731-0.361-3.009-0.548-3.009-1.187c0-0.528,0.235-1.233,2.258-1.233 c1.807,0,2.473,0.389,2.747,1.607c0.024,0.115,0.129,0.199,0.247,0.199h1.141c0.071,0,0.138-0.031,0.186-0.081 c0.048-0.054,0.074-0.123,0.067-0.196c-0.177-2.098-1.571-3.076-4.388-3.076c-2.508,0-4.004,1.058-4.004,2.833 c0,1.925,1.488,2.457,3.895,2.695c2.88,0.282,3.103,0.703,3.103,1.269c0,0.983-0.789,1.402-2.642,1.402 c-2.327,0-2.839-0.584-3.011-1.742c-0.02-0.124-0.126-0.215-0.253-0.215h-1.137c-0.141,0-0.254,0.112-0.254,0.253 c0,1.482,0.806,3.248,4.655,3.248C17.501,17.007,19.099,15.91,19.099,13.993z" transform="translate(3 3) scale(0.4166666666666667)" fill="#5FA04E"/>
+            <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="114" y="786" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Jev Office</text>
+        <text data-detail="context" x="114" y="802" class="t-muted" font-size="9" text-anchor="middle">desks, swarm, ended</text>
+        <text data-detail="fine" x="114" y="812" class="t-frontend" font-size="7" text-anchor="middle">office-pane</text>
         </g>
 
-        <g id="node-detector" data-node-id="detector" data-node-label="Harness Detector" tabindex="0" role="button" aria-label="Focus Harness Detector, Probing &amp; Auto-Config, Herdr Multiplexer Environment (HERDR_ENV=1)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Probing &amp; Auto-Config" data-node-context="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <title>Harness Detector · Probing &amp; Auto-Config · Herdr Multiplexer Environment (HERDR_ENV=1)</title>
-          <rect x="240" y="450" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="240" y="450" width="140" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(246 456) scale(0.6875)">
+        <g id="node-cli" data-node-id="cli" data-node-label="herdr-jev CLI" tabindex="0" role="button" aria-label="Focus herdr-jev CLI, by purpose, 8 groups, Architecture component, TypeScript" aria-pressed="false" data-node-kind="backend" data-node-sublabel="by purpose, 8 groups" data-node-tag="entrypoint" data-node-context="Architecture component" data-node-brand="TypeScript" data-node-brand-id="typescript" data-node-brand-status="preset" data-node-brand-source="https://www.typescriptlang.org/branding">
+          <title>herdr-jev CLI · by purpose, 8 groups · Architecture component · entrypoint · TypeScript</title>
+          <rect x="264" y="408" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="264" y="408" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(270 414) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="310" y="478" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Harness Detector</text>
-        <text data-detail="context" x="310" y="494" class="t-muted" font-size="9" text-anchor="middle">Probing &amp; Auto-Config</text>
+          <g aria-hidden="true" data-brand-mark="typescript" data-brand-title="TypeScript" data-brand-status="preset" data-brand-source="https://www.typescriptlang.org/branding" class="brand-mark" transform="translate(390 414)">
+            <rect width="16" height="16" rx="4" class="brand-mark-badge"/>
+            <path d="M1.125 0C.502 0 0 .502 0 1.125v21.75C0 23.498.502 24 1.125 24h21.75c.623 0 1.125-.502 1.125-1.125V1.125C24 .502 23.498 0 22.875 0zm17.363 9.75c.612 0 1.154.037 1.627.111a6.38 6.38 0 0 1 1.306.34v2.458a3.95 3.95 0 0 0-.643-.361 5.093 5.093 0 0 0-.717-.26 5.453 5.453 0 0 0-1.426-.2c-.3 0-.573.028-.819.086a2.1 2.1 0 0 0-.623.242c-.17.104-.3.229-.393.374a.888.888 0 0 0-.14.49c0 .196.053.373.156.529.104.156.252.304.443.444s.423.276.696.41c.273.135.582.274.926.416.47.197.892.407 1.266.628.374.222.695.473.963.753.268.279.472.598.614.957.142.359.214.776.214 1.253 0 .657-.125 1.21-.373 1.656a3.033 3.033 0 0 1-1.012 1.085 4.38 4.38 0 0 1-1.487.596c-.566.12-1.163.18-1.79.18a9.916 9.916 0 0 1-1.84-.164 5.544 5.544 0 0 1-1.512-.493v-2.63a5.033 5.033 0 0 0 3.237 1.2c.333 0 .624-.03.872-.09.249-.06.456-.144.623-.25.166-.108.29-.234.373-.38a1.023 1.023 0 0 0-.074-1.089 2.12 2.12 0 0 0-.537-.5 5.597 5.597 0 0 0-.807-.444 27.72 27.72 0 0 0-1.007-.436c-.918-.383-1.602-.852-2.053-1.405-.45-.553-.676-1.222-.676-2.005 0-.614.123-1.141.369-1.582.246-.441.58-.804 1.004-1.089a4.494 4.494 0 0 1 1.47-.629 7.536 7.536 0 0 1 1.77-.201zm-15.113.188h9.563v2.166H9.506v9.646H6.789v-9.646H3.375z" transform="translate(3 3) scale(0.4166666666666667)" fill="#3178C6"/>
+            <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="338" y="438" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">herdr-jev CLI</text>
+        <text data-detail="context" x="338" y="454" class="t-muted" font-size="9" text-anchor="middle">by purpose, 8 groups</text>
+        <text data-detail="fine" x="338" y="464" class="t-backend" font-size="7" text-anchor="middle">entrypoint</text>
         </g>
 
-        <g id="node-vault" data-node-id="vault" data-node-label="KeePassXC Vault" tabindex="0" role="button" aria-label="Focus KeePassXC Vault, TypeSafe API Key, Semantic Triage and Quota Plane" aria-pressed="false" data-node-kind="security" data-node-sublabel="TypeSafe API Key" data-node-tag="zero-secret-leak" data-node-context="Semantic Triage and Quota Plane">
-          <title>KeePassXC Vault · TypeSafe API Key · Semantic Triage and Quota Plane · zero-secret-leak</title>
-          <rect x="470" y="90" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="470" y="90" width="140" height="60" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(476 96) scale(0.6875)">
+        <g id="node-test_guard" data-node-id="test_guard" data-node-label="Test Guard" tabindex="0" role="button" aria-label="Focus Test Guard, blocks live herdr, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="blocks live herdr" data-node-tag="tests" data-node-context="Architecture component">
+          <title>Test Guard · blocks live herdr · Architecture component · tests</title>
+          <rect x="264" y="756" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="264" y="756" width="148" height="64" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(270 762) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="540" y="118" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">KeePassXC Vault</text>
-        <text data-detail="context" x="540" y="134" class="t-muted" font-size="9" text-anchor="middle">TypeSafe API Key</text>
-        <text data-detail="fine" x="540" y="142" class="t-security" font-size="7" text-anchor="middle">zero-secret-leak</text>
+          <text data-node-label="" data-detail-anchor="" x="338" y="786" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Test Guard</text>
+        <text data-detail="context" x="338" y="802" class="t-muted" font-size="9" text-anchor="middle">blocks live herdr</text>
+        <text data-detail="fine" x="338" y="812" class="t-security" font-size="7" text-anchor="middle">tests</text>
         </g>
 
-        <g id="node-triage" data-node-id="triage" data-node-label="TypeSafe Jev" tabindex="0" role="button" aria-label="Focus TypeSafe Jev, System One (~260ms), Semantic Triage and Quota Plane" aria-pressed="false" data-node-kind="backend" data-node-sublabel="System One (~260ms)" data-node-context="Semantic Triage and Quota Plane">
-          <title>TypeSafe Jev · System One (~260ms) · Semantic Triage and Quota Plane</title>
-          <rect x="470" y="270" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="470" y="270" width="140" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(476 276) scale(0.6875)">
+        <g id="node-triage" data-node-id="triage" data-node-label="Triage and Planner" tabindex="0" role="button" aria-label="Focus Triage and Planner, complexity and effort, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="complexity and effort" data-node-tag="triage" data-node-context="Architecture component">
+          <title>Triage and Planner · complexity and effort · Architecture component · triage</title>
+          <rect x="488" y="60" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="60" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 66) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="540" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TypeSafe Jev</text>
-        <text data-detail="context" x="540" y="314" class="t-muted" font-size="9" text-anchor="middle">System One (~260ms)</text>
+          <text data-node-label="" data-detail-anchor="" x="562" y="90" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Triage and Planner</text>
+        <text data-detail="context" x="562" y="106" class="t-muted" font-size="9" text-anchor="middle">complexity and effort</text>
+        <text data-detail="fine" x="562" y="116" class="t-backend" font-size="7" text-anchor="middle">triage</text>
         </g>
 
-        <g id="node-catalog" data-node-id="catalog" data-node-label="Models &amp; Quotas" tabindex="0" role="button" aria-label="Focus Models &amp; Quotas, Circuit Breaker, Semantic Triage and Quota Plane" aria-pressed="false" data-node-kind="database" data-node-sublabel="Circuit Breaker" data-node-context="Semantic Triage and Quota Plane">
-          <title>Models &amp; Quotas · Circuit Breaker · Semantic Triage and Quota Plane</title>
-          <rect x="470" y="450" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="470" y="450" width="140" height="60" rx="6" class="c-database" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(476 456) scale(0.6875)">
+        <g id="node-classifier" data-node-id="classifier" data-node-label="Pane Classifier" tabindex="0" role="button" aria-label="Focus Pane Classifier, state and attention, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="state and attention" data-node-tag="classifier" data-node-context="Architecture component">
+          <title>Pane Classifier · state and attention · Architecture component · classifier</title>
+          <rect x="488" y="176" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="176" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 182) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="562" y="206" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Pane Classifier</text>
+        <text data-detail="context" x="562" y="222" class="t-muted" font-size="9" text-anchor="middle">state and attention</text>
+        <text data-detail="fine" x="562" y="232" class="t-backend" font-size="7" text-anchor="middle">classifier</text>
+        </g>
+
+        <g id="node-launcher" data-node-id="launcher" data-node-label="Launcher" tabindex="0" role="button" aria-label="Focus Launcher, grid, ready, trust, git, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="grid, ready, trust, git" data-node-tag="launcher" data-node-context="Architecture component">
+          <title>Launcher · grid, ready, trust, git · Architecture component · launcher</title>
+          <rect x="488" y="292" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="292" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 298) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="562" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Launcher</text>
+        <text data-detail="context" x="562" y="338" class="t-muted" font-size="9" text-anchor="middle">grid, ready, trust, git</text>
+        <text data-detail="fine" x="562" y="348" class="t-backend" font-size="7" text-anchor="middle">launcher</text>
+        </g>
+
+        <g id="node-peers" data-node-id="peers" data-node-label="Peer Messaging" tabindex="0" role="button" aria-label="Focus Peer Messaging, send, read, standup, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="send, read, standup" data-node-tag="peer" data-node-context="Architecture component">
+          <title>Peer Messaging · send, read, standup · Architecture component · peer</title>
+          <rect x="488" y="408" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="408" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 414) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="562" y="438" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Peer Messaging</text>
+        <text data-detail="context" x="562" y="454" class="t-muted" font-size="9" text-anchor="middle">send, read, standup</text>
+        <text data-detail="fine" x="562" y="464" class="t-backend" font-size="7" text-anchor="middle">peer</text>
+        </g>
+
+        <g id="node-reports" data-node-id="reports" data-node-label="Daily Report" tabindex="0" role="button" aria-label="Focus Daily Report, standup and daily, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="standup and daily" data-node-tag="reports" data-node-context="Architecture component">
+          <title>Daily Report · standup and daily · Architecture component · reports</title>
+          <rect x="488" y="524" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="524" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 530) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="562" y="554" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Daily Report</text>
+        <text data-detail="context" x="562" y="570" class="t-muted" font-size="9" text-anchor="middle">standup and daily</text>
+        <text data-detail="fine" x="562" y="580" class="t-backend" font-size="7" text-anchor="middle">reports</text>
+        </g>
+
+        <g id="node-notify" data-node-id="notify" data-node-label="Notify" tabindex="0" role="button" aria-label="Focus Notify, native, hook, escalate, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="native, hook, escalate" data-node-tag="notify" data-node-context="Architecture component">
+          <title>Notify · native, hook, escalate · Architecture component · notify</title>
+          <rect x="488" y="640" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="640" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 646) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="562" y="670" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Notify</text>
+        <text data-detail="context" x="562" y="686" class="t-muted" font-size="9" text-anchor="middle">native, hook, escalate</text>
+        <text data-detail="fine" x="562" y="696" class="t-backend" font-size="7" text-anchor="middle">notify</text>
+        </g>
+
+        <g id="node-pipeline" data-node-id="pipeline" data-node-label="Triad Pipeline" tabindex="0" role="button" aria-label="Focus Triad Pipeline, advisor to reviewer, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="advisor to reviewer" data-node-tag="pipeline" data-node-context="Architecture component">
+          <title>Triad Pipeline · advisor to reviewer · Architecture component · pipeline</title>
+          <rect x="488" y="756" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="488" y="756" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(494 762) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="562" y="786" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Triad Pipeline</text>
+        <text data-detail="context" x="562" y="802" class="t-muted" font-size="9" text-anchor="middle">advisor to reviewer</text>
+        <text data-detail="fine" x="562" y="812" class="t-backend" font-size="7" text-anchor="middle">pipeline</text>
+        </g>
+
+        <g id="node-typesafe_jev" data-node-id="typesafe_jev" data-node-label="TypeSafe Jev" tabindex="0" role="button" aria-label="Focus TypeSafe Jev, System One, fallback, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="System One, fallback" data-node-tag="fast-decision" data-node-context="Architecture component">
+          <title>TypeSafe Jev · System One, fallback · Architecture component · fast-decision</title>
+          <rect x="722" y="118" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="722" y="118" width="148" height="64" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(728 124) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="796" y="148" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">TypeSafe Jev</text>
+        <text data-detail="context" x="796" y="164" class="t-muted" font-size="9" text-anchor="middle">System One, fallback</text>
+        <text data-detail="fine" x="796" y="174" class="t-external" font-size="7" text-anchor="middle">fast-decision</text>
+        </g>
+
+        <g id="node-herdr_panes" data-node-id="herdr_panes" data-node-label="Herdr Panes" tabindex="0" role="button" aria-label="Focus Herdr Panes, split, tab, send, read, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="split, tab, send, read" data-node-tag="herdr-api" data-node-context="Architecture component">
+          <title>Herdr Panes · split, tab, send, read · Architecture component · herdr-api</title>
+          <rect x="722" y="350" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="722" y="350" width="148" height="64" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(728 356) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="796" y="380" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Herdr Panes</text>
+        <text data-detail="context" x="796" y="396" class="t-muted" font-size="9" text-anchor="middle">split, tab, send, read</text>
+        <text data-detail="fine" x="796" y="406" class="t-external" font-size="7" text-anchor="middle">herdr-api</text>
+        </g>
+
+        <g id="node-state_dir" data-node-id="state_dir" data-node-label="State Dir" tabindex="0" role="button" aria-label="Focus State Dir, grid, runs, reports, Architecture component" aria-pressed="false" data-node-kind="database" data-node-sublabel="grid, runs, reports" data-node-tag="state" data-node-context="Architecture component">
+          <title>State Dir · grid, runs, reports · Architecture component · state</title>
+          <rect x="722" y="524" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="722" y="524" width="148" height="64" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(728 530) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="540" y="478" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Models &amp; Quotas</text>
-        <text data-detail="context" x="540" y="494" class="t-muted" font-size="9" text-anchor="middle">Circuit Breaker</text>
+          <text data-node-label="" data-detail-anchor="" x="796" y="554" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">State Dir</text>
+        <text data-detail="context" x="796" y="570" class="t-muted" font-size="9" text-anchor="middle">grid, runs, reports</text>
+        <text data-detail="fine" x="796" y="580" class="t-database" font-size="7" text-anchor="middle">state</text>
         </g>
 
-        <g id="node-advisor" data-node-id="advisor" data-node-label="Advisor Stage" tabindex="0" role="button" aria-label="Focus Advisor Stage, Fable 5 / Astra / Opus, Herdr Multiplexer Environment (HERDR_ENV=1)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Fable 5 / Astra / Opus" data-node-context="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <title>Advisor Stage · Fable 5 / Astra / Opus · Herdr Multiplexer Environment (HERDR_ENV=1)</title>
-          <rect x="720" y="90" width="150" height="60" rx="6" class="c-mask"/>
-          <rect x="720" y="90" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(726 96) scale(0.6875)">
+        <g id="node-herdr_notify" data-node-id="herdr_notify" data-node-label="Herdr Notifications" tabindex="0" role="button" aria-label="Focus Herdr Notifications, native alert, status, Architecture component" aria-pressed="false" data-node-kind="external" data-node-sublabel="native alert, status" data-node-tag="herdr-api" data-node-context="Architecture component">
+          <title>Herdr Notifications · native alert, status · Architecture component · herdr-api</title>
+          <rect x="722" y="640" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="722" y="640" width="148" height="64" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(728 646) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="796" y="670" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Herdr Notifications</text>
+        <text data-detail="context" x="796" y="686" class="t-muted" font-size="9" text-anchor="middle">native alert, status</text>
+        <text data-detail="fine" x="796" y="696" class="t-external" font-size="7" text-anchor="middle">herdr-api</text>
+        </g>
+
+        <g id="node-harness_bridge" data-node-id="harness_bridge" data-node-label="AI Harness Bridge" tabindex="0" role="button" aria-label="Focus AI Harness Bridge, external-run, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="external-run" data-node-tag="harness-bridge" data-node-context="Architecture component">
+          <title>AI Harness Bridge · external-run · Architecture component · harness-bridge</title>
+          <rect x="722" y="756" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="722" y="756" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(728 762) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="795" y="118" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Advisor Stage</text>
-        <text data-detail="context" x="795" y="134" class="t-muted" font-size="9" text-anchor="middle">Fable 5 / Astra / Opus</text>
+          <text data-node-label="" data-detail-anchor="" x="796" y="786" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AI Harness Bridge</text>
+        <text data-detail="context" x="796" y="802" class="t-muted" font-size="9" text-anchor="middle">external-run</text>
+        <text data-detail="fine" x="796" y="812" class="t-backend" font-size="7" text-anchor="middle">harness-bridge</text>
         </g>
 
-        <g id="node-implementer" data-node-id="implementer" data-node-label="Implementer Stage" tabindex="0" role="button" aria-label="Focus Implementer Stage, Sonnet 5 / Luna / Flash, Herdr Multiplexer Environment (HERDR_ENV=1)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Sonnet 5 / Luna / Flash" data-node-context="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <title>Implementer Stage · Sonnet 5 / Luna / Flash · Herdr Multiplexer Environment (HERDR_ENV=1)</title>
-          <rect x="720" y="270" width="150" height="60" rx="6" class="c-mask"/>
-          <rect x="720" y="270" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(726 276) scale(0.6875)">
+        <g id="node-vault" data-node-id="vault" data-node-label="KeePassXC Vault" tabindex="0" role="button" aria-label="Focus KeePassXC Vault, TypeSafe API key, Architecture component" aria-pressed="false" data-node-kind="security" data-node-sublabel="TypeSafe API key" data-node-tag="zero-secret-leak" data-node-context="Architecture component">
+          <title>KeePassXC Vault · TypeSafe API key · Architecture component · zero-secret-leak</title>
+          <rect x="946" y="118" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="946" y="118" width="148" height="64" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(952 124) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1020" y="148" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">KeePassXC Vault</text>
+        <text data-detail="context" x="1020" y="164" class="t-muted" font-size="9" text-anchor="middle">TypeSafe API key</text>
+        <text data-detail="fine" x="1020" y="174" class="t-security" font-size="7" text-anchor="middle">zero-secret-leak</text>
+        </g>
+
+        <g id="node-agent_kiro" data-node-id="agent_kiro" data-node-label="Kiro CLI" tabindex="0" role="button" aria-label="Focus Kiro CLI, chat trust-tools, Agent Harnesses" aria-pressed="false" data-node-kind="backend" data-node-sublabel="chat trust-tools" data-node-tag="agent-harness" data-node-context="Agent Harnesses">
+          <title>Kiro CLI · chat trust-tools · Agent Harnesses · agent-harness</title>
+          <rect x="946" y="292" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="946" y="292" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(952 298) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="795" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Implementer Stage</text>
-        <text data-detail="context" x="795" y="314" class="t-muted" font-size="9" text-anchor="middle">Sonnet 5 / Luna / Flash</text>
+          <text data-node-label="" data-detail-anchor="" x="1020" y="322" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Kiro CLI</text>
+        <text data-detail="context" x="1020" y="338" class="t-muted" font-size="9" text-anchor="middle">chat trust-tools</text>
+        <text data-detail="fine" x="1020" y="348" class="t-backend" font-size="7" text-anchor="middle">agent-harness</text>
         </g>
 
-        <g id="node-reviewer" data-node-id="reviewer" data-node-label="Reviewer Stage" tabindex="0" role="button" aria-label="Focus Reviewer Stage, Opus 5 / Sol / Opus, Herdr Multiplexer Environment (HERDR_ENV=1)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Opus 5 / Sol / Opus" data-node-context="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <title>Reviewer Stage · Opus 5 / Sol / Opus · Herdr Multiplexer Environment (HERDR_ENV=1)</title>
-          <rect x="720" y="450" width="150" height="60" rx="6" class="c-mask"/>
-          <rect x="720" y="450" width="150" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(726 456) scale(0.6875)">
+        <g id="node-agent_antigravity" data-node-id="agent_antigravity" data-node-label="AntiGravity" tabindex="0" role="button" aria-label="Focus AntiGravity, agy, Gemini models, Agent Harnesses, Google Gemini" aria-pressed="false" data-node-kind="backend" data-node-sublabel="agy, Gemini models" data-node-tag="agent-harness" data-node-context="Agent Harnesses" data-node-brand="Google Gemini" data-node-brand-id="google-gemini" data-node-brand-status="preset" data-node-brand-source="https://gemini.google.com">
+          <title>AntiGravity · agy, Gemini models · Agent Harnesses · agent-harness · Google Gemini</title>
+          <rect x="946" y="408" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="946" y="408" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(952 414) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="795" y="478" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Reviewer Stage</text>
-        <text data-detail="context" x="795" y="494" class="t-muted" font-size="9" text-anchor="middle">Opus 5 / Sol / Opus</text>
+          <g aria-hidden="true" data-brand-mark="google-gemini" data-brand-title="Google Gemini" data-brand-status="preset" data-brand-source="https://gemini.google.com" class="brand-mark" transform="translate(1072 414)">
+            <rect width="16" height="16" rx="4" class="brand-mark-badge"/>
+            <path d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81" transform="translate(3 3) scale(0.4166666666666667)" fill="#8E75B2"/>
+            <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1020" y="438" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AntiGravity</text>
+        <text data-detail="context" x="1020" y="454" class="t-muted" font-size="9" text-anchor="middle">agy, Gemini models</text>
+        <text data-detail="fine" x="1020" y="464" class="t-backend" font-size="7" text-anchor="middle">agent-harness</text>
         </g>
 
-        <g id="node-harness" data-node-id="harness" data-node-label="AI-Harness Core" tabindex="0" role="button" aria-label="Focus AI-Harness Core, Run Ledger &amp; Reports, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Run Ledger &amp; Reports" data-node-context="Architecture component">
-          <title>AI-Harness Core · Run Ledger &amp; Reports · Architecture component</title>
-          <rect x="970" y="270" width="140" height="60" rx="6" class="c-mask"/>
-          <rect x="970" y="270" width="140" height="60" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(976 276) scale(0.6875)">
+        <g id="node-agent_claude" data-node-id="agent_claude" data-node-label="Claude Code" tabindex="0" role="button" aria-label="Focus Claude Code, Fable, Sonnet, Opus, Agent Harnesses, Claude" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Fable, Sonnet, Opus" data-node-tag="agent-harness" data-node-context="Agent Harnesses" data-node-brand="Claude" data-node-brand-id="claude" data-node-brand-status="preset" data-node-brand-source="https://claude.ai">
+          <title>Claude Code · Fable, Sonnet, Opus · Agent Harnesses · agent-harness · Claude</title>
+          <rect x="946" y="524" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="946" y="524" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(952 530) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <g aria-hidden="true" data-brand-mark="claude" data-brand-title="Claude" data-brand-status="preset" data-brand-source="https://claude.ai" class="brand-mark" transform="translate(1072 530)">
+            <rect width="16" height="16" rx="4" class="brand-mark-badge"/>
+            <path d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z" transform="translate(3 3) scale(0.4166666666666667)" fill="#D97757"/>
+            <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1020" y="554" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Claude Code</text>
+        <text data-detail="context" x="1020" y="570" class="t-muted" font-size="9" text-anchor="middle">Fable, Sonnet, Opus</text>
+        <text data-detail="fine" x="1020" y="580" class="t-backend" font-size="7" text-anchor="middle">agent-harness</text>
+        </g>
+
+        <g id="node-agent_codex" data-node-id="agent_codex" data-node-label="Codex CLI" tabindex="0" role="button" aria-label="Focus Codex CLI, Astra, Luna, Sol, Agent Harnesses, OpenAI" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Astra, Luna, Sol" data-node-tag="agent-harness" data-node-context="Agent Harnesses" data-node-brand="OpenAI" data-node-brand-id="openai" data-node-brand-status="preset" data-node-brand-source="https://openai.com/brand/">
+          <title>Codex CLI · Astra, Luna, Sol · Agent Harnesses · agent-harness · OpenAI</title>
+          <rect x="946" y="640" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="946" y="640" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(952 646) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <g aria-hidden="true" data-brand-mark="openai" data-brand-title="OpenAI" data-brand-status="preset" data-brand-source="https://openai.com/brand/" class="brand-mark" transform="translate(1072 646)">
+            <rect width="16" height="16" rx="4" class="brand-mark-badge"/>
+            <path d="M11.248 18.25q-.825 0-1.568-.314a4.3 4.3 0 0 1-1.32-.874 4 4 0 0 1-1.304.214 4 4 0 0 1-2.046-.544 4.27 4.27 0 0 1-1.518-1.485 4 4 0 0 1-.56-2.095q0-.48.131-1.04A4.4 4.4 0 0 1 2.04 10.71a4.07 4.07 0 0 1 .017-3.4 4.2 4.2 0 0 1 1.056-1.418 3.8 3.8 0 0 1 1.6-.842 3.9 3.9 0 0 1 .76-1.683q.593-.759 1.451-1.188a4.04 4.04 0 0 1 1.832-.429q.825 0 1.567.313.742.314 1.32.875a4 4 0 0 1 1.304-.215q1.106 0 2.046.545a4.14 4.14 0 0 1 1.501 1.485q.578.941.578 2.095 0 .48-.132 1.04.66.61 1.023 1.419.363.792.363 1.666 0 .892-.38 1.717a4.3 4.3 0 0 1-1.072 1.435 3.8 3.8 0 0 1-1.584.825 3.8 3.8 0 0 1-.775 1.683 4.06 4.06 0 0 1-1.436 1.188 4.04 4.04 0 0 1-1.832.429m-4.076-2.062q.825 0 1.435-.347l3.103-1.782a.36.36 0 0 0 .164-.313v-1.42L7.881 14.62a.67.67 0 0 1-.726 0l-3.118-1.798a.5.5 0 0 1-.017.115v.198q0 .841.396 1.551.413.693 1.139 1.089a3.2 3.2 0 0 0 1.617.412m.165-2.69a.4.4 0 0 0 .181.05q.083 0 .165-.05l1.238-.71-3.977-2.31a.7.7 0 0 1-.363-.643v-3.58q-.825.362-1.32 1.122a2.9 2.9 0 0 0-.495 1.65q0 .809.413 1.55.412.743 1.072 1.123zm3.91 3.663q.875 0 1.585-.396a2.96 2.96 0 0 0 1.534-2.64v-3.564a.32.32 0 0 0-.165-.297l-1.254-.726v4.604a.7.7 0 0 1-.363.643l-3.119 1.799a3 3 0 0 0 1.783.577m.627-6.039V8.878L10.01 7.822 8.129 8.878v2.244l1.881 1.056zM7.057 5.859a.7.7 0 0 1 .363-.644l3.119-1.798a3 3 0 0 0-1.782-.578q-.874 0-1.584.396A2.96 2.96 0 0 0 6.05 4.324a3.07 3.07 0 0 0-.396 1.551v3.547q0 .199.165.314l1.237.726zm8.383 7.887q.825-.364 1.303-1.123.495-.758.495-1.65a3.15 3.15 0 0 0-.412-1.55q-.413-.743-1.073-1.123l-3.086-1.782q-.099-.065-.181-.049a.3.3 0 0 0-.165.05l-1.238.692 3.993 2.327a.6.6 0 0 1 .264.264.64.64 0 0 1 .1.363zm-3.317-8.382a.63.63 0 0 1 .726 0l3.135 1.831v-.297q0-.792-.396-1.501a2.86 2.86 0 0 0-1.105-1.155q-.71-.43-1.65-.43-.825 0-1.436.347L8.294 5.941a.36.36 0 0 0-.165.314v1.418z" transform="translate(3 3) scale(0.5)" fill="#000000"/>
+            <rect width="16" height="16" rx="4" class="brand-mark-frame"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1020" y="670" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Codex CLI</text>
+        <text data-detail="context" x="1020" y="686" class="t-muted" font-size="9" text-anchor="middle">Astra, Luna, Sol</text>
+        <text data-detail="fine" x="1020" y="696" class="t-backend" font-size="7" text-anchor="middle">agent-harness</text>
+        </g>
+
+        <g id="node-review_gate" data-node-id="review_gate" data-node-label="Review Gate" tabindex="0" role="button" aria-label="Focus Review Gate, verify, then judge, Architecture component" aria-pressed="false" data-node-kind="backend" data-node-sublabel="verify, then judge" data-node-tag="review-gate" data-node-context="Architecture component">
+          <title>Review Gate · verify, then judge · Architecture component · review-gate</title>
+          <rect x="946" y="756" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="946" y="756" width="148" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(952 762) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1020" y="786" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Review Gate</text>
+        <text data-detail="context" x="1020" y="802" class="t-muted" font-size="9" text-anchor="middle">verify, then judge</text>
+        <text data-detail="fine" x="1020" y="812" class="t-backend" font-size="7" text-anchor="middle">review-gate</text>
+        </g>
+
+        <g id="node-harness_core" data-node-id="harness_core" data-node-label="AI Harness Core" tabindex="0" role="button" aria-label="Focus AI Harness Core, ledger and reports, Architecture component" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="ledger and reports" data-node-tag="control-plane" data-node-context="Architecture component">
+          <title>AI Harness Core · ledger and reports · Architecture component · control-plane</title>
+          <rect x="1170" y="756" width="148" height="64" rx="6" class="c-mask"/>
+          <rect x="1170" y="756" width="148" height="64" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1176 762) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1040" y="298" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AI-Harness Core</text>
-        <text data-detail="context" x="1040" y="314" class="t-muted" font-size="9" text-anchor="middle">Run Ledger &amp; Reports</text>
+          <text data-node-label="" data-detail-anchor="" x="1244" y="786" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AI Harness Core</text>
+        <text data-detail="context" x="1244" y="802" class="t-muted" font-size="9" text-anchor="middle">ledger and reports</text>
+        <text data-detail="fine" x="1244" y="812" class="t-cloud" font-size="7" text-anchor="middle">control-plane</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="user" data-edge-to="herdr" data-edge-label="task" data-edge-key="0" data-edge-id="user-to-herdr">
-          <rect x="185" y="265" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="200" y="275" class="t-muted" font-size="8" text-anchor="middle">task</text>
+        <g data-detail="context" data-edge-from="operator" data-edge-to="cli" data-edge-label="run" data-edge-key="0" data-edge-id="op-cli">
+          <rect x="211" y="300.5" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="226" y="310.5" class="t-muted" font-size="8" text-anchor="middle">run</text>
         </g>
-        <g data-detail="context" data-edge-from="aliases" data-edge-to="herdr" data-edge-label="binary sanitizer" data-edge-key="1" data-edge-id="aliases-to-herdr">
-          <rect x="266.6" y="160" width="86.8" height="14" rx="3" class="c-mask"/>
-          <text x="310" y="170" class="t-security" font-size="8" text-anchor="middle">binary sanitizer</text>
+        <g data-detail="context" data-edge-from="routines" data-edge-to="cli" data-edge-label="cron" data-edge-key="1" data-edge-id="cron-cli">
+          <rect x="192" y="437" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="207" y="447" class="t-backend" font-size="8" text-anchor="middle">cron</text>
         </g>
-        <g data-detail="context" data-edge-from="detector" data-edge-to="catalog" data-edge-label="probe quotas" data-edge-key="2" data-edge-id="detector-to-catalog">
-          <rect x="391.2" y="460" width="67.6" height="14" rx="3" class="c-mask"/>
-          <text x="425" y="470" class="t-muted" font-size="8" text-anchor="middle">probe quotas</text>
+        <g data-detail="context" data-edge-from="office_poll" data-edge-to="cli" data-edge-label="classify" data-edge-key="2" data-edge-id="poll-cli">
+          <rect x="201.8" y="539.5" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="226" y="549.5" class="t-muted" font-size="8" text-anchor="middle">classify</text>
         </g>
-        <g data-detail="context" data-edge-from="herdr" data-edge-to="triage" data-edge-label="route" data-edge-key="3" data-edge-id="herdr-to-triage">
-          <rect x="408" y="265" width="34" height="14" rx="3" class="c-mask"/>
-          <text x="425" y="275" class="t-muted" font-size="8" text-anchor="middle">route</text>
+        <g data-detail="context" data-edge-from="office_app" data-edge-to="office_poll" data-edge-label="tick" data-edge-key="3" data-edge-id="office-poll">
+          <rect x="99" y="736" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="114" y="746" class="t-muted" font-size="8" text-anchor="middle">tick</text>
         </g>
-        <g data-detail="context" data-edge-from="vault" data-edge-to="triage" data-edge-label="secret" data-edge-key="4" data-edge-id="vault-to-triage">
-          <rect x="520.6" y="160" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="540" y="170" class="t-security" font-size="8" text-anchor="middle">secret</text>
+        <g data-detail="context" data-edge-from="test_guard" data-edge-to="cli" data-edge-label="guard" data-edge-key="4" data-edge-id="guard-cli">
+          <rect x="321" y="736" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="338" y="746" class="t-messagebus" font-size="8" text-anchor="middle">guard</text>
         </g>
-        <g data-detail="context" data-edge-from="triage" data-edge-to="advisor" data-edge-label="triad plan" data-edge-key="5" data-edge-id="triage-to-advisor">
-          <rect x="636" y="190" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="665" y="200" class="t-muted" font-size="8" text-anchor="middle">triad plan</text>
+
+
+
+
+
+
+
+        <g data-detail="context" data-edge-from="triage" data-edge-to="typesafe_jev" data-edge-label="triage" data-edge-key="12" data-edge-id="triage-jev">
+          <rect x="659.6" y="97.5" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="107.5" class="t-muted" font-size="8" text-anchor="middle">triage</text>
         </g>
-        <g data-detail="context" data-edge-from="advisor" data-edge-to="implementer" data-edge-label="handoff" data-edge-key="6" data-edge-id="advisor-to-implementer">
-          <rect x="773.2" y="160" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="795" y="170" class="t-muted" font-size="8" text-anchor="middle">handoff</text>
+        <g data-detail="context" data-edge-from="classifier" data-edge-to="typesafe_jev" data-edge-label="classify" data-edge-key="13" data-edge-id="classifier-jev">
+          <rect x="654.8" y="162.5" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="172.5" class="t-muted" font-size="8" text-anchor="middle">classify</text>
         </g>
-        <g data-detail="context" data-edge-from="implementer" data-edge-to="reviewer" data-edge-label="review" data-edge-key="7" data-edge-id="implementer-to-reviewer">
-          <rect x="775.6" y="340" width="38.8" height="14" rx="3" class="c-mask"/>
-          <text x="795" y="350" class="t-muted" font-size="8" text-anchor="middle">review</text>
+        <g data-detail="context" data-edge-from="vault" data-edge-to="typesafe_jev" data-edge-label="api key" data-edge-key="14" data-edge-id="vault-jev">
+          <rect x="886.2" y="130" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="908" y="140" class="t-security" font-size="8" text-anchor="middle">api key</text>
         </g>
-        <g data-detail="context" data-edge-from="catalog" data-edge-to="implementer" data-edge-label="quota cascade" data-edge-key="8" data-edge-id="catalog-to-implementer">
-          <rect x="628.8" y="370" width="72.4" height="14" rx="3" class="c-mask"/>
-          <text x="665" y="380" class="t-messagebus" font-size="8" text-anchor="middle">quota cascade</text>
+        <g data-detail="context" data-edge-from="launcher" data-edge-to="herdr_panes" data-edge-label="spawn" data-edge-key="15" data-edge-id="launcher-panes">
+          <rect x="662" y="329.5" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="339.5" class="t-muted" font-size="8" text-anchor="middle">spawn</text>
         </g>
-        <g data-detail="context" data-edge-from="reviewer" data-edge-to="harness" data-edge-label="learnings" data-edge-key="9" data-edge-id="reviewer-to-harness">
-          <rect x="893.4" y="370" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="920" y="380" class="t-backend" font-size="8" text-anchor="middle">learnings</text>
+        <g data-detail="context" data-edge-from="peers" data-edge-to="herdr_panes" data-edge-label="pane io" data-edge-key="16" data-edge-id="peers-panes">
+          <rect x="657.2" y="394.5" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="404.5" class="t-muted" font-size="8" text-anchor="middle">pane io</text>
         </g>
+        <g data-detail="context" data-edge-from="reports" data-edge-to="state_dir" data-edge-label="files" data-edge-key="17" data-edge-id="reports-state">
+          <rect x="662" y="536" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="546" class="t-muted" font-size="8" text-anchor="middle">files</text>
+        </g>
+        <g data-detail="context" data-edge-from="notify" data-edge-to="herdr_notify" data-edge-label="alert" data-edge-key="18" data-edge-id="notify-herdr">
+          <rect x="662" y="652" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="662" class="t-muted" font-size="8" text-anchor="middle">alert</text>
+        </g>
+        <g data-detail="context" data-edge-from="pipeline" data-edge-to="harness_bridge" data-edge-label="run" data-edge-key="19" data-edge-id="pipeline-bridge">
+          <rect x="664" y="768" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="679" y="778" class="t-muted" font-size="8" text-anchor="middle">run</text>
+        </g>
+        <g data-detail="context" data-edge-from="harness_bridge" data-edge-to="review_gate" data-edge-label="verify" data-edge-key="20" data-edge-id="bridge-gate">
+          <rect x="888.6" y="768" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="908" y="778" class="t-muted" font-size="8" text-anchor="middle">verify</text>
+        </g>
+        <g data-detail="context" data-edge-from="review_gate" data-edge-to="harness_core" data-edge-label="judge" data-edge-key="21" data-edge-id="gate-core">
+          <rect x="1115" y="768" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="1132" y="778" class="t-muted" font-size="8" text-anchor="middle">judge</text>
+        </g>
+        <g data-detail="context" data-edge-from="review_gate" data-edge-to="agent_codex" data-edge-label="reviewer" data-edge-key="22" data-edge-id="gate-codex">
+          <rect x="995.8" y="736" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="1020" y="746" class="t-messagebus" font-size="8" text-anchor="middle">reviewer</text>
+        </g>
+
+
+
+
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Herdr Multiplexer Environment (HERDR_ENV=1)">
-          <rect data-graph-role="structural-frame-label-mask" x="214" y="52" width="242.2" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="218" y="65" class="t-cloud" font-size="9" font-weight="600">Herdr Multiplexer Environment (HERDR_ENV=1)</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="Callers">
+          <rect data-graph-role="structural-frame-label-mask" x="14" y="156" width="47.8" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="18" y="169" class="t-cloud" font-size="9" font-weight="600">Callers</text>
         </g>
 
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="security-group" data-composition-frame-label="Semantic Triage and Quota Plane">
-          <rect data-graph-role="structural-frame-label-mask" x="444" y="70" width="177.4" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="448" y="83" class="t-security" font-size="9" font-weight="600">Semantic Triage and Quota Plane</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="Jev Office">
+          <rect data-graph-role="structural-frame-label-mask" x="14" y="620" width="64" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="18" y="633" class="t-cloud" font-size="9" font-weight="600">Jev Office</text>
+        </g>
+
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="2" data-composition-frame-kind="region" data-composition-frame-label="Agent Harnesses">
+          <rect data-graph-role="structural-frame-label-mask" x="920" y="272" width="91" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="924" y="285" class="t-cloud" font-size="9" font-weight="600">Agent Harnesses</text>
         </g>
 
         <!-- Legend -->
         <g data-legend="" data-legend-bridge="">
-          <text x="40" y="562" class="t-primary" font-size="12" font-weight="650">Legend</text>
-          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="Frontend" data-legend-x="40" data-legend-baseline="582" data-legend-width="83">
-            <rect x="40" y="573" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
-            <text x="62" y="582" class="t-muted" font-size="10" font-weight="500">Frontend</text>
+          <text x="40" y="872" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="Frontend" data-legend-x="40" data-legend-baseline="892" data-legend-width="83">
+            <rect x="40" y="883" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="892" class="t-muted" font-size="10" font-weight="500">Frontend</text>
           </g>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Backend" data-legend-x="145" data-legend-baseline="582" data-legend-width="78">
-            <rect x="145" y="573" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
-            <text x="167" y="582" class="t-muted" font-size="10" font-weight="500">Backend</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Backend" data-legend-x="145" data-legend-baseline="892" data-legend-width="78">
+            <rect x="145" y="883" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="167" y="892" class="t-muted" font-size="10" font-weight="500">Backend</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="Database" data-legend-x="245" data-legend-baseline="582" data-legend-width="83">
-            <rect x="245" y="573" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
-            <text x="267" y="582" class="t-muted" font-size="10" font-weight="500">Database</text>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="Database" data-legend-x="245" data-legend-baseline="892" data-legend-width="83">
+            <rect x="245" y="883" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
+            <text x="267" y="892" class="t-muted" font-size="10" font-weight="500">Database</text>
           </g>
-          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="Cloud" data-legend-x="350" data-legend-baseline="582" data-legend-width="68">
-            <rect x="350" y="573" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
-            <text x="372" y="582" class="t-muted" font-size="10" font-weight="500">Cloud</text>
+          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="Cloud" data-legend-x="350" data-legend-baseline="892" data-legend-width="68">
+            <rect x="350" y="883" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
+            <text x="372" y="892" class="t-muted" font-size="10" font-weight="500">Cloud</text>
           </g>
-          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="Security" data-legend-x="440" data-legend-baseline="582" data-legend-width="83">
-            <rect x="440" y="573" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
-            <text x="462" y="582" class="t-muted" font-size="10" font-weight="500">Security</text>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="Security" data-legend-x="440" data-legend-baseline="892" data-legend-width="83">
+            <rect x="440" y="883" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
+            <text x="462" y="892" class="t-muted" font-size="10" font-weight="500">Security</text>
           </g>
-          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="External" data-legend-x="545" data-legend-baseline="582" data-legend-width="83">
-            <rect x="545" y="573" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
-            <text x="567" y="582" class="t-muted" font-size="10" font-weight="500">External</text>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="External" data-legend-x="545" data-legend-baseline="892" data-legend-width="83">
+            <rect x="545" y="883" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="567" y="892" class="t-muted" font-size="10" font-weight="500">External</text>
           </g>
         </g>
       </svg>
@@ -5447,36 +5717,33 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>Semantic Triage</h3>
+          <h3>Where the detail lives</h3>
         </div>
         <ul>
-          <li>&bull; TypeSafe Jev System One responds in ~260ms</li>
-          <li>&bull; Classifies complexity, research need, and reasoning effort</li>
-          <li>&bull; Deterministic fallback with 0ms latency overhead</li>
+          <li>&bull; The detailed diagram splits the CLI groups, launcher guards, notification channels and Office internals</li>
+          <li>&bull; Launcher: in-tab grid, readiness wait, trust dialog detection, worktree option</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
-          <div class="card-dot emerald"></div>
-          <h3>Triad Pipeline</h3>
+          <div class="card-dot amber"></div>
+          <h3>Alerts and reports</h3>
         </div>
         <ul>
-          <li>&bull; Harness retains reports and reconciliation history</li>
-          <li>&bull; Implementer: Sonnet 5 (1M tokens), Luna, or Flash</li>
-          <li>&bull; Reviewer validates the archived report digest</li>
+          <li>&bull; Notify dedupes, then Herdr native, optional hook and opt-in escalation</li>
+          <li>&bull; Routines run standup --auto and daily; state stays in the state dir</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot rose"></div>
-          <h3>Two-Level Quota Resilience</h3>
+          <h3>Safety rails</h3>
         </div>
         <ul>
-          <li>&bull; Level 1: Intra-client fallback cascade per model tier</li>
-          <li>&bull; Level 2: Cross-harness safe return to host harness on exhaustion</li>
-          <li>&bull; Local circuit breaker preventing 429 rate limits</li>
+          <li>&bull; Test guard blocks live herdr, real hooks and unmocked standup</li>
+          <li>&bull; Review gate verifies deterministically before the independent judge</li>
         </ul>
       </div>
     </div>

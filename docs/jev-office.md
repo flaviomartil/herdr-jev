@@ -64,3 +64,6 @@ Classification calls are heavily optimized to prevent unnecessary costs:
 
 **Worst-case cost:**
 With a hard cap of 20 calls per minute, the absolute worst-case scenario will yield at most **1,200 classify calls per hour**, completely bounding the cost regardless of the number of agents.
+
+## Launcher Model Mapping
+The launcher maps `gemini-3.8-pro` to `gemini-3.1-pro` on purpose, because the Antigravity CLI has no 3.8 pro model.
