@@ -73,10 +73,12 @@ export interface HerdrClient {
   notify(title: string, body: string, sound?: string): Promise<HerdrCommandResult>;
 }
 
+export const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
+
 export function createProcessCommandAdapter(
   options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
 ): RunCommand {
-  const timeoutMs = options.timeoutMs ?? 60_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
   return (argv) =>
     new Promise((resolve) => {
       const [command, ...args] = argv;
