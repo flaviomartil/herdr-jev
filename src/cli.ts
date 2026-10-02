@@ -48,7 +48,7 @@ import {
 import type { ClientKind, RoleKind } from "./types/index.js";
 import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
-import { classifyPaneText } from "./triage/pane-classifier.js";
+import { classifyPaneText, MAX_CLASSIFY_INPUT_CHARS, parseClassifyInput } from "./triage/pane-classifier.js";
 import { TurnRouter } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
@@ -923,8 +923,17 @@ program.command("classify-pane")
   .option("--json", "Output raw JSON")
   .action(async (options: { json?: boolean }) => {
     let input = "";
-    for await (const chunk of process.stdin) input += chunk;
-    const data = JSON.parse(input);
+    for await (const chunk of process.stdin) {
+      input += chunk;
+      if (input.length > MAX_CLASSIFY_INPUT_CHARS) break;
+    }
+    let data;
+    try {
+      data = parseClassifyInput(input);
+    } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
+    }
     const client = getGlobalJevClient();
     const result = await classifyPaneText(data, client);
     if (options.json) {
@@ -950,6 +959,7 @@ program.command("notify")
   .option("--release", "Release escalation")
   .option("--release-stale", "Release stale escalations")
   .option("--release-all", "Release all escalations")
+  .option("--owner <id>", "Escalation owner id (<pid>-<instance>)")
   .action(async (options: any) => {
     const { handleNotifyCommand } = await import("./herdr/notify.js");
     const { createProcessCommandAdapter } = await import("./herdr/client.js");

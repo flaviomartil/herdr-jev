@@ -27,10 +27,11 @@ export function assertNoRealHomeStateLeaks(): void {
 }
 
 import { writeFileSync, chmodSync } from "node:fs";
-export function createFakeHerdr(dir: string, options?: { defaultAgentStatus?: string }): string {
+export function createFakeHerdr(dir: string, options?: { defaultAgentStatus?: string; logFile?: string }): string {
   const fakeHerdr = join(dir, "herdr");
   const script = `#!/usr/bin/env node
 const args = process.argv.slice(2);
+${options?.logFile ? `require("node:fs").appendFileSync(${JSON.stringify(options.logFile)}, JSON.stringify(args) + "\\n");` : ""}
 let afterDashDash = false;
 for (const arg of args) {
   if (arg === "--") {

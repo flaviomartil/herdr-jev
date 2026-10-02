@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { readHerdrObservedState, type RunCommand } from "./client.js";
@@ -21,9 +21,31 @@ export interface NotifyOptions {
   release?: boolean;
   releaseStale?: boolean;
   releaseAll?: boolean;
+  owner?: string;
   dryRun?: boolean;
   now?: number;
 }
+
+export interface NotifyHooks {
+  afterCooldownCheck?: () => void | Promise<void>;
+}
+
+interface EscalationRecord {
+  pane: string;
+  agent: string;
+  time: number;
+  attempts?: number;
+  owner?: string;
+}
+
+const PANE_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9_]+$/;
+const AGENT_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
+const OWNER_PATTERN = /^[0-9]+-[A-Za-z0-9]{1,48}$/;
+const CLAIM_STALE_MS = 30_000;
+const LOCK_STALE_MS = 2_000;
+const LOCK_WAIT_MS = 3_000;
+const RELEASE_STALE_AGE_MS = 15 * 60 * 1000;
+const MAX_RELEASE_ATTEMPTS = 3;
 
 export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env.HERDR_JEV_NOTIFY_HOOK !== undefined) {
@@ -45,24 +67,119 @@ export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string 
   return undefined;
 }
 
-function readEscalations(file: string): any[] {
-  if (existsSync(file)) {
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf-8"));
-      if (Array.isArray(parsed)) return parsed;
-    } catch (e) {}
-  }
+function readEscalations(file: string): EscalationRecord[] {
+  if (!existsSync(file)) return [];
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf-8"));
+    if (!Array.isArray(parsed)) return [];
+    const records: EscalationRecord[] = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") continue;
+      if (typeof entry.pane !== "string" || !PANE_PATTERN.test(entry.pane)) continue;
+      if (typeof entry.agent !== "string" || !AGENT_PATTERN.test(entry.agent)) continue;
+      const record: EscalationRecord = { ...entry };
+      if (typeof record.owner !== "string" || !OWNER_PATTERN.test(record.owner)) delete record.owner;
+      records.push(record);
+    }
+    return records;
+  } catch (e) {}
   return [];
 }
 
-function writeEscalations(file: string, escalations: any[]) {
-  const tempFile = file + ".tmp";
-  writeFileSync(tempFile, JSON.stringify(escalations));
-  renameSync(tempFile, file);
+function writeEscalations(file: string, escalations: EscalationRecord[]) {
+  const tempFile = `${file}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tempFile, JSON.stringify(escalations));
+    renameSync(tempFile, file);
+  } catch (e) {
+    try { unlinkSync(tempFile); } catch (err) {}
+    throw e;
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function updateEscalations(file: string, mutate: (records: EscalationRecord[]) => EscalationRecord[]): Promise<void> {
+  mkdirSync(dirname(file), { recursive: true });
+  const lockFile = `${file}.lock`;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      writeFileSync(lockFile, String(process.pid), { flag: "wx" });
+      break;
+    } catch (e: any) {
+      if (e?.code !== "EEXIST") throw e;
+      let stale = Date.now() > deadline;
+      try {
+        stale = stale || Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS;
+      } catch (err) {
+        continue;
+      }
+      if (stale) {
+        try { unlinkSync(lockFile); } catch (err) {}
+        continue;
+      }
+      await sleep(15);
+    }
+  }
+  try {
+    writeEscalations(file, mutate(readEscalations(file)));
+  } finally {
+    try { unlinkSync(lockFile); } catch (e) {}
+  }
+}
+
+function recordKey(record: EscalationRecord): string {
+  return `${record.pane}|${record.owner ?? ""}|${record.time}`;
+}
+
+function bumpAttempts(records: EscalationRecord[], failed: ReadonlySet<string>): EscalationRecord[] {
+  const next: EscalationRecord[] = [];
+  for (const record of records) {
+    if (!failed.has(recordKey(record))) {
+      next.push(record);
+      continue;
+    }
+    const attempts = (record.attempts || 0) + 1;
+    if (attempts < MAX_RELEASE_ATTEMPTS) next.push({ ...record, attempts });
+  }
+  return next;
+}
+
+function ownerAlive(owner: string | undefined): boolean {
+  if (!owner) return false;
+  const pid = Number(owner.split("-")[0]);
+  if (!Number.isSafeInteger(pid) || pid < 1) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    return e?.code === "EPERM";
+  }
 }
 
 function sanitizePaneId(pane: string) {
-  return encodeURIComponent(pane).replace(/%/g, "_");
+  return pane.replace(":", "-");
+}
+
+function cooldownActive(stateFile: string, now: number, cooldownS: number): boolean {
+  if (!existsSync(stateFile)) return false;
+  try {
+    const data = JSON.parse(readFileSync(stateFile, "utf-8"));
+    return typeof data?.time === "number" && now - data.time < cooldownS * 1000;
+  } catch (e) {
+    return false;
+  }
+}
+
+function claimTime(claimFile: string): number {
+  try {
+    const data = JSON.parse(readFileSync(claimFile, "utf-8"));
+    if (typeof data?.time === "number" && Number.isFinite(data.time)) return data.time;
+  } catch (e) {}
+  return statSync(claimFile).mtimeMs;
 }
 
 function getReasonText(reason: string) {
@@ -74,7 +191,7 @@ function getReasonText(reason: string) {
   }
 }
 
-export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{
+export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand, hooks: NotifyHooks = {}): Promise<{
   sent: boolean;
   skippedReason?: string;
   channels: string[];
@@ -82,14 +199,17 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   wouldSend?: string[];
   escalation?: "applied" | "ineffective";
 }> {
-  if (opts.pane && !/^[A-Za-z0-9_]+:[A-Za-z0-9_]+$/.test(opts.pane)) {
+  if (opts.pane && !PANE_PATTERN.test(opts.pane)) {
     return { sent: false, skippedReason: "invalid pane id", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
-  if (opts.agent && !/^[A-Za-z0-9._-]{1,40}$/.test(opts.agent)) {
+  if (opts.agent && !AGENT_PATTERN.test(opts.agent)) {
     return { sent: false, skippedReason: "invalid agent", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
+  if (opts.owner !== undefined && !OWNER_PATTERN.test(opts.owner)) {
+    return { sent: false, skippedReason: "invalid owner", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
+  }
   if (opts.releaseAll) {
-    return handleReleaseAll(runner);
+    return handleReleaseAll(runner, opts.owner);
   }
 
   if (opts.releaseStale) {
@@ -129,35 +249,32 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   if (!Number.isFinite(cooldownS) || Number.isNaN(cooldownS)) cooldownS = 600;
 
   if (!opts.dryRun) {
-    if (existsSync(stateFile)) {
-      try {
-        const data = JSON.parse(readFileSync(stateFile, "utf-8"));
-        if (now - data.time < cooldownS * 1000) {
-          return { sent: false, skippedReason: "cooldown", channels: [] };
-        }
-        unlinkSync(stateFile);
-      } catch (e) {}
+    if (cooldownActive(stateFile, now, cooldownS)) {
+      return { sent: false, skippedReason: "cooldown", channels: [] };
     }
+    await hooks.afterCooldownCheck?.();
     let claimed = false;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    for (let attempt = 0; attempt < 2 && !claimed; attempt++) {
       try {
         writeFileSync(claimFile, JSON.stringify({ time: now }), { flag: "wx" });
         claimed = true;
-        break;
       } catch (e: any) {
-        if (e.code === 'EEXIST') {
-          try {
-            const data = JSON.parse(readFileSync(claimFile, "utf-8"));
-            if (now - data.time > 30000) {
-              unlinkSync(claimFile);
-              continue;
-            }
-          } catch (err) {}
+        if (e?.code !== "EEXIST") return { sent: false, skippedReason: "cooldown", channels: [] };
+        let age: number;
+        try {
+          age = now - claimTime(claimFile);
+        } catch (err) {
+          continue;
         }
-        return { sent: false, skippedReason: "cooldown", channels: [] };
+        if (age <= CLAIM_STALE_MS) return { sent: false, skippedReason: "cooldown", channels: [] };
+        try { unlinkSync(claimFile); } catch (err) {}
       }
     }
     if (!claimed) return { sent: false, skippedReason: "cooldown", channels: [] };
+    if (cooldownActive(stateFile, now, cooldownS)) {
+      try { unlinkSync(claimFile); } catch (e) {}
+      return { sent: false, skippedReason: "cooldown", channels: [] };
+    }
   }
 
   const reasonText = getReasonText(opts.reason);
@@ -194,7 +311,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         channels.push("hook");
       } else {
         await new Promise<void>((resolve) => {
-          const child = spawn(hook, [title, body, opts.pane!, opts.reason!], { stdio: "ignore" });
+          const child = spawn(hook, [safeTitle, body, opts.pane!, opts.reason!], { stdio: "ignore" });
         let done = false;
         const complete = () => {
           if (done) return;
@@ -244,10 +361,9 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
           }
           if (isBlocked) {
             const escalationsFile = join(notifyDir, "escalations.json");
-            let escalations = readEscalations(escalationsFile);
-            escalations = escalations.filter((e: any) => e.pane !== opts.pane);
-            escalations.push({ pane: opts.pane, agent: opts.agent, time: now, attempts: 0 });
-            writeEscalations(escalationsFile, escalations);
+            const record: EscalationRecord = { pane: opts.pane!, agent: opts.agent!, time: now, attempts: 0 };
+            if (opts.owner) record.owner = opts.owner;
+            await updateEscalations(escalationsFile, (records) => [...records.filter((e) => e.pane !== opts.pane), record]);
             channels.push("escalation");
             escalationResult = "applied";
           } else {
@@ -286,9 +402,7 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
     return { sent: false, skippedReason: "no escalation", channels: [] };
   }
 
-  let escalations = readEscalations(escalationsFile);
-
-  const record = escalations.find((e: any) => e.pane === pane);
+  const record = readEscalations(escalationsFile).find((e) => e.pane === pane);
   if (!record) {
     return { sent: false, skippedReason: "no escalation", channels: [] };
   }
@@ -296,98 +410,83 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
   const paneRes = await runner([herdrBin, "pane", "get", pane]);
   if (!paneRes.ok) {
-    escalations = escalations.filter((e: any) => e.pane !== pane);
-    writeEscalations(escalationsFile, escalations);
+    await updateEscalations(escalationsFile, (records) => records.filter((e) => e.pane !== pane));
     return { sent: true, channels: ["release"] };
   }
 
   const res = await runner([herdrBin, "pane", "release-agent", pane, "--source", "herdr-jev", "--agent", record.agent]);
   if (!res.ok) {
-    const attempts = (record.attempts || 0) + 1;
-    if (attempts >= 3) {
-      escalations = escalations.filter((e: any) => e.pane !== pane);
-    } else {
-      record.attempts = attempts;
-    }
-    writeEscalations(escalationsFile, escalations);
+    const key = recordKey(record);
+    await updateEscalations(escalationsFile, (records) => bumpAttempts(records, new Set([key])));
     return { sent: false, skippedReason: "release failed", channels: [] };
   }
-  
-  escalations = escalations.filter((e: any) => e.pane !== pane);
-  writeEscalations(escalationsFile, escalations);
 
+  await updateEscalations(escalationsFile, (records) => records.filter((e) => e.pane !== pane));
   return { sent: true, channels: ["release"] };
 }
 
-async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ sent: boolean; channels: string[] }> {
+async function releaseRecords(
+  records: EscalationRecord[],
+  escalationsFile: string,
+  runner: RunCommand,
+  shouldRelease: (record: EscalationRecord) => boolean,
+): Promise<number> {
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
+  const done = new Set<string>();
+  const failed = new Set<string>();
+  let exhausted = 0;
+  for (const record of records) {
+    const paneRes = await runner([herdrBin, "pane", "get", record.pane]);
+    if (!paneRes.ok) {
+      done.add(recordKey(record));
+      continue;
+    }
+    if (!shouldRelease(record)) continue;
+    const res = await runner([herdrBin, "pane", "release-agent", record.pane, "--source", "herdr-jev", "--agent", record.agent]);
+    if (res.ok) {
+      done.add(recordKey(record));
+    } else {
+      failed.add(recordKey(record));
+      if ((record.attempts || 0) + 1 >= MAX_RELEASE_ATTEMPTS) exhausted++;
+    }
+  }
+  await updateEscalations(escalationsFile, (current) =>
+    bumpAttempts(current.filter((e) => !done.has(recordKey(e))), failed),
+  );
+  return done.size + exhausted;
+}
+
+async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ sent: boolean; channels: string[] }> {
   const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
   try {
-    const escalations = readEscalations(escalationsFile);
-    const active = [];
-    let released = 0;
-    for (const esc of escalations) {
-      const paneRes = await runner([herdrBin, "pane", "get", esc.pane]);
-      if (!paneRes.ok) {
-        released++;
-        continue;
-      }
-
-      const age = now - esc.time;
-      let shouldRelease = age > 15 * 60 * 1000;
-
-      if (shouldRelease) {
-        const res = await runner([herdrBin, "pane", "release-agent", esc.pane, "--source", "herdr-jev", "--agent", esc.agent]);
-        if (res.ok) {
-          released++;
-        } else {
-          const attempts = (esc.attempts || 0) + 1;
-          if (attempts >= 3) {
-            released++;
-          } else {
-            active.push({ ...esc, attempts });
-          }
-        }
-      } else {
-        active.push(esc);
-      }
-    }
-    writeEscalations(escalationsFile, active);
+    const released = await releaseRecords(
+      readEscalations(escalationsFile),
+      escalationsFile,
+      runner,
+      (record) => now - record.time > RELEASE_STALE_AGE_MS,
+    );
     return { sent: released > 0, channels: ["release-stale"] };
   } catch (e) {
     return { sent: false, channels: [] };
   }
 }
 
-async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; channels: string[] }> {
-  const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
+async function handleReleaseAll(runner: RunCommand, owner?: string): Promise<{ sent: boolean; channels: string[] }> {
   const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
   try {
-    const escalations = readEscalations(escalationsFile);
-    if (escalations.length === 0) return { sent: false, channels: [] };
+    const eligible = readEscalations(escalationsFile).filter((record) =>
+      owner !== undefined ? record.owner === owner : !ownerAlive(record.owner),
+    );
+    if (eligible.length === 0) return { sent: false, channels: [] };
 
-    const active = [];
-    for (const esc of escalations) {
-      const paneRes = await runner([herdrBin, "pane", "get", esc.pane]);
-      if (!paneRes.ok) {
-        continue;
-      }
-      const res = await runner([herdrBin, "pane", "release-agent", esc.pane, "--source", "herdr-jev", "--agent", esc.agent]);
-      if (!res.ok) {
-        const attempts = (esc.attempts || 0) + 1;
-        if (attempts < 3) {
-          active.push({ ...esc, attempts });
-        }
-      }
-    }
-    writeEscalations(escalationsFile, active);
-    return { sent: active.length < escalations.length, channels: ["release-all"] };
+    const released = await releaseRecords(eligible, escalationsFile, runner, () => true);
+    return { sent: released > 0, channels: ["release-all"] };
   } catch (e) {
     return { sent: false, channels: [] };
   }

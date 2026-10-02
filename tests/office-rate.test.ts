@@ -76,6 +76,7 @@ echo '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScor
 
 test("office transition calls notify exactly once per revision", async () => {
   const office = require("../herdr-plugin/office/office.mjs");
+  const { officeOwner } = await import("../herdr-plugin/office/src/notify-args.mjs");
   const { notifyPending, roster } = office._testHooks;
   notifyPending.length = 0;
   
@@ -91,7 +92,7 @@ test("office transition calls notify exactly once per revision", async () => {
   await new Promise(r => setTimeout(r, 100));
   
   expect(notifyPending.length).toBe(1);
-  expect(notifyPending[0].args).toEqual(['notify', '--pane', 'p_notify', '--project', 'test', '--task', 'Task', '--attention', 'now', '--reason', 'none', '--confidence', '0.9', '--native-status', 'idle', '--jev-state', 'blocked', '--reason-confidence', '0', '--agent', 'codex', '--json']);
+  expect(notifyPending[0].args).toEqual(['notify', '--pane', 'p_notify', '--project', 'test', '--task', 'Task', '--attention', 'now', '--reason', 'none', '--confidence', '0.9', '--native-status', 'idle', '--jev-state', 'blocked', '--reason-confidence', '0', '--agent', 'codex', '--owner', officeOwner, '--json']);
   
   notifyPending.length = 0;
   
@@ -123,9 +124,9 @@ test("office transition calls notify exactly once per revision", async () => {
   expect(notifyPending[0].args[1]).toBe('--pane');
 });
 
-test("office.mjs contains no spawnSync or require outside quit", () => {
+test("office.mjs contains no spawnSync or require", () => {
   const content = readFileSync(join(import.meta.dir, "../herdr-plugin/office/office.mjs"), "utf-8");
   expect(content).not.toMatch(/require\(/);
   const spawnSyncMatches = [...content.matchAll(/spawnSync/g)];
-  expect(spawnSyncMatches.length).toBe(2);
+  expect(spawnSyncMatches.length).toBe(0);
 });

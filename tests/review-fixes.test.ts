@@ -169,7 +169,7 @@ test("finding 3: stale claim is recovered", async () => {
   const { resolveStandupEnvironment } = await import("../src/herdr/standup.ts");
   const stateDir = resolveStandupEnvironment().stateDir;
   mkdirSync(join(stateDir, "notify"), { recursive: true });
-  const claimFile = join(stateDir, "notify", "pane-w1_3Ap3.claim");
+  const claimFile = join(stateDir, "notify", "pane-w1-p3.claim");
   writeFileSync(claimFile, JSON.stringify({ time: Date.now() - 40000 }));
 
   let runnerCalled = false;
@@ -192,8 +192,8 @@ test("finding 4: sanitizePaneId uses URI encoding and fixes percent signs", asyn
   await handleNotifyCommand({ pane: "w1:23", project: "test", reason: "error", attention: "now" }, runner);
   await handleNotifyCommand({ pane: "w12:3", project: "test", reason: "error", attention: "now" }, runner);
   
-  const f1 = existsSync(join(stateDir, "notify", "pane-w1_3A23.json"));
-  const f2 = existsSync(join(stateDir, "notify", "pane-w12_3A3.json"));
+  const f1 = existsSync(join(stateDir, "notify", "pane-w1-23.json"));
+  const f2 = existsSync(join(stateDir, "notify", "pane-w12-3.json"));
   expect(f1).toBe(true);
   expect(f2).toBe(true);
 });
