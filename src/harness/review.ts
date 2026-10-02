@@ -9,7 +9,7 @@ import { resolveStateDir } from "../herdr/state-dir.js";
 import type { StageSpec } from "../types/index.js";
 import { withoutKeys } from "../config/env-file.js";
 import { createHarnessProcessScope, harnessProbeAsync, interruptHarnessProcesses, resolveHarnessDelegation, terminateHarnessProcesses, type HarnessProbe, type HarnessProcessScope } from "./bridge.js";
-import { printable } from "./printable.js";
+import { printable, singleLine } from "./printable.js";
 
 export { printable };
 
@@ -165,7 +165,7 @@ export function listChangedFiles(cwd: string, baseRef?: string): ChangedFiles {
   const working = nulList(gitStrict(root, ["diff", "--name-only", "-z", "HEAD", "--"]));
   if (baseRef !== undefined) {
     const ref = baseRef.trim();
-    if (!ref || ref.startsWith("-") || !git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok) throw new Error(`invalid_base: "${baseRef}" is not a commit in this repository`);
+    if (!ref || ref.startsWith("-") || !git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok) throw new Error(`invalid_base: "${singleLine(baseRef).slice(0, 200)}" is not a commit in this repository`);
     mergeBaseSha = mergeBaseOf(root, ref);
     rangeBase = mergeBaseSha;
     tracked = [...nulList(gitStrict(root, ["diff", "--name-only", "-z", `${mergeBaseSha}...HEAD`, "--"])), ...working];
@@ -366,9 +366,12 @@ export function detectVerifyCommand(cwd: string): string[] | null {
 }
 
 export function readVerifyCommand(path: string): string[] {
-  const parsed = JSON.parse(readFileSync(path, "utf8"));
-  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((part) => typeof part !== "string" || !part)) throw new Error("invalid_verify_command");
-  return parsed;
+  let text: string;
+  try { text = readFileSync(path, "utf8"); } catch { throw new Error("invalid_verify_command: file could not be read"); }
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { throw new Error("invalid_verify_command: file is not valid JSON"); }
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((part) => typeof part !== "string" || !part)) throw new Error("invalid_verify_command: expected a non-empty JSON array of non-empty strings");
+  return parsed as string[];
 }
 
 export function resolveReviewerStage(client: string, options: { model?: string; availableModels?: string[] } = {}): { source: "profile" | "matrix"; stage: StageSpec } {
@@ -457,6 +460,8 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
     throw new Error(`sensitive_committed_files: ${listed}; remove them from the commits under review or choose a --base after them`);
   }
   if (declared) {
+    const sensitiveScoped = assignScopes(declared, files).flatMap((scope) => (scope.changed?.length ? [] : scope.files).filter((file) => SENSITIVE_FILES.some((pattern) => pattern.test(file))));
+    if (sensitiveScoped.length) throw new Error(`sensitive_scope_paths: ${[...new Set(sensitiveScoped)].map((file) => JSON.stringify(file)).join(", ")}; declared scopes must not name secret files`);
     const missing = missingScopePaths(declared, files, (path) => existsSync(join(cwd, path)));
     if (missing.length) throw new Error(`invalid_scopes: ${missing.map((path) => JSON.stringify(path)).join(", ")} not found in the repository`);
   }
@@ -664,9 +669,9 @@ function shellWord(word: string): string {
 }
 
 export function formatReviewReport(report: ReviewReport): string {
-  const lines = [`Review session ${report.session} (${report.client}) in ${report.cwd}`];
-  if (report.base) lines.push(`Changes against ${report.base}`);
-  if (report.reviewer) lines.push(`Reviewer ${report.reviewer.client}/${report.reviewer.model} (${report.reviewer.effort}, ${report.reviewer.source})`);
+  const lines = [`Review session ${singleLine(report.session)} (${singleLine(report.client)}) in ${singleLine(report.cwd)}`];
+  if (report.base) lines.push(`Changes against ${singleLine(report.base)}`);
+  if (report.reviewer) lines.push(`Reviewer ${singleLine(report.reviewer.client)}/${singleLine(report.reviewer.model)} (${singleLine(report.reviewer.effort)}, ${report.reviewer.source})`);
   if (report.degraded) lines.push("Harness without scope support: reviewed as a single scope");
   for (const scope of report.scopes) lines.push(`Scope ${scope.name}: ${scope.fileCount} files`);
   if (report.verify) lines.push(`Verify: ${printable(report.verify.status ?? report.verify.error ?? "unknown")}`);
@@ -677,7 +682,7 @@ export function formatReviewReport(report: ReviewReport): string {
       lines.push(`Verification ${printable(verification.status ?? report.verify.status)}:`);
       if (verification.output) lines.push(cap(verification.output));
     } else if (report.verify.status === "changes_required") {
-      const rerun = report.verify.command?.length ? ` Rerun it by hand in ${report.cwd}: ${report.verify.command.map(shellWord).join(" ")}` : "";
+      const rerun = report.verify.command?.length ? ` Rerun it by hand in ${singleLine(report.cwd)}: ${report.verify.command.map((word) => singleLine(shellWord(word))).join(" ")}` : "";
       lines.push(`The check command failed and the Harness returned no output.${rerun}`);
     }
   }

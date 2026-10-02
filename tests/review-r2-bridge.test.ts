@@ -285,23 +285,29 @@ describe("non-blocking probe findings", () => {
 
 describe("5: at most four judges run at once", () => {
   it("queues the remaining judges and keeps four in flight", async () => {
-    install("contract", { FAKE_JUDGE_SLEEP_MS: "400" });
+    const gate = join(scratch, "judge-gate");
+    install("contract", { FAKE_JUDGE_GATE: gate });
     const scopes = Array.from({ length: 8 }, (_, index) => `s${index + 1}=src`).join(";");
-    const report = await runReview({ cwd: repo, client: "codex", session: "limit-1", scopes });
+    const running = runReview({ cwd: repo, client: "codex", session: "limit-1", scopes });
+    const started = () => fakeJudgeEvents(harness!).filter((event) => event.event === "start").length;
+    await until(() => started() === MAX_CONCURRENT_JUDGES, "four judges to start");
+    await new Promise((done) => setTimeout(done, 300));
+    expect(started()).toBe(MAX_CONCURRENT_JUDGES);
+    writeFileSync(gate, "");
+    const report = await running;
     expect(report.status).toBe("ready");
     expect(report.judges).toHaveLength(8);
     const events = fakeJudgeEvents(harness!);
     expect(events.filter((event) => event.event === "start")).toHaveLength(8);
     const ordered = events.map((event, order) => ({ ...event, order })).sort((a, b) => a.at - b.at || (a.event === "end" ? -1 : 1) - (b.event === "end" ? -1 : 1) || a.order - b.order);
-    let running = 0;
+    let inFlight = 0;
     let peak = 0;
     for (const event of ordered) {
-      running += event.event === "start" ? 1 : -1;
-      peak = Math.max(peak, running);
+      inFlight += event.event === "start" ? 1 : -1;
+      peak = Math.max(peak, inFlight);
     }
     expect(MAX_CONCURRENT_JUDGES).toBe(4);
-    expect(peak).toBeLessThanOrEqual(4);
-    expect(peak).toBeGreaterThanOrEqual(2);
+    expect(peak).toBe(MAX_CONCURRENT_JUDGES);
   }, 120_000);
 });
 
