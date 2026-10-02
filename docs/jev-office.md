@@ -67,3 +67,9 @@ With a hard cap of 20 calls per minute, the absolute worst-case scenario will yi
 
 ## Launcher Model Mapping
 The launcher maps `gemini-3.8-pro` to `gemini-3.1-pro` on purpose, because the Antigravity CLI has no 3.8 pro model.
+
+## Swarm Worker Runs
+`herdr-jev subagent` records each grid worker in the AI Harness with `external-run --action worker-create` and keeps the run id in the worker's tracking record. `herdr-jev agents --json`, which feeds the swarm panel, adds `runId` and `runState` to a row when its worker has a run (the state comes from `external-run --action list`, for example `working` or `closed`). Without a local run label the row's `run` column reads `worker: <state>`. Rows of workers without a run keep their previous shape, and a Harness that does not know worker runs changes nothing. `herdr-jev workers close --yes` settles the run as `closed` with the worker's branch HEAD.
+
+## Launch behavior of swarm workers
+Workers started by `herdr-jev subagent`, `route` and the MCP spawn tools use one launcher. They start in the no-prompt mode of their CLI unless `HERDR_JEV_BYPASS=0`, and a trust dialog in a new worker is confirmed only when `ai-harness policy-check` trusts its working directory (`HERDR_JEV_AUTO_TRUST=0` turns that off). Other selection menus are never answered; those stay raised hands for you. Only `subagent` records a worker run.
