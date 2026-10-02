@@ -264,6 +264,7 @@ export function readGridWorkers(callerPaneId: string, stateDir?: string): string
   return readGridWorkerRecords(callerPaneId, stateDir).map((r) => r.paneId);
 }
 
+const GIT_TIMEOUT_MS = 5_000;
 const GRID_LOCK_WAIT_MS = 15_000;
 const GRID_LOCK_STALE_MS = 10_000;
 
@@ -525,7 +526,7 @@ export interface WorkerSettlement {
 
 function gitRun(cwd: string, args: string[]): string | null {
   try {
-    const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+    const result = spawnSync("git", args, { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const text = result.status === 0 ? result.stdout.trim() : "";
     return /^[0-9a-f]{7,64}$/.test(text) ? text : null;
   } catch {
@@ -590,7 +591,7 @@ export interface WorkerCloseOutcome {
   pruneFailures: PruneFailure[];
 }
 
-const PANE_ALREADY_GONE = /\bpane_not_found\b|\bpane\b[^\n]*\bnot[_ ]found\b/i;
+const PANE_ALREADY_GONE = /\bpane_not_found\b|^\s*(?:error:\s*)?pane(?:\s+[\w:.-]+)?\s+not\s+found\.?\s*$/im;
 
 export function settleClosedWorkerRuns(records: readonly GridWorkerRecord[]): WorkerSettlement[] {
   return settleDeadRecords(records).settlements;
@@ -612,6 +613,16 @@ export function settleDeadRecords(records: readonly GridWorkerRecord[]): { settl
     if (!settled && attempts < MAX_SETTLE_ATTEMPTS) kept.set(record.paneId, { ...record, settleAttempts: attempts });
   }
   return { settlements, kept };
+}
+
+function reapDeadRecords(callerPaneId: string, deadPaneIds: ReadonlySet<string>): void {
+  const { before } = updateGridWorkers(callerPaneId, (records) => records.some((r) => deadPaneIds.has(r.paneId))
+    ? records.filter((r) => !deadPaneIds.has(r.paneId)) : null);
+  const claimed = before.filter((r) => deadPaneIds.has(r.paneId));
+  if (claimed.length === 0) return;
+  const { kept } = settleDeadRecords(claimed);
+  if (kept.size === 0) return;
+  updateGridWorkers(callerPaneId, (records) => [...records.filter((r) => !kept.has(r.paneId)), ...kept.values()]);
 }
 
 export async function closeWorkerPanes(
@@ -910,7 +921,7 @@ const REVIEWER_FORBIDDEN_VALUED: ReadonlySet<string> = new Set([
   "--permission-mode", "--allowedTools", "--allowed-tools", "--tools", "--sandbox", "-s", "--ask-for-approval", "-a",
 ]);
 
-const REVIEWER_FORBIDDEN_CONFIG = /^(?:sandbox_mode|approval_policy)\s*=/;
+const REVIEWER_FORBIDDEN_CONFIG = /^\s*["']?(?:sandbox_mode|approval_policy)["']?\s*=/;
 
 function stripReviewerFlags(flags: readonly string[], profile: LaunchProfile): string[] {
   const forbidden = new Set([...REVIEWER_FORBIDDEN_FLAGS, ...profile.bypassArgs]);
@@ -924,6 +935,8 @@ function stripReviewerFlags(flags: readonly string[], profile: LaunchProfile): s
       const inline = flag.includes("=") ? flag.slice(name.length + 1) : flags[i + 1] ?? "";
       if (REVIEWER_FORBIDDEN_CONFIG.test(inline)) { if (!flag.includes("=")) i++; continue; }
     }
+    if (/^-c[^-c]/.test(flag) && REVIEWER_FORBIDDEN_CONFIG.test(flag.slice(2))) continue;
+    if (/^-[^-]./.test(flag) && valued.has(flag.slice(0, 2))) continue;
     if (forbidden.has(flag) || forbidden.has(name)) continue;
     if (valued.has(name)) {
       if (!flag.includes("=") && flags[i + 1] !== undefined && !flags[i + 1]!.startsWith("-")) i++;
@@ -1037,11 +1050,11 @@ export function formatHerdrAgentName(
 
 function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: string; gitDir?: string } {
   try {
-    const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+    const rev = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const forkSha = rev.status === 0 && rev.stdout ? rev.stdout.trim() : undefined;
-    const branchRes = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf8" });
+    const branchRes = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const branch = branchRes.status === 0 && branchRes.stdout ? branchRes.stdout.trim() : undefined;
-    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, encoding: "utf8" });
+    const common = spawnSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS });
     const gitDir = common.status === 0 && common.stdout.trim().startsWith("/") ? common.stdout.trim() : undefined;
     return {
       branch: branch || undefined,
@@ -1182,6 +1195,14 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     splitRatio = plan.ratio;
   }
 
+  if (callerPaneId && deadPaneIds.size > 0) {
+    try { reapDeadRecords(callerPaneId, deadPaneIds); }
+    catch (error) {
+      trust.trackingError = errorText(error);
+      console.error(`[herdr-jev] Worker tracking unavailable for ${callerPaneId}: ${trust.trackingError}`);
+    }
+  }
+
   // 1. Split current pane with resolved direction
   const split = input.layout === "tab"
     ? await herdr.createTab?.({ label: agentName, cwd: workerCwd, workspaceId: input.workspaceId })
@@ -1210,11 +1231,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
       layout: input.layout === "tab" ? "tab" : splitLayout === "grid" ? "grid" : "split",
     };
     try {
-      const { kept } = settleDeadRecords(existingRecords.filter((r) => deadPaneIds.has(r.paneId)));
-      updateGridWorkers(callerPaneId, (records) => [
-        ...records.flatMap((r) => deadPaneIds.has(r.paneId) ? (kept.has(r.paneId) ? [kept.get(r.paneId)!] : []) : r.paneId === paneId ? [] : [r]),
-        newRecord,
-      ]);
+      updateGridWorkers(callerPaneId, (records) => [...records.filter((r) => r.paneId !== paneId), newRecord]);
     } catch (error) {
       trust.trackingError = errorText(error);
       console.error(`[herdr-jev] Worker tracking unavailable for ${paneId}: ${trust.trackingError}`);
@@ -1242,8 +1259,15 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   }
   if (startFailed) {
     const ackStatus = classifyHerdrCommandFailure(started);
-    if (ackStatus === "rejected") await herdr.closePane(paneId);
-    return { ok: false, ackStatus, paneCreated: ackStatus === "unknown", promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
+    let paneClosed = false;
+    if (ackStatus === "rejected") {
+      const closed = await herdr.closePane(paneId);
+      paneClosed = closed.ok || PANE_ALREADY_GONE.test(`${closed.stdout}\n${closed.stderr}`);
+      if (paneClosed && callerPaneId) {
+        try { pruneGridWorkers([paneId]); } catch {}
+      }
+    }
+    return { ok: false, ackStatus, paneCreated: ackStatus === "unknown" || (ackStatus === "rejected" && !paneClosed), promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
   }
 
   if (herdr.reportSpawn) {
