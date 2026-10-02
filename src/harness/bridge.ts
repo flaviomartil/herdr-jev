@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, readFileSync, statSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, resolve, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -107,7 +107,7 @@ export function harnessCommand<T = any>(args: string[], timeout = 15_000): T {
   let parseable = false;
   try { parsed = JSON.parse(stdout); parseable = true; } catch {}
   if (result.status !== 0) {
-    if (parseable && args[0]?.startsWith("review-") && parsed?.status === "changes_required") return parsed;
+    if (parseable && args[0]?.startsWith("review-") && typeof parsed?.status === "string") return parsed;
     throw new Error(errorCode(stdout, result.stderr ?? ""));
   }
   if (!parseable) throw new Error("invalid_harness_output");
@@ -167,15 +167,16 @@ const QUOTA_MAX_WINDOWS = 8;
 const QUOTA_CALL_TIMEOUT_MS = 5_000;
 const QUOTA_CACHE_MS = 30_000;
 const QUOTA_DEGRADED_CACHE_MS = 60_000;
-const QUOTA_FRESH_MS = 15 * 60_000;
+const QUOTA_FRESH_MS = 120_000;
 const QUOTA_STOP_ERROR = /^(?:harness_command_timeout|harness_command_failed|harness_unavailable|unknown_command|invalid_external_action|unknown_option)/;
 let quotaCache: { key: string; at: number; ttl: number; value: unknown[] } | undefined;
 let quotaHarnessDownUntil = 0;
 
 function localQuotaObservation(request: { provider: string; scope: string; observedAt: number | null; remainingPercent: number | null; resetsAt: number | null }): unknown {
   const now = Date.now();
-  const exhausted = typeof request.remainingPercent === "number" && request.remainingPercent <= 0 && (request.resetsAt === null || request.resetsAt > now);
-  const fresh = request.observedAt !== null && now - request.observedAt <= QUOTA_FRESH_MS && request.observedAt <= now + 60_000;
+  const exhausted = request.remainingPercent === 0 && (request.resetsAt === null || request.resetsAt > now);
+  const age = request.observedAt === null ? null : now - request.observedAt;
+  const fresh = age !== null && age >= 0 && age <= QUOTA_FRESH_MS;
   return { provider: request.provider, scope: request.scope, freshness: fresh ? "fresh" : "stale", status: exhausted ? "exhausted" : "unknown", source: "local_fallback" };
 }
 
@@ -222,10 +223,21 @@ export interface HarnessProbe<T> {
   unsupported?: boolean;
 }
 
+export interface HarnessProcessScope {
+  readonly groups: Map<number, ChildProcess>;
+  stopped: boolean;
+}
+
+export function createHarnessProcessScope(): HarnessProcessScope {
+  return { groups: new Map(), stopped: false };
+}
+
 export interface ProbeOptions {
   timeout?: number;
   acceptNonZeroJson?: boolean;
   env?: NodeJS.ProcessEnv;
+  scope?: HarnessProcessScope;
+  killGraceMs?: number;
 }
 
 const UNSUPPORTED_ERROR = /^(?:unknown_command|invalid_external_action|unknown_option)/;
@@ -260,7 +272,7 @@ function errorCode(stdout: string, stderr: string): string {
   }
   for (const text of [stderr, stdout]) {
     const first = text.trim().split(/\r?\n/)[0];
-    if (first) return first.slice(0, 200);
+    if (first && !/^[{[]/.test(first)) return first.slice(0, 200);
   }
   return "harness_command_failed";
 }
@@ -293,18 +305,41 @@ export function harnessProbe<T = any>(args: string[], options: ProbeOptions = {}
   return interpretProbe<T>(result.status, result.stdout ?? "", result.stderr ?? "", options);
 }
 
-const activeGroups = new Set<number>();
+const HARNESS_KILL_GRACE_MS = 5_000;
+const STDOUT_LIMIT_BYTES = 4 * 1024 * 1024;
+const STDERR_LIMIT_BYTES = 1024 * 1024;
+const defaultScope = createHarnessProcessScope();
 
-export function terminateHarnessProcesses(): void {
-  for (const pid of activeGroups) {
-    try { process.kill(-pid, "SIGKILL"); } catch {}
-  }
-  activeGroups.clear();
+function isRunning(child: ChildProcess): boolean {
+  return child.exitCode === null && child.signalCode === null;
+}
+
+function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (child.pid === undefined) throw new Error("no_pid");
+    process.kill(-child.pid, signal);
+  } catch { try { child.kill(signal); } catch {} }
+}
+
+export function interruptHarnessProcesses(scope: HarnessProcessScope = defaultScope): void {
+  if (scope !== defaultScope) scope.stopped = true;
+  for (const child of scope.groups.values()) if (isRunning(child)) signalGroup(child, "SIGTERM");
+}
+
+export async function terminateHarnessProcesses(scope: HarnessProcessScope = defaultScope, graceMs = HARNESS_KILL_GRACE_MS): Promise<void> {
+  interruptHarnessProcesses(scope);
+  const children = [...scope.groups.values()];
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline && children.some(isRunning)) await new Promise((done) => setTimeout(done, 25));
+  for (const child of children) if (isRunning(child)) signalGroup(child, "SIGKILL");
 }
 
 export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions = {}): Promise<HarnessProbe<T>> {
   const argv = probeInvocation(args);
   if (!argv) return Promise.resolve({ ok: false, error: "harness_unavailable", unsupported: true });
+  const scope = options.scope ?? defaultScope;
+  if (scope.stopped) return Promise.resolve({ ok: false, error: "harness_interrupted" });
+  const grace = options.killGraceMs ?? HARNESS_KILL_GRACE_MS;
   return new Promise((resolvePromise) => {
     const child = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env, detached: true });
     const stdout: Buffer[] = [];
@@ -312,26 +347,43 @@ export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
+    let stopReason: string | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let backstop: ReturnType<typeof setTimeout> | undefined;
     const pid = child.pid;
-    if (pid !== undefined) activeGroups.add(pid);
-    const killGroup = () => {
-      try {
-        if (pid === undefined) throw new Error("no_pid");
-        process.kill(-pid, "SIGKILL");
-      } catch { try { child.kill("SIGKILL"); } catch {} }
-    };
+    if (pid !== undefined) scope.groups.set(pid, child);
     const finish = (value: HarnessProbe<T>) => {
       if (settled) return;
       settled = true;
-      if (pid !== undefined) activeGroups.delete(pid);
+      if (pid !== undefined) scope.groups.delete(pid);
       clearTimeout(timer);
+      clearTimeout(killTimer);
+      clearTimeout(backstop);
       resolvePromise(value);
     };
-    const timer = setTimeout(() => { killGroup(); finish({ ok: false, error: "harness_command_timeout" }); }, options.timeout ?? 10_000);
-    child.stdout?.on("data", (chunk: Buffer) => { if (stdoutBytes < 4 * 1024 * 1024) { stdout.push(chunk); stdoutBytes += chunk.length; } });
-    child.stderr?.on("data", (chunk: Buffer) => { if (stderrBytes < 1024 * 1024) { stderr.push(chunk); stderrBytes += chunk.length; } });
+    const stop = (reason: string) => {
+      if (stopReason || settled) return;
+      stopReason = reason;
+      signalGroup(child, "SIGTERM");
+      killTimer = setTimeout(() => {
+        signalGroup(child, "SIGKILL");
+        backstop = setTimeout(() => finish({ ok: false, error: reason }), 1000);
+      }, grace);
+    };
+    const timer = setTimeout(() => stop("harness_command_timeout"), options.timeout ?? 10_000);
+    child.stdout?.on("data", (chunk: Buffer) => {
+      if (stopReason) return;
+      if (stdoutBytes + chunk.length > STDOUT_LIMIT_BYTES) { stop("harness_output_overflow"); return; }
+      stdout.push(chunk);
+      stdoutBytes += chunk.length;
+    });
+    child.stderr?.on("data", (chunk: Buffer) => { if (stderrBytes < STDERR_LIMIT_BYTES) { stderr.push(chunk); stderrBytes += chunk.length; } });
     child.on("error", () => finish({ ok: false, error: "harness_command_failed" }));
-    child.on("close", (code) => finish(interpretProbe<T>(code, Buffer.concat(stdout).toString("utf8"), Buffer.concat(stderr).toString("utf8"), options)));
+    child.on("close", (code) => {
+      if (stopReason) return finish({ ok: false, error: stopReason });
+      if (scope.stopped) return finish({ ok: false, error: "harness_interrupted" });
+      finish(interpretProbe<T>(code, Buffer.concat(stdout).toString("utf8"), Buffer.concat(stderr).toString("utf8"), options));
+    });
   });
 }
 
