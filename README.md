@@ -33,6 +33,33 @@ State belongs to the existing Harness task database. Private objective/handoff a
 
 `quota status` consumes the installed Herdr Agent Usage Codex snapshot through the Harness normalizer. Scope, age and reset are explicit; data older than two minutes is stale. Missing observations are unknown. These observations do not authorize model substitution. Usage telemetry goes through `ai-harness usage-record`; task text and learning prose are no longer appended to `auto-improvements.jsonl`. Existing historical files are not migrated or deleted.
 
+## Model catalog, bypass mode and trust policy
+
+Herdr-Jev consumes these `ai-harness` commands through `src/harness/bridge.ts`. When the installed Harness does not know a command (it answers `unknown_command` or `invalid_external_action`), is absent, or answers with something unusable, every feature below falls back to the built-in behavior and nothing fails.
+
+| Harness command | Used for | Fallback |
+| :--- | :--- | :--- |
+| `model-resolve --client --model [--effort] [--role]` | CLI model id, effort arguments, bypass arguments and read-only reviewer arguments. Answers are cached in memory per process. | `resolveClaudeModel`, `resolveAntigravityModel`, the built-in effort flags and the built-in argument tables. A model the Harness reports with `known: false` also uses the built-in mapping. |
+| `model-catalog [--client]` | `herdr-jev models catalog [client]` prints the answer unchanged. | Prints `{available: false, reason, fallback}` with the built-in bypass and read-only arguments and exits with code 1. |
+| `external-run --action worker-create`, `worker-settle`, `list` | Worker runs, `workers close`, `runs list` and the Office swarm data. | No run is recorded; `runs list` shows local projections only. |
+| `review-verify --scopes`, `review-judge --scope`, `review-findings` | `herdr-jev review`. | One `default` scope, with `review-status` for the status. |
+| `policy-check --kind trust --path` | Automatic confirmation of the trust dialog. | The dialog is left for you, as before. |
+| `tool-env.json` in the generated directory | State and configuration directories. | The rules described in the variable tables. |
+
+**Bypass mode.** Every agent Herdr-Jev starts as an advisor, implementer or researcher starts in the no-prompt mode of its CLI, so the worker never stops to ask for permission. The arguments come from the Harness catalog (`bypassArgs`); the built-in values are the fallback:
+
+| Client | Bypass argument |
+| :--- | :--- |
+| Claude Code | `--dangerously-skip-permissions` |
+| Codex | `--dangerously-bypass-approvals-and-sandbox` |
+| AntiGravity | `--dangerously-skip-permissions` |
+| Kiro | `--trust-all-tools` (already part of `kiro-cli chat`, never repeated) |
+| Kimi | `--yolo` |
+
+The bypass argument goes after the model and effort arguments and before the prompt text. A flag the stage already carries is never added twice. The reviewer role is unchanged: it never receives bypass arguments and stays read-only (`--sandbox read-only` for Codex, `--tools Read,Glob,Grep` for Claude, or the `readonlyArgs` of the catalog). Set `HERDR_JEV_BYPASS=0` to start workers without the bypass arguments (Kimi loses `--yolo`; the `--trust-all-tools` of Kiro is part of its fixed command line). Cursor and OpenCode have no bypass argument.
+
+**Trust dialog.** When a new worker shows a repository trust dialog, the launcher asks `ai-harness policy-check --kind trust --path <worker cwd>`. If the answer is `trusted: true`, it moves the selection until the pane shows the cursor on the `Yes, I trust` option (checked by reading the pane again after every key), presses Enter only then, waits for the agent prompt and delivers the task. The result carries `trustConfirmed: true` and `trustPolicyReason`. If the answer is `trusted: false`, the Harness cannot answer, the cursor cannot be verified, or `HERDR_JEV_AUTO_TRUST=0`, the result is the usual `trustRequired: true` and no key is sent. Selection menus that are not trust dialogs, including command approval prompts, are never answered.
+
 Next requested investigation: [Jev video ideas](docs/next-jev-video-analysis.md).
 
 ## Overview
@@ -145,7 +172,10 @@ Every `HERDR_JEV_*` variable read by the CLI, the Herdr plugin scripts, the Jev 
 | `HERDR_JEV_LAYOUT` | `grid` | `grid` tiles workers as a balanced grid in the caller's central region; `role` uses role-based directions (`down` for reviewers, `right` otherwise). |
 | `HERDR_JEV_READY_TIMEOUT_MS` | `45000` | How long `subagent` and `route` wait for the new agent to show its prompt before the task is sent. |
 | `HERDR_JEV_SOURCE_PANE_ID` | unset | Source pane override, set by the plugin pane launcher. Used by `studio`, `context`, `standup`, peer messaging and the Office. |
-| `HERDR_JEV_STATE_DIR` | `~/.local/state/herdr-jev` | State root for runs, grid workers, `daily/`, `standup/` and `notify/`. `standup`, `daily` and `notify` also honor `HERDR_PLUGIN_STATE_DIR`. |
+| `HERDR_JEV_STATE_DIR` | `~/.local/state/herdr-jev` | State root for runs, grid workers, `review/`, `daily/`, `standup/` and `notify/`. `standup`, `daily` and `notify` also honor `HERDR_PLUGIN_STATE_DIR`. When neither is set, the `stateDir` of `herdr-jev` in the Harness `tool-env.json` is used before the default. |
+| `HERDR_JEV_CONFIG_DIR` | Harness `configDir`, else `~/.config/herdr` | Directory of `herdr-jev-models.json` and `herdr-jev-quotas.json`. The `configDir` of `herdr-jev` in the Harness `tool-env.json` is used when the variable is unset; a file missing there is still read from `~/.config/herdr`. |
+| `HERDR_JEV_BYPASS` | on | `0`, `false`, `off` or `no` stops advisors, implementers and researchers from starting in the no-prompt mode of their CLI. See [Bypass mode](#model-catalog-bypass-mode-and-trust-policy). |
+| `HERDR_JEV_AUTO_TRUST` | on | `0`, `false`, `off` or `no` stops the launcher from confirming the repository trust dialog of a new worker, even when the Harness says the path is trusted. |
 | `HERDR_JEV_NOTIFY` | enabled | `0`, `false` or `off` disables `notify`. Any other value, or unset, leaves it enabled. |
 | `HERDR_JEV_NOTIFY_COOLDOWN_S` | `600` | Per-pane cooldown in seconds between notifications. |
 | `HERDR_JEV_NOTIFY_HOOK` | unset | Executable called with `title`, `body`, `pane`, `reason` after the native notification. No hook runs when it is unset. |
@@ -157,7 +187,7 @@ Every `HERDR_JEV_*` variable read by the CLI, the Herdr plugin scripts, the Jev 
 | `HERDR_JEV_RESUME_CLIENT`, `HERDR_JEV_RESUME_SESSION` | unset | Set by the session picker for the resume pane. `HERDR_JEV_RESUME_CLIENT` must be `claude`, `codex`, `kimi` or `opencode`. |
 | `HERDR_JEV_ENABLE_OPENCODE` | off | `1` lets `detect` treat OpenCode as configured. |
 | `HERDR_JEV_EXCLUDE_CLIENTS` | unset | Comma-separated clients that `detect` leaves out of its recommendation. |
-| `HERDR_JEV_TEST_GUARD` | unset | `1` blocks anything that would change Herdr state or launch a real agent. Set by `tests/preload.ts`. |
+| `HERDR_JEV_TEST_GUARD` | unset | `1` blocks anything that would change Herdr state or launch a real agent. Set by `tests/preload.ts`. `AI_HARNESS_TEST_GUARD=1` is treated the same way. Under the guard only an `ai-harness` executable under the OS temp dir is used, and the Harness `tool-env.json` is ignored. |
 | `HERDR_JEV_CLI` | `bun src/cli.ts` | Command `scripts/smoke.sh` runs instead of the checkout CLI. |
 
 ### Related variables
@@ -167,6 +197,8 @@ Every `HERDR_JEV_*` variable read by the CLI, the Herdr plugin scripts, the Jev 
 | `TYPESAFE_API_KEY` | Vault / local heuristic | TypeSafe Jev System One key (~260ms response). When unset the CLI tries `vault get AI-Providers/TypeSafe`, then falls back to the deterministic local heuristic. |
 | `TYPESAFE_DEFAULT_MODEL` | `jev-1.13.0` | Pinned TypeSafe Jev model version (avoids the moving `jev-latest` alias). |
 | `AI_HARNESS_ROOT`, `AI_HARNESS_CORE_PATH` | auto-discover | Path to the `ai-harness-core` repository. |
+| `AI_HARNESS_GENERATED_DIR` | `~/.local/share/ai-harness/generated` | Directory holding the `tool-env.json` written by `harness apply`. |
+| `AI_HARNESS_TEST_GUARD` | unset | `1` is honored like `HERDR_JEV_TEST_GUARD`. |
 | `HERDR_BIN_PATH` | `herdr` | Herdr executable. |
 | `HERDR_PLUGIN_ID` | `herdr-jev` | Plugin ID. A different ID makes `standup`, `daily` and `notify` ignore `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR` and `HERDR_PANE_ID`. |
 | `HERDR_PLUGIN_CONFIG_DIR` | `~/.config/herdr/plugins/config/herdr-jev` | Directory holding `standup.md`. |
@@ -287,7 +319,7 @@ Runs live in the existing Harness ledger; Herdr-Jev projects them to `~/.local/s
 | :--- | :--- |
 | `run-status <id>` and `runs get <id>` | Reconcile deadlines, refresh the sanitized projection and print `{run, projection}` as JSON. Nothing is redispatched. |
 | `run-resume <id>` | Observes the existing attempt and continues verified dependencies. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`. |
-| `runs list` | Lists recorded runs, newest first. Options: `--limit <n>` (default 20), `--json`. |
+| `runs list` | Lists recorded runs, newest first, merging the local projections with `ai-harness external-run --action list`. Each entry shows its kind (`pipeline` or `worker`) after the id; `--json` adds `kind` and `source` (`local`, `harness` or `both`). Options: `--limit <n>` (default 20), `--json`. |
 | `runs retry <id> --from-failed` | Retries only `failed`, `unknown` and `blocked` stages. `--from-failed` is required. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`. |
 
 `run-resume` and `runs retry` exit with code 1 when a stage is still `failed`, `unknown` or `blocked`.
@@ -304,7 +336,9 @@ herdr-jev subagent "<prompt>" [-c <source>] [-t <target>] [-r <role>] [--tab | -
 - `--tab` opens a persistent peer in a new tab and requires Herdr; it cannot be combined with `--split` or `--no-split`. `--name` requires a tab or split inside Herdr and makes retries reuse the existing peer.
 - Without `--tab`, the mode follows `--split`, `--no-split`, then `HERDR_JEV_SPLIT_SUBAGENTS`, then whether the command runs inside Herdr. Outside Herdr a split request falls back to the native harness running inline; `-p, --print` makes that inline run non-interactive.
 - `--effort` defaults to the Jev triage of the prompt. `--model` and `--target` are preserved as given.
-- Output on success is a JSON object with `ok`, `paneId`, `agentName`, `client`, `model`, `effort` (native value or `null`), `recommendedEffort` and `effortApplied`.
+- Output on success is a JSON object with `ok`, `paneId`, `agentName`, `client`, `model`, `effort` (native value or `null`), `recommendedEffort` and `effortApplied`, plus `runId` when the Harness recorded the worker and `trustConfirmed` with `trustPolicyReason` when the trust dialog was confirmed.
+- Inside Herdr the worker is recorded with `ai-harness external-run --action worker-create`. The request carries the client, model, role, working directory, branch, fork point, pane, handle and the SHA-256 of the prompt; the prompt text is never sent. The returned run id is stored in the grid tracking record of the worker.
+- The worker starts in the no-prompt mode of its CLI (see [Bypass mode](#model-catalog-bypass-mode-and-trust-policy)); the reviewer role stays read-only.
 
 **Worktree (`--worktree [name]`).** Creates an isolated sibling worktree and starts the peer there.
 
@@ -315,7 +349,7 @@ herdr-jev subagent "<prompt>" [-c <source>] [-t <target>] [-r <role>] [--tab | -
 
 **Readiness wait.** After the agent starts and its spawn metadata is reported, a non-empty prompt is not sent immediately. Herdr-Jev polls every 500 ms, for up to `HERDR_JEV_READY_TIMEOUT_MS` (default 45000), until the agent is `idle` and its pane shows the harness prompt: `›` for Codex, `❯` or `>` for Claude, a lone `>` for AntiGravity; other clients only need `idle`. On timeout the command exits with code 1 and prints a result with `ok: false`, `ackStatus: "unknown"`, `promptPending: true`, `error: "Agent prompt readiness timed out"` and `hint: "prompt not observed; use peer-message"`. The pane stays open and the task was not sent.
 
-**Trust dialog.** The pane is inspected right after start and on every readiness poll for a repository trust prompt (for example `Trust and continue`, `Do you trust this folder?`, `Yes, proceed`, or a numbered choice menu). When one is found, the task is not sent. The command exits with code 1 and prints a result with `ok: false`, `ackStatus: "blocked"`, `completionState: "blocked"`, `trustRequired: true`, `promptPending: true` and `hint: "confirm trust in the pane, then send the task with peer-message"`. Confirm the dialog in the pane, then deliver the task with `peer-message`; Herdr-Jev does not answer trust dialogs itself.
+**Trust dialog.** The pane is inspected right after start and on every readiness poll for a repository trust prompt (for example `Trust and continue`, `Do you trust this folder?`, `Yes, proceed`, or a numbered choice menu). When the Harness `policy-check` says the working directory is trusted, the dialog is confirmed as described under [trust policy](#model-catalog-bypass-mode-and-trust-policy) and the task is delivered. In every other case the task is not sent: the command exits with code 1 and prints a result with `ok: false`, `ackStatus: "blocked"`, `completionState: "blocked"`, `trustRequired: true`, `promptPending: true` and `hint: "confirm trust in the pane, then send the task with peer-message"`. Confirm the dialog in the pane, then deliver the task with `peer-message`. When Herdr answers `agent_not_ready` for a pane that shows a trust dialog, the launcher treats it as a trust dialog (unless `HERDR_JEV_AUTO_TRUST=0`).
 
 ### peer-message and peer-read
 
@@ -335,7 +369,7 @@ herdr-jev peer-read <agent> [--wait] [--lines <n>] [--timeout-ms <ms>]
 | Command | Purpose |
 | :--- | :--- |
 | `workers list [-j, --json]` | Lists tracked grid workers per caller pane with their live agent status (`[{callerPaneId, workerPaneId, status}]` with `--json`). |
-| `workers close [--pane <id>] [--all-idle] [--yes]` | Plans the closing of tracked worker panes whose status is `idle` or `done`. Without `--yes` it only prints the plan; nothing is closed. A caller pane is never closed. One of `--pane` or `--all-idle` is required to select anything. |
+| `workers close [--pane <id>] [--all-idle] [--yes]` | Plans the closing of tracked worker panes whose status is `idle` or `done`. Without `--yes` it only prints the plan; nothing is closed. A caller pane is never closed. One of `--pane` or `--all-idle` is required to select anything. Closing a worker that has a Harness run settles it with `worker-settle` (state `closed`, head = the HEAD of the worker's checkout) and prints whether it was settled. |
 
 ### Overview, agents and daily
 
@@ -414,6 +448,23 @@ The output is one flat JSON object, with no nesting:
 
 `attention` is derived from `attentionScore`: below 0.5 is `none`, below 1.5 is `soon`, otherwise `now`. See [docs/jev-office.md](docs/jev-office.md) for how the Office uses it.
 
+### review
+
+```sh
+herdr-jev review [--scopes "name=path1,path2;name2=path3"] [--timeout-ms <ms>] [--verify-command-json <path>]
+  [--client <client>] [--cwd <path>] [--session <id>] [--model <id>] [--available-models <ids>] [--json]
+```
+
+Runs the Harness review gate on the current repository:
+
+1. `ai-harness review-verify` with the repository test command (`bun test` when `package.json` has a `test` script; `--verify-command-json` overrides it with a JSON argv file), declaring the scopes.
+2. One `ai-harness review-judge --scope <name>` per scope, all in parallel. The judge is the read-only reviewer command of the delegation profile for the client (model and read-only arguments from the model catalog; without a profile, the reviewer model of the local matrix). Its prompt lists only the files of that scope and ends with the `REVIEW_GATE_VERDICT: APPROVE` or `REVIEW_GATE_VERDICT: CHANGES_REQUIRED` rule. `--timeout-ms` (default 600000, from 1000 to 1800000) bounds each judge.
+3. `ai-harness review-findings`, whose status is the status printed.
+
+Without `--scopes`, up to four scopes are derived from the files changed against the default branch (`origin/HEAD`, `main` or `master`) plus untracked files, grouped by top-level directory; when there are more than four directories the smallest are merged into `other`. A declared scope covers the changed files under its paths, or the declared paths themselves when nothing changed there.
+
+The command never fabricates a verdict. The printed status is the Harness status (`ready`, `changes_required`, `pending_review`); it is `unavailable` when the Harness cannot answer. The exit code is 0 only for `ready`. A Harness without scope support gets a single `default` scope. Command files and the session live under `<stateDir>/review/<session>/`, never in the repository.
+
 ### Models, quota and companions
 
 | Command | Purpose |
@@ -422,6 +473,7 @@ The output is one flat JSON object, with no nesting:
 | `models set <client>.<role> <model>` | Saves an override in `~/.config/herdr/herdr-jev-models.json`. |
 | `models classify <client> <model>` | Classifies a new model with Jev: role, tier, effort and whether it becomes primary or a fallback. |
 | `models scan [client]` | Lists the registered models per client. |
+| `models catalog [client]` | Prints the model catalog answered by `ai-harness model-catalog`: CLI ids, aliases, efforts, `bypass_args` and `readonly_args`. When the Harness cannot answer it prints `{available: false, reason, fallback}` and exits with code 1. |
 | `quota status` | Prints the Herdr Agent Usage snapshot as JSON, then the manual circuit breakers with their time remaining. |
 | `quota exhaust <client> <model> [-m, --minutes <n>]` | Marks a model as exhausted (default 120 minutes) so work cascades to the next model. |
 | `quota reset [client]` | Clears the breakers of one client, or of all clients. |
@@ -702,7 +754,7 @@ bun run typecheck
 bun run smoke
 ```
 
-- **`bun test`** runs `tests/*.test.ts`. `bunfig.toml` preloads `tests/preload.ts`, which sets `HERDR_JEV_TEST_GUARD=1` and, when `HERDR_JEV_STATE_DIR` is unset, points it at a fresh directory in the OS temp dir so no test writes to the real state.
+- **`bun test`** runs `tests/*.test.ts`. The Harness integration is tested against a fake `ai-harness` written to the OS temp dir by `tests/fake-harness.ts` (modes `contract`, `unknown` and `legacy`), so both the integrated path and every fallback run without the real Harness. `bunfig.toml` preloads `tests/preload.ts`, which sets `HERDR_JEV_TEST_GUARD=1` and, when `HERDR_JEV_STATE_DIR` is unset, points it at a fresh directory in the OS temp dir so no test writes to the real state.
 - **The test guard** keeps the suite from touching a real Herdr or launching a real agent:
   - `herdr` commands are refused with `blocked_by_test_guard` (exit code 126) unless they are read-only (`agent` or `pane` with `get`, `list`, `read`, `layout` or `current`) or the executable lives under the OS temp dir, which is where tests place their fake `herdr`.
   - Inline and captured agent runs are refused the same way unless the binary is under the temp dir.
