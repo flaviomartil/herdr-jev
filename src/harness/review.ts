@@ -8,7 +8,7 @@ import { resolveStageSpec } from "../pipelines/matrix.js";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import type { StageSpec } from "../types/index.js";
 import { withoutKeys } from "../config/env-file.js";
-import { harnessProbeAsync, resolveHarnessDelegation, terminateHarnessProcesses, type HarnessProbe } from "./bridge.js";
+import { createHarnessProcessScope, harnessProbeAsync, interruptHarnessProcesses, resolveHarnessDelegation, terminateHarnessProcesses, type HarnessProbe, type HarnessProcessScope } from "./bridge.js";
 import { printable } from "./printable.js";
 
 export { printable };
@@ -187,6 +187,12 @@ export function listChangedFiles(cwd: string, baseRef?: string): ChangedFiles {
   const sensitive = files.filter((file) => existsSync(join(root, file)) && SENSITIVE_FILES.some((pattern) => pattern.test(file)));
   const sensitiveCommitted = sensitive.filter((file) => !uncommitted.has(file));
   return { base: label, mergeBase: mergeBaseSha, root, files, ranges, sensitive, sensitiveCommitted };
+}
+
+const PROMPT_REF = /^[A-Za-z0-9._\/@~^+-]{1,200}$/;
+
+function promptRef(ref: string, mergeBase: string): string {
+  return PROMPT_REF.test(ref) ? ref : mergeBase;
 }
 
 function mergeBaseOf(root: string, ref: string): string {
@@ -412,6 +418,11 @@ function launchedModel(command: readonly string[], fallback: string): string {
   return index >= 0 && command[index + 1] ? command[index + 1]! : fallback;
 }
 
+function statusOf(value: unknown): string | null {
+  const status = (value as { status?: unknown } | null | undefined)?.status;
+  return typeof status === "string" ? status : null;
+}
+
 function failedProbe(probe: HarnessProbe<unknown>): string {
   return probe.error ?? "harness_command_failed";
 }
@@ -462,7 +473,7 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
   const reviewer = resolveReviewerStage(options.client, { model: options.model, availableModels: options.availableModels });
   const reviewerClient = reviewer.stage.client ?? options.client;
   const deleted = files.filter((file) => !existsSync(join(changed.root, file)));
-  const reference = base && changed.mergeBase ? `${base} (merge base ${changed.mergeBase.slice(0, 12)})` : base;
+  const reference = base && changed.mergeBase ? `${promptRef(base, changed.mergeBase)} (merge base ${changed.mergeBase.slice(0, 12)})` : base;
   const commands = scopes.map((scope) => reviewerCommand(reviewerClient, reviewer.stage, judgePrompt(scope, reference, ranges, deleted)));
   report.reviewer = { source: reviewer.source, client: reviewerClient, model: launchedModel(commands[0]!, reviewer.stage.cliModel ?? reviewer.stage.model), effort: reviewer.stage.effort };
 
@@ -471,11 +482,12 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
   chmodSync(parent, 0o700);
   const dir = mkdtempSync(join(parent, `${session}-`));
   chmodSync(dir, 0o700);
-  const release = guardShutdown(dir);
+  const processes = createHarnessProcessScope();
+  const release = guardShutdown(dir, processes);
   try {
-    return await execute({ options: { ...options, cwd }, report, scopes, commands, verifyArgv, dir, env, timeoutMs, reviewer, reviewerClient, reference, ranges, deleted });
+    return await execute({ options: { ...options, cwd }, report, scopes, commands, verifyArgv, dir, env, timeoutMs, reviewer, reviewerClient, reference, ranges, deleted, processes });
   } catch (error) {
-    try { terminateHarnessProcesses(); } catch {}
+    try { await terminateHarnessProcesses(processes); } catch {}
     throw error;
   } finally {
     release();
@@ -485,15 +497,24 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
 
 const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
-function guardShutdown(dir: string): () => void {
+function guardShutdown(dir: string, processes: HarnessProcessScope): () => void {
   const cleanup = () => {
-    terminateHarnessProcesses();
+    try { interruptHarnessProcesses(processes); } catch {}
     try { rmSync(dir, { recursive: true, force: true }); } catch {}
   };
+  let stopping = false;
   const handlers = SHUTDOWN_SIGNALS.map((signal) => {
     const handler = () => {
-      cleanup();
-      process.exit(128 + (osConstants.signals[signal] ?? 0));
+      const code = 128 + (osConstants.signals[signal] ?? 0);
+      if (stopping) {
+        cleanup();
+        process.exit(code);
+      }
+      stopping = true;
+      terminateHarnessProcesses(processes).catch(() => {}).finally(() => {
+        cleanup();
+        process.exit(code);
+      });
     };
     process.on(signal, handler);
     return [signal, handler] as const;
@@ -566,10 +587,11 @@ interface Execution {
   reference: string | null;
   ranges: LineRanges;
   deleted: string[];
+  processes: HarnessProcessScope;
 }
 
 async function execute(run: Execution): Promise<ReviewReport> {
-  const { options, report, dir, env, timeoutMs, reviewer, reviewerClient, reference, ranges, deleted, verifyArgv } = run;
+  const { options, report, dir, env, timeoutMs, reviewer, reviewerClient, reference, ranges, deleted, verifyArgv, processes } = run;
   let { scopes } = run;
   const verifyFile = join(dir, "verify-command.json");
   writeSecret(verifyFile, JSON.stringify(verifyArgv));
@@ -577,29 +599,29 @@ async function execute(run: Execution): Promise<ReviewReport> {
 
   let scoped = true;
   let verify = await harnessProbeAsync<{ status?: string }>(["review-verify", ...identity, "--command-json", verifyFile,
-    "--scopes", scopes.map((scope) => scope.name).join(",")], { timeout: 11 * 60_000, acceptNonZeroJson: true, env });
+    "--scopes", scopes.map((scope) => scope.name).join(",")], { timeout: 11 * 60_000, acceptNonZeroJson: true, env, scope: processes });
   if (!verify.ok && SCOPE_OPTION_UNSUPPORTED.test(verify.error ?? "")) {
     scoped = false;
     scopes = [{ name: "default", files: [...new Set(scopes.flatMap((scope) => scope.files))], changed: [...new Set(scopes.flatMap((scope) => scope.changed ?? scope.files))] }];
     report.degraded = "scopes_unsupported";
     report.scopes = scopes.map((scope) => ({ name: scope.name, fileCount: scope.files.length }));
     if (chunkFiles(scopes[0]!.files, ranges).length > 1) return { ...report, error: "too_many_files_without_scopes" };
-    verify = await harnessProbeAsync(["review-verify", ...identity, "--command-json", verifyFile], { timeout: 11 * 60_000, acceptNonZeroJson: true, env });
+    verify = await harnessProbeAsync(["review-verify", ...identity, "--command-json", verifyFile], { timeout: 11 * 60_000, acceptNonZeroJson: true, env, scope: processes });
   }
   report.scopes = scopes.map((scope) => ({ name: scope.name, fileCount: scope.files.length }));
   if (!verify.ok) return { ...report, verify: { status: null, error: failedProbe(verify) }, error: failedProbe(verify) };
-  report.verify = { status: verify.value?.status ?? null, command: verifyArgv };
+  report.verify = { status: statusOf(verify.value), command: verifyArgv };
 
   const judgeTimeout = judgeProbeTimeoutMs(scoped, timeoutMs);
   const judgeScope = async (scope: ReviewScope, command: string[], index: number) => {
     const commandFile = join(dir, `judge-${index}.json`);
     writeSecret(commandFile, JSON.stringify(command));
     const judged = await harnessProbeAsync<{ status?: string }>(["review-judge", ...identity, "--command-json", commandFile,
-      ...(scoped ? ["--scope", scope.name, "--timeout-ms", String(timeoutMs)] : [])], { timeout: judgeTimeout, acceptNonZeroJson: true, env });
-    return judged.ok ? { scope: scope.name, status: judged.value?.status ?? null } : { scope: scope.name, status: null, error: failedProbe(judged) };
+      ...(scoped ? ["--scope", scope.name, "--timeout-ms", String(timeoutMs)] : [])], { timeout: judgeTimeout, acceptNonZeroJson: true, env, scope: processes });
+    return judged.ok ? { scope: scope.name, status: statusOf(judged.value) } : { scope: scope.name, status: null, error: failedProbe(judged) };
   };
   const fetchFindings = async (): Promise<HarnessProbe<StoredFindings>> => {
-    const probe = await harnessProbeAsync<unknown>(["review-findings", ...identity], { acceptNonZeroJson: true, env });
+    const probe = await harnessProbeAsync<unknown>(["review-findings", ...identity], { acceptNonZeroJson: true, env, scope: processes });
     if (!probe.ok) return { ok: false, error: probe.error, unsupported: probe.unsupported };
     return validFindings(probe.value) ? { ok: true, value: probe.value } : { ok: false, error: "invalid_findings" };
   };
@@ -626,7 +648,7 @@ async function execute(run: Execution): Promise<ReviewReport> {
     report.status = findings.value?.status ?? null;
     return report;
   }
-  const status = await harnessProbeAsync<{ status?: unknown }>(["review-status", ...identity], { acceptNonZeroJson: true, env });
+  const status = await harnessProbeAsync<{ status?: unknown }>(["review-status", ...identity], { acceptNonZeroJson: true, env, scope: processes });
   if (status.ok) report.status = typeof status.value?.status === "string" ? status.value.status : null;
   else report.error = failedProbe(status);
   return report;
