@@ -11,7 +11,8 @@ export const ANSI_PATTERN = new RegExp(
 );
 
 const MAX_REDACT_INPUT = 8192;
-const PARTIAL_TOKEN_WINDOW = 256;
+const TRUNCATION_MARK = " [TRUNCATED]";
+const WHOLE_INPUT_REDACTED = "[REDACTED]";
 
 const CHROME_LINE_PATTERNS: readonly RegExp[] = [
   /^[\s─━│┃╭╮╯╰┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬▀▄█░▒▓▪▫•·◦∙◐◑◒◓✳✶✻*_=~+\-./\\]+$/,
@@ -186,19 +187,21 @@ function looksLikeHostAndPort(user: string, rest: string): boolean {
   return /^\d{1,5}\//.test(rest) && (user === "localhost" || user.includes("."));
 }
 
-function boundRedactionInput(text: string): string {
-  if (text.length <= MAX_REDACT_INPUT) return text;
-  let end = MAX_REDACT_INPUT;
+function boundRedactionInput(text: string): { text: string; truncated: boolean } {
+  if (text.length <= MAX_REDACT_INPUT) return { text, truncated: false };
+  const limit = MAX_REDACT_INPUT - TRUNCATION_MARK.length;
+  let end = limit;
   if (!/\s/.test(text[end]) && !/\s/.test(text[end - 1])) {
-    const floor = end - PARTIAL_TOKEN_WINDOW;
-    while (end > floor && !/\s/.test(text[end - 1])) end--;
+    while (end > 0 && !/\s/.test(text[end - 1])) end--;
   }
-  return text.slice(0, end);
+  return { text: text.slice(0, end), truncated: true };
 }
 
 export function redactSecrets(text: string): string {
   if (!text) return "";
-  let result = boundRedactionInput(text);
+  const bounded = boundRedactionInput(text);
+  if (bounded.truncated && bounded.text === "") return WHOLE_INPUT_REDACTED;
+  let result = bounded.text;
   result = result.replace(QUOTED_KEY_VALUE, "$<p>$<q>[REDACTED]$<c>");
   result = result.replace(PLAIN_KEY_VALUE, "$<p>[REDACTED]");
   result = result.replace(QUOTED_FLAG_VALUE, "$<p>$<q>[REDACTED]$<c>");
@@ -229,5 +232,5 @@ export function redactSecrets(text: string): string {
     /(?<![/A-Za-z0-9_.+-])(?=[A-Za-z0-9+/]{0,128}[0-9])(?=[A-Za-z0-9+/]{0,128}[a-zA-Z])[A-Za-z0-9+/]{32,}={0,2}(?![/A-Za-z0-9_.=-])/g,
     "[REDACTED]",
   );
-  return result;
+  return bounded.truncated ? result + TRUNCATION_MARK : result;
 }

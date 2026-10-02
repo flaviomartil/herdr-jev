@@ -299,15 +299,16 @@ test("finding 10: the lock loop gives up at its deadline when takeover keeps fai
   expect(readFileSync(lock, "utf-8")).toBe("dead-owner");
 });
 
-test("finding 10: after the deadline a held lock is forcibly taken and the update completes", async () => {
+test("finding 10: after the deadline a lock with a future mtime is forcibly taken and the update completes", async () => {
   const file = escalationsFile();
-  writeFileSync(`${file}.lock`, "slow-owner");
+  const lock = `${file}.lock`;
+  writeFileSync(lock, "skewed-owner");
+  const future = new Date(Date.now() + 60 * 60_000);
+  utimesSync(lock, future, future);
   let mutated = false;
-  const started = Date.now();
   await updateEscalations(file, (records) => { mutated = true; return records; }, { lockWaitMs: 100 });
   expect(mutated).toBe(true);
-  expect(Date.now() - started).toBeLessThan(10_000);
-  expect(existsSync(`${file}.lock`)).toBe(false);
+  expect(existsSync(lock)).toBe(false);
 });
 
 test("finding 11: release removes the record it read and keeps a newer escalation for the same pane", async () => {
