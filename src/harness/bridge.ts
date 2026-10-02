@@ -169,7 +169,7 @@ const QUOTA_CACHE_MS = 30_000;
 const QUOTA_DEGRADED_CACHE_MS = 60_000;
 const QUOTA_FRESH_MS = 120_000;
 const QUOTA_STOP_ERROR = /^(?:harness_command_timeout|harness_command_failed|harness_unavailable|unknown_command|invalid_external_action|unknown_option)/;
-let quotaCache: { key: string; at: number; ttl: number; value: unknown[] } | undefined;
+let quotaCache: { key: string; until: number; value: unknown[] } | undefined;
 let quotaHarnessDownUntil = 0;
 
 function localQuotaObservation(request: { provider: string; scope: string; observedAt: number | null; remainingPercent: number | null; resetsAt: number | null }): unknown {
@@ -185,11 +185,13 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
     const info = statSync(path);
     if (!info.isFile() || info.size > QUOTA_MAX_BYTES) return [];
     const key = `${path}\0${info.mtimeMs}\0${info.size}`;
-    if (quotaCache && quotaCache.key === key && Date.now() - quotaCache.at < quotaCache.ttl) return quotaCache.value;
+    if (quotaCache && quotaCache.key === key && Date.now() < quotaCache.until) return quotaCache.value;
     const data = JSON.parse(readFileSync(path, "utf8"));
     if (!Array.isArray(data.windows)) return [];
     let harnessDown = Date.now() < quotaHarnessDownUntil;
     let degraded = harnessDown;
+    const computedAt = Date.now();
+    let stale = Infinity;
     const value = data.windows.slice(0, QUOTA_MAX_WINDOWS).map((window: any) => {
       const request = {
         provider: "codex", scope: data.session_quota_only ? "unknown" : data.account_id ? "account" : "unknown",
@@ -197,6 +199,8 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
         remainingPercent: typeof window?.remaining_percent === "number" ? window.remaining_percent : null,
         resetsAt: typeof window?.resets_at === "number" ? window.resets_at * 1000 : null,
       };
+      if (request.observedAt !== null && request.observedAt + QUOTA_FRESH_MS >= computedAt) stale = Math.min(stale, request.observedAt + QUOTA_FRESH_MS + 1);
+      if (request.resetsAt !== null && request.resetsAt > computedAt) stale = Math.min(stale, request.resetsAt);
       if (harnessDown) return localQuotaObservation(request);
       try { return harnessCommand(["quota-normalize", "--request-json", JSON.stringify(request)], callTimeoutMs); }
       catch (error) {
@@ -206,7 +210,7 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
         return localQuotaObservation(request);
       }
     });
-    quotaCache = { key, at: Date.now(), ttl: degraded ? QUOTA_DEGRADED_CACHE_MS : QUOTA_CACHE_MS, value };
+    quotaCache = { key, until: Math.min(Date.now() + (degraded ? QUOTA_DEGRADED_CACHE_MS : QUOTA_CACHE_MS), stale), value };
     return value;
   } catch { return []; }
 }
@@ -310,10 +314,6 @@ const STDOUT_LIMIT_BYTES = 4 * 1024 * 1024;
 const STDERR_LIMIT_BYTES = 1024 * 1024;
 const defaultScope = createHarnessProcessScope();
 
-function isRunning(child: ChildProcess): boolean {
-  return child.exitCode === null && child.signalCode === null;
-}
-
 function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   try {
     if (child.pid === undefined) throw new Error("no_pid");
@@ -321,17 +321,55 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   } catch { try { child.kill(signal); } catch {} }
 }
 
+function tracked(scope: HarnessProcessScope, child: ChildProcess): boolean {
+  return child.pid !== undefined && scope.groups.get(child.pid) === child;
+}
+
 export function interruptHarnessProcesses(scope: HarnessProcessScope = defaultScope): void {
   if (scope !== defaultScope) scope.stopped = true;
-  for (const child of scope.groups.values()) if (isRunning(child)) signalGroup(child, "SIGTERM");
+  for (const child of scope.groups.values()) signalGroup(child, "SIGTERM");
 }
 
 export async function terminateHarnessProcesses(scope: HarnessProcessScope = defaultScope, graceMs = HARNESS_KILL_GRACE_MS): Promise<void> {
   interruptHarnessProcesses(scope);
   const children = [...scope.groups.values()];
   const deadline = Date.now() + graceMs;
-  while (Date.now() < deadline && children.some(isRunning)) await new Promise((done) => setTimeout(done, 25));
-  for (const child of children) if (isRunning(child)) signalGroup(child, "SIGKILL");
+  while (Date.now() < deadline && children.some((child) => tracked(scope, child))) await new Promise((done) => setTimeout(done, 25));
+  for (const child of children) if (tracked(scope, child)) signalGroup(child, "SIGKILL");
+}
+
+const DEFAULT_SCOPE_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+let defaultScopeGuard: (() => void) | undefined;
+
+function guardDefaultScope(): void {
+  if (defaultScopeGuard) return;
+  const onExit = () => { for (const child of defaultScope.groups.values()) signalGroup(child, "SIGKILL"); };
+  let stopping = false;
+  const handlers = DEFAULT_SCOPE_SIGNALS.map((signal) => {
+    const handler = () => {
+      const others = process.listenerCount(signal) > 1;
+      if (stopping) return;
+      stopping = true;
+      terminateHarnessProcesses(defaultScope).catch(() => {}).finally(() => {
+        stopping = false;
+        if (others) return;
+        releaseDefaultScopeGuard();
+        process.kill(process.pid, signal);
+      });
+    };
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  process.on("exit", onExit);
+  defaultScopeGuard = () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+    process.off("exit", onExit);
+  };
+}
+
+function releaseDefaultScopeGuard(): void {
+  defaultScopeGuard?.();
+  defaultScopeGuard = undefined;
 }
 
 export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions = {}): Promise<HarnessProbe<T>> {
@@ -351,11 +389,17 @@ export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     let backstop: ReturnType<typeof setTimeout> | undefined;
     const pid = child.pid;
-    if (pid !== undefined) scope.groups.set(pid, child);
+    if (pid !== undefined) {
+      scope.groups.set(pid, child);
+      if (scope === defaultScope) guardDefaultScope();
+    }
     const finish = (value: HarnessProbe<T>) => {
       if (settled) return;
       settled = true;
-      if (pid !== undefined) scope.groups.delete(pid);
+      if (pid !== undefined) {
+        scope.groups.delete(pid);
+        if (scope === defaultScope && scope.groups.size === 0) releaseDefaultScopeGuard();
+      }
       clearTimeout(timer);
       clearTimeout(killTimer);
       clearTimeout(backstop);
