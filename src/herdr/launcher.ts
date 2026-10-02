@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "nod
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
-import { classifyHerdrCommandFailure, classifyPaneBlock, createHerdrClient, looksLikeSelectionMenu, normalizePaneText, readHerdrObservedState, readHerdrStructuredState, type HerdrClient, type HerdrObservedState, type PaneBlockKind } from "./client.js";
+import { classifyHerdrCommandFailure, classifyPaneBlock, createHerdrClient, isTestSafeBinary, looksLikeSelectionMenu, normalizePaneText, readHerdrObservedState, readHerdrStructuredState, type HerdrClient, type HerdrObservedState, type PaneBlockKind } from "./client.js";
 import { ANSI_PATTERN } from "./pane-text.js";
 import { resolveStateDir } from "./state-dir.js";
 import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
@@ -903,8 +903,8 @@ async function launchStageInHerdrAttempt(input: {
         direction: splitDirection,
       };
     }
-    const trimmedPrompt = input.handoffPrompt.trim();
-    const promptPrefix = trimmedPrompt.slice(0, Math.min(trimmedPrompt.length, 32));
+    const compactText = (value: string) => value.replace(ANSI_PATTERN, "").replace(/\s+/g, "");
+    const promptPrefix = compactText(input.handoffPrompt).slice(0, 32);
     const timeoutMs = input.deliveryTimeoutMs ?? 8000;
     const deadline = clock.now() + timeoutMs;
     while (!promptDelivered) {
@@ -913,9 +913,7 @@ async function launchStageInHerdrAttempt(input: {
           ? await herdr.readAgent(agentName)
           : await herdr.readPane!(paneId);
         if (readResult && readResult.ok) {
-          const output = `${readResult.stdout}\n${readResult.stderr}`;
-          const cleanOutput = output.replace(ANSI_PATTERN, "");
-          if (output.includes(promptPrefix) || cleanOutput.includes(promptPrefix)) {
+          if (compactText(`${readResult.stdout}\n${readResult.stderr}`).includes(promptPrefix)) {
             promptDelivered = true;
             break;
           }
@@ -1094,14 +1092,7 @@ export function runAgentInline(input: {
   const commandText = args.join(" ");
 
   if (process.env.HERDR_JEV_TEST_GUARD === "1") {
-    let isTempBin = false;
-    try {
-      const { realpathSync } = require("node:fs");
-      const { tmpdir } = require("node:os");
-      const { sep } = require("node:path");
-      isTempBin = realpathSync(args[0]).startsWith(realpathSync(tmpdir()) + sep);
-    } catch {}
-    if (!isTempBin) {
+    if (!isTestSafeBinary(args[0])) {
       return { ok: false, exitCode: 126, error: "blocked_by_test_guard", commandText };
     }
   }
@@ -1147,14 +1138,7 @@ export function runAgentCaptured(input: {
   const commandText = args.join(" ");
 
   if (process.env.HERDR_JEV_TEST_GUARD === "1") {
-    let isTempBin = false;
-    try {
-      const { realpathSync } = require("node:fs");
-      const { tmpdir } = require("node:os");
-      const { sep } = require("node:path");
-      isTempBin = realpathSync(args[0]).startsWith(realpathSync(tmpdir()) + sep);
-    } catch {}
-    if (!isTempBin) {
+    if (!isTestSafeBinary(args[0])) {
       return { ok: false, output: "", exitCode: 126, error: "blocked_by_test_guard", commandText };
     }
   }

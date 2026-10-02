@@ -352,7 +352,7 @@ export async function setupWorktree(options: { worktree?: boolean | string; name
     return { worktreePath: null, worktreeBranch: null, error: `Error: targetDir must be a sibling of repoDir` };
   }
   const targetCommonDirRes = await execGit(runner, ["rev-parse", "--path-format=absolute", "--git-common-dir"], targetDir);
-  if (targetCommonDirRes.ok) {
+  if (targetCommonDirRes.ok && targetCommonDirRes.stdout.trim() !== "") {
     const commonDirRes = await execGit(runner, ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
     if (commonDirRes.ok && targetCommonDirRes.stdout.trim() === commonDirRes.stdout.trim()) {
       const targetBranchRes = await execGit(runner, ["rev-parse", "--abbrev-ref", "HEAD"], targetDir);
@@ -364,8 +364,8 @@ export async function setupWorktree(options: { worktree?: boolean | string; name
       return { worktreePath: null, worktreeBranch: null, error: `Error: Directory ${targetDir} already exists but is not a worktree of ${repoDir}` };
     }
   } else {
-    const branchRes = await execGit(runner, ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repoDir);
-    if (branchRes.ok) {
+    const branchRes = await execGit(runner, ["show-ref", "--verify", `refs/heads/${branchName}`], repoDir);
+    if (branchRes.ok && branchRes.stdout.trim() !== "") {
       return { worktreePath: null, worktreeBranch: null, error: `Error: Branch ${branchName} already exists` };
     }
     const addRes = await execGit(runner, ["worktree", "add", "-b", branchName, targetDir, "HEAD"], repoDir);

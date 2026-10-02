@@ -43,6 +43,10 @@ const CHROME_LINE_PATTERNS: readonly RegExp[] = [
   /^Resumo do dia\b/i,
 ];
 
+function unboxLine(line: string): string {
+  return line.trim().replace(/^[│┃|]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
+}
+
 export function lastMeaningfulLine(text: string): string {
   if (!text) return "";
   const cleaned = text.replace(ANSI_PATTERN, "");
@@ -56,10 +60,15 @@ export function lastMeaningfulLine(text: string): string {
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
 
-    const prevLine = i > 0 ? lines[i - 1].trim() : "";
-    const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : "";
-    if (prevLine && redactSecrets(prevLine + line) !== prevLine + line) continue;
-    if (nextLine && redactSecrets(line) === line && redactSecrets(line + nextLine) !== line + nextLine) continue;
+    const prevLine = i > 0 ? unboxLine(lines[i - 1]) : "";
+    const nextLine = i + 1 < lines.length ? unboxLine(lines[i + 1]) : "";
+    const current = unboxLine(line);
+    if (prevLine && redactSecrets(prevLine + current) !== prevLine + current) {
+      const prevHasSecret = redactSecrets(prevLine) !== prevLine;
+      const absorbed = redactSecrets(prevLine + current) !== redactSecrets(prevLine) + current;
+      if (!prevHasSecret || (/^\S+$/.test(current) && absorbed)) continue;
+    }
+    if (nextLine && redactSecrets(current) === current && redactSecrets(current + nextLine) !== current + nextLine) continue;
 
     const isAction = /^[•●]/.test(line);
     const stripped = line.replace(/^[•●·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
@@ -78,6 +87,14 @@ export function lastMeaningfulLine(text: string): string {
   const chosen = lastActionLine ?? lastFallbackLine ?? "";
   const redacted = redactSecrets(chosen);
   return redacted.length > 100 ? redacted.slice(0, 100) : redacted;
+}
+
+function looksLikeBasicCredential(token: string): boolean {
+  return /[0-9+=]/.test(token) || /[A-Z]/.test(token.slice(1));
+}
+
+function looksLikeHostAndPort(user: string, rest: string): boolean {
+  return /^\d{1,5}\//.test(rest) && (user === "localhost" || user.includes("."));
 }
 
 export function redactSecrets(text: string): string {
@@ -100,10 +117,15 @@ export function redactSecrets(text: string): string {
     "$1[REDACTED]",
   );
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [REDACTED]");
-  result = result.replace(/\bBasic\s+[A-Za-z0-9+/]{8,}={0,2}/g, "Basic [REDACTED]");
+  result = result.replace(/(\bAuthorization["']?\s*[:=]\s*["']?Basic\s+)[A-Za-z0-9+/_-]+={0,2}/gi, "$1[REDACTED]");
+  result = result.replace(/\bBasic\s+([A-Za-z0-9+/]{8,}={0,2})(?![A-Za-z0-9+/=])/g, (match, token: string) =>
+    looksLikeBasicCredential(token) ? "Basic [REDACTED]" : match,
+  );
   result = result.replace(/\b(?:sk-[a-zA-Z0-9_-]+|ghp_[a-zA-Z0-9]+|xoxb-[a-zA-Z0-9_-]+)\b/g, "[REDACTED]");
   result = result.replace(/\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g, "[REDACTED]");
-  result = result.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s:@/]+):([^\s@]+)@/g, "$1$2:[REDACTED]@");
+  result = result.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s:@/]+):([^\s@]+)@/g, (match, scheme: string, user: string, rest: string) =>
+    looksLikeHostAndPort(user, rest) ? match : `${scheme}${user}:[REDACTED]@`,
+  );
   result = result.replace(/([a-zA-Z0-9+.-]+:\/\/)?([a-zA-Z0-9_.~%-]+):([^\s@/]+)@/g, "$1$2:[REDACTED]@");
   result = result.replace(/\b(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{32,}\b/g, "[REDACTED]");
   result = result.replace(
