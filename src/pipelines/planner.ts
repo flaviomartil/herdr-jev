@@ -41,7 +41,7 @@ export function planExecution(
   const executionStages: StageSpec[] = delegation.mode === "delegate"
     ? (["implementer", "reviewer"] as const).map((role) => {
       const target = role === "implementer" ? delegation.profile.executor : delegation.profile.reviewer;
-      return { role, client: delegation.profile.client, model: target.model, effort: target.effort ?? "standard",
+      return { role, client: delegation.profile.client, model: target.model, ...(target.cliModel ? { cliModel: target.cliModel } : {}), effort: target.effort ?? "standard",
         extraFlags: target.effort && client === "codex" ? ["-c", `model_reasoning_effort="${target.effort}"`] : [],
         description: `AI Harness profile: ${delegation.profile.id}` };
     }) : [];

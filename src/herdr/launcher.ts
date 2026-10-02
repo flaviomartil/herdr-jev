@@ -9,7 +9,7 @@ import { ANSI_PATTERN } from "./pane-text.js";
 import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
 import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
 import { autoTrustEnabled, confirmWorkspaceTrust, type TrustOutcome } from "./trust.js";
-import { createWorkerRun, harnessModelResolve, settleWorkerRun, type HarnessRole } from "../harness/bridge.js";
+import { createWorkerRun, harnessModelResolve, settleWorkerRun } from "../harness/bridge.js";
 
 export interface LaunchResult {
   ok: boolean;
@@ -622,14 +622,10 @@ const FALLBACK_READONLY_ARGS: Readonly<Record<string, readonly string[]>> = {
   claude: ["--tools", "Read,Glob,Grep"],
 };
 
-const CATALOG_CLIENTS: ReadonlySet<string> = new Set(["claude", "codex", "antigravity"]);
+const CATALOG_CLIENTS: ReadonlySet<string> = new Set(["claude", "codex", "antigravity", "kimi"]);
 
 export function bypassEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !["0", "false", "off", "no"].includes((env.HERDR_JEV_BYPASS ?? "").trim().toLowerCase());
-}
-
-function harnessRole(role: RoleKind): HarnessRole {
-  return role === "implementer" ? "executor" : role;
 }
 
 interface LaunchProfile {
@@ -649,13 +645,13 @@ function localEffortArgs(client: ClientKind, stage: StageSpec): string[] {
 function resolveLaunchProfile(client: ClientKind, stage: StageSpec): LaunchProfile {
   const base = resolveBaseClientKind(client);
   const resolution = CATALOG_CLIENTS.has(base)
-    ? harnessModelResolve({ client: base, model: stage.model, effort: stage.effort, role: harnessRole(stage.role) }) : null;
+    ? harnessModelResolve({ client: base, model: stage.model, effort: stage.effort, role: stage.role }) : null;
   const known = resolution?.known === true;
   const fallbackModel = base === "claude" ? resolveClaudeModel(stage.model)
     : base === "antigravity" ? resolveAntigravityModel(stage.model, stage.effort) : stage.model;
   const native = base === "codex" || base === "claude";
   return {
-    model: known ? resolution!.cliModel : fallbackModel,
+    model: stage.cliModel?.trim() || (known ? resolution!.cliModel : fallbackModel),
     effortArgs: known && native ? resolution!.effortArgs : localEffortArgs(client, stage),
     bypassArgs: resolution?.bypassArgs.length ? resolution.bypassArgs : [...(FALLBACK_BYPASS_ARGS[base] ?? [])],
     readonlyArgs: resolution?.readonlyArgs.length ? resolution.readonlyArgs : [...(FALLBACK_READONLY_ARGS[base] ?? [])],

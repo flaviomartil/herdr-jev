@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { harnessModelCatalog, harnessModelResolve, resetHarnessCaches } from "../src/harness/bridge.js";
 import { builtinLaunchArgs, buildAgentCommand, buildInlineCommand, bypassEnabled, readonlyReviewerArgs } from "../src/herdr/launcher.js";
 import { reviewerCommand } from "../src/orchestration/pipeline.js";
-import type { ClientKind, RoleKind, StageSpec } from "../src/types/index.js";
+import { planExecution } from "../src/pipelines/planner.js";
+import type { ClientKind, RoleKind, StageSpec, TriageDecision } from "../src/types/index.js";
 import { createFakeHarness, type FakeHarness, type FakeHarnessMode } from "./fake-harness.js";
 
 const CLAUDE_BYPASS = "--dangerously-skip-permissions";
@@ -117,7 +118,7 @@ describe("model catalog through ai-harness", () => {
     expect(second).toEqual(first);
     const calls = harness!.callsFor("model-resolve");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.slice(0, 9)).toEqual(["model-resolve", "--client", "claude", "--model", "fable-5", "--effort", "high", "--role", "executor"]);
+    expect(calls[0]!.slice(0, 9)).toEqual(["model-resolve", "--client", "claude", "--model", "fable-5", "--effort", "high", "--role", "implementer"]);
     buildInlineCommand("claude", stage("reviewer", "fable-5"), "task", true);
     expect(harness!.callsFor("model-resolve")).toHaveLength(2);
     expect(harness!.callsFor("model-resolve")[1]).toContain("reviewer");
@@ -138,9 +139,36 @@ describe("model catalog through ai-harness", () => {
     expect(reviewerCommand("codex", stage("reviewer", "gpt-5.6-sol"), "review").slice(-3)).toEqual(["--sandbox", "read-only", "--harness-readonly"]);
   });
 
+  it("asks for kimi through the catalog and keeps --yolo from its bypassArgs", () => {
+    install("contract", { FAKE_BYPASS_KIMI: "--yolo --harness-kimi" });
+    expect(buildAgentCommand("kimi", stage("implementer", "kimi-model"))).toEqual(["kimi", "-m", "kimi-model", "--yolo", "--harness-kimi"]);
+    expect(harness!.callsFor("model-resolve")[0]!.slice(0, 5)).toEqual(["model-resolve", "--client", "kimi", "--model", "kimi-model"]);
+  });
+
+  it("treats antigravity ids that already carry the effort suffix as known and unchanged", () => {
+    install();
+    expect(harnessModelResolve({ client: "antigravity", model: "gemini-3.1-pro-high", effort: "high", role: "implementer" })).toMatchObject({ known: true, cliModel: "gemini-3.1-pro-high" });
+    expect(buildAgentCommand("antigravity", stage("implementer", "gemini-3.1-pro-high"))).toEqual(["agy", "--model", "gemini-3.1-pro-high", CLAUDE_BYPASS]);
+  });
+
+  it("prefers the cliModel of the delegation plan over every mapping", () => {
+    install();
+    const planned = { ...stage("implementer", "gpt-5.6-luna"), cliModel: "gpt-5.6-luna-cli" };
+    expect(buildAgentCommand("codex", planned)).toEqual(["codex", "--model", "gpt-5.6-luna-cli", "-c", 'model_reasoning_effort="high"', CODEX_BYPASS]);
+    expect(buildInlineCommand("claude", { ...stage("implementer", "sonnet-5"), cliModel: "claude-custom" }, "task", true).slice(0, 5)).toEqual(["claude", "-p", "task", "--model", "claude-custom"]);
+  });
+
+  it("carries the cliModel of delegation-plan into the execution stages", () => {
+    install("contract", { FAKE_PROFILE: "1" });
+    const triage: TriageDecision = { complexity: "architectural", confidence: 1, needsResearch: false, effort: "high", recommendedPipeline: "triad", latencyMs: 0, rawAnswers: {} };
+    const plan = planExecution("task", "codex", triage, { forceTriad: true, delegation: { model: "advisor-model", availableModels: ["gpt-5.6-luna", "gpt-5.6-sol"] } });
+    expect(plan.executionStages?.map((item) => [item.role, item.model, item.cliModel])).toEqual([["implementer", "gpt-5.6-luna", "gpt-5.6-luna-cli"], ["reviewer", "gpt-5.6-sol", "gpt-5.6-sol-cli"]]);
+    expect(buildAgentCommand("codex", plan.executionStages![0]!)[2]).toBe("gpt-5.6-luna-cli");
+  });
+
   it("falls back to the built-in mapping for a model the harness does not know", () => {
     install();
-    expect(harnessModelResolve({ client: "claude", model: "sonnet-5.5", effort: "high", role: "executor" })?.known).toBe(false);
+    expect(harnessModelResolve({ client: "claude", model: "sonnet-5.5", effort: "high", role: "implementer" })?.known).toBe(false);
     expect(buildAgentCommand("claude", stage("implementer", "sonnet-5.5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS]);
     expect(buildAgentCommand("antigravity", stage("implementer", "gemini-3-8-pro-lite", "high")).slice(0, 3)).toEqual(["agy", "--model", "gemini-3.1-pro-lite-high"]);
   });

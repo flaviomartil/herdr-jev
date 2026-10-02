@@ -74,4 +74,9 @@ describe("tool-env.json", () => {
     expect(resolveConfigDirs({ AI_HARNESS_GENERATED_DIR: generated })).toEqual(["/cfg/herdr-jev", legacyConfigDir()]);
     expect(resolveConfigDirs({ AI_HARNESS_GENERATED_DIR: generated, HERDR_JEV_CONFIG_DIR: "/override" })).toEqual(["/override"]);
   });
+
+  it("runs the suite under both guards so no test can write to the real harness state", () => {
+    expect(process.env.HERDR_JEV_TEST_GUARD).toBe("1");
+    expect(process.env.AI_HARNESS_TEST_GUARD).toBe("1");
+  });
 });

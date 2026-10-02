@@ -493,7 +493,7 @@ if(args[1]==="wait") console.log(JSON.stringify({state:"done"}));
 if(args[1]==="get") console.log(JSON.stringify({result:{agent:{name:args[2],agent:"codex",pane_id:"pane-1",agent_status:"done"}}}));
 if(args[1]==="read") console.log(process.env.TRUST_BLOCKED==="1"?"1. Trust and continue":"Ask Codex to do anything");
 `, { mode: 0o700 });
-    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("HERDR_")));
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("HERDR_") && key !== "AI_HARNESS_TEST_GUARD"));
     Object.assign(env, { PATH: bin + ":" + process.env.PATH, AI_HARNESS_ROOT: root,
       HERDR_BIN_PATH: herdr, HERDR_ENV: "1", HERDR_JEV_SOURCE_PANE_ID: "pane-1", HOME: root, TYPESAFE_API_KEY: "",
       HERDR_JEV_ALLOW_ALIASES: "1", HERDR_JEV_BIN_CODEX: reviewer, TRUST_BLOCKED: "1" });

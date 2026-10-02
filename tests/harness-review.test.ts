@@ -118,7 +118,7 @@ describe("review through the harness", () => {
     expect(judged).toHaveLength(4);
     for (const entry of judged) {
       expect(entry.argv.slice(0, 2)).toEqual(["codex", "exec"]);
-      expect(entry.argv).toContain("gpt-5.6-sol");
+      expect(entry.argv).toContain("gpt-5.6-sol-cli");
       expect(entry.argv.slice(-2)).toEqual(["--sandbox", "read-only"]);
       expect(entry.argv).not.toContain("--dangerously-bypass-approvals-and-sandbox");
       const prompt = entry.argv[2]!;
@@ -142,6 +142,26 @@ describe("review through the harness", () => {
     expect(verdicts).toEqual([["core", "APPROVE"], ["docs", "CHANGES_REQUIRED"]]);
     expect(formatReviewReport(report)).toContain("findings for docs: CHANGES_REQUIRED");
     expect(formatReviewReport(report)).toContain("Status: changes_required");
+  });
+
+  it("retries a timed-out scope once on the same snapshot and reports the reason", async () => {
+    install("contract", { FAKE_PROFILE: "1", FAKE_TIMEOUT: "docs:1" });
+    const report = await runReview({ cwd: repo, client: "codex", session: "s-retry", scopes: "core=src;docs=docs" });
+    expect(report.retried).toEqual(["docs"]);
+    expect(report.status).toBe("ready");
+    expect(harness!.callsFor("review-verify")).toHaveLength(1);
+    expect(harness!.callsFor("review-judge").filter((argv) => argv[argv.indexOf("--scope") + 1] === "docs")).toHaveLength(2);
+    expect(harness!.callsFor("review-judge").filter((argv) => argv[argv.indexOf("--scope") + 1] === "core")).toHaveLength(1);
+    expect(formatReviewReport(report)).toContain("Retried after timeout: docs");
+  });
+
+  it("retries only once and reports the timeout reason when the scope stays pending", async () => {
+    install("contract", { FAKE_PROFILE: "1", FAKE_TIMEOUT: "docs:5" });
+    const report = await runReview({ cwd: repo, client: "codex", session: "s-retry-2", scopes: "core=src;docs=docs" });
+    expect(report.retried).toEqual(["docs"]);
+    expect(report.status).toBe("pending_review");
+    expect(harness!.callsFor("review-judge").filter((argv) => argv[argv.indexOf("--scope") + 1] === "docs")).toHaveLength(2);
+    expect(formatReviewReport(report)).toContain("Verdict docs: pending (timeout)");
   });
 
   it("does not run any judge when the deterministic verification fails", async () => {

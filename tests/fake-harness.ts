@@ -51,6 +51,7 @@ const CATALOG = {
   codex: { bypass_args: ["--dangerously-bypass-approvals-and-sandbox"], readonly_args: ["--sandbox", "read-only"] },
   antigravity: { bypass_args: ["--dangerously-skip-permissions"], readonly_args: [] },
   kiro: { bypass_args: ["--trust-all-tools"], readonly_args: [] },
+  kimi: { bypass_args: ["--yolo"], readonly_args: [] },
 };
 
 function agy(model, effort) {
@@ -59,6 +60,7 @@ function agy(model, effort) {
   if (model === "gemini-3-8-pro" || model === "gemini-3.1-pro") return { known: true, model: "gemini-3-8-pro", cli: "gemini-3.1-pro-" + (e === "standard" ? "low" : "high") };
   if (model === "claude-opus-4-6") return { known: true, model, cli: e === "standard" ? "claude-opus-4-6" : "claude-opus-4-6-thinking" };
   if (model === "claude-sonnet-4-6") return { known: true, model, cli: model };
+  if (/^gemini-3\\.(1-pro|8-flash)-(low|medium|high)$/.test(model)) return { known: true, model: model.includes("pro") ? "gemini-3-8-pro" : "gemini-3-8-flash", cli: model };
   return { known: false, model, cli: model };
 }
 
@@ -123,7 +125,7 @@ else if (command === "model-catalog") {
 } else if (command === "delegation-plan") {
   if (process.env.FAKE_PROFILE === "1") {
     out({ mode: "delegate", profile: { id: "fake-profile", client: options["--client"], advisor: "advisor-model",
-      executor: { model: "gpt-5.6-luna", effort: "high" }, reviewer: { model: "gpt-5.6-sol", effort: "xhigh" } } });
+      executor: { model: "gpt-5.6-luna", cliModel: "gpt-5.6-luna-cli", effort: "high" }, reviewer: { model: "gpt-5.6-sol", cliModel: "gpt-5.6-sol-cli", effort: "xhigh" } } });
   } else out({ mode: "direct", reason: "no_profile" });
 } else if (command === "external-run") {
   if (mode === "legacy" || !["worker-create", "worker-settle", "list"].includes(options["--action"])) fail("invalid_external_action");
@@ -164,8 +166,14 @@ else if (command === "model-catalog") {
     const names = JSON.parse(readFileSync(join(reviewDir, "scopes.json"), "utf8"));
     if (!names.includes(name)) fail("unknown_scope");
     const verdicts = Object.fromEntries((process.env.FAKE_VERDICTS || "").split(",").filter(Boolean).map((pair) => pair.split("=")));
-    const verdict = verdicts[name] || "APPROVE";
-    writeFileSync(join(reviewDir, "verdict-" + name + ".json"), JSON.stringify({ name, verdict, findings: "findings for " + name + ": " + verdict + "\\nREVIEW_GATE_VERDICT: " + verdict }));
+    let verdict = verdicts[name] || "APPROVE";
+    let reason;
+    const counter = join(reviewDir, "attempts-" + name);
+    const attempts = existsSync(counter) ? Number(readFileSync(counter, "utf8")) : 0;
+    writeFileSync(counter, String(attempts + 1));
+    const flaky = (process.env.FAKE_TIMEOUT || "").split(",").filter(Boolean).find((entry) => entry.split(":")[0] === name);
+    if (flaky && attempts < Number(flaky.split(":")[1] || 1)) { verdict = "pending"; reason = "timeout"; }
+    writeFileSync(join(reviewDir, "verdict-" + name + ".json"), JSON.stringify({ name, verdict, reason, findings: "findings for " + name + ": " + verdict + "\\nREVIEW_GATE_VERDICT: " + verdict }));
     const status = reviewStatus(reviewDir).status;
     out({ key: "k", revision: 1, status });
     process.exit(status === "changes_required" ? 1 : 0);

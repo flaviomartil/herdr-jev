@@ -24,6 +24,7 @@ export interface StageSpec {
   extraFlags: string[];
   description: string;
   client?: ClientKind;
+  cliModel?: string;
 }
 
 export interface PipelinePlan {
