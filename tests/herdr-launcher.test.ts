@@ -69,6 +69,7 @@ afterEach(() => {
 describe("Herdr launch acknowledgement", () => {
   it("reports spawn lineage without exposing the task or repeating dispatch", async () => {
     process.env.HERDR_ENV = "1";
+    process.env.TYPESAFE_API_KEY = "";
     const herdr = fakeHerdr(commandResult(true));
     const agentName = `observed-peer-${process.pid}`;
     let reports = 0;
