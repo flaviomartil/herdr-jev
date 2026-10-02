@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { cleanModel, matchRunForPane, readOverview } from "./overview.js";
 import { listRunHistory, runStateSummary, type RunHistoryEntry } from "../orchestration/run-history.js";
-import { lastMeaningfulLine, redactSecrets } from "./pane-text.js";
+import { ANSI_PATTERN, lastMeaningfulLine, redactSecrets } from "./pane-text.js";
 import { defaultGitRunner, type GitRunner } from "./agents.js";
 import { createProcessCommandAdapter, type HerdrClient, type RunCommand } from "./client.js";
 import { resolveStateDir } from "./state-dir.js";
@@ -66,6 +66,7 @@ export interface DailyReportDeps {
 
 function sanitizeText(text: string): string {
   return text
+    .replace(ANSI_PATTERN, "")
     .replace(/[\u2013\u2014]/g, "-")
     .replace(/[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F000}-\u{1F02F}\u{1F0A0}-\u{1F0FF}\u{1F100}-\u{1F64F}\u{1F680}-\u{1F6FF}]/gu, "")
     .replace(/[•·]/g, "-");
@@ -357,7 +358,7 @@ export async function buildDailyReport(
     let tarefa: string | null = null;
     const rawTarefa = paneInfo?.terminal_title_stripped || paneInfo?.label || "";
     if (rawTarefa) {
-      const stripped = rawTarefa.replace(/[\x00-\x1F\x7F]/g, "");
+      const stripped = rawTarefa.replace(ANSI_PATTERN, "").replace(/[\x00-\x1F\x7F]/g, " ");
       const redacted = redactSecrets(stripped);
       const sanitized = sanitizeText(redacted).trim();
       const agentName = handle ?? agent;
