@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync, linkSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync, linkSync, realpathSync, copyFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { DEFAULT_COMMAND_TIMEOUT_MS, readHerdrObservedState, resolveFakeBinDir, type RunCommand } from "./client.js";
+import type { HerdrCommandResult } from "../types/index.js";
 import { ANSI_PATTERN, redactSecrets } from "./pane-text.js";
 import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
 
@@ -85,17 +86,18 @@ export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string 
   return undefined;
 }
 
-function readEscalations(file: string): EscalationRecord[] {
-  if (!existsSync(file)) return [];
+function parseEscalations(file: string): { records: EscalationRecord[]; damaged: boolean } {
+  if (!existsSync(file)) return { records: [], damaged: false };
   try {
     const parsed = JSON.parse(readFileSync(file, "utf-8"));
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return { records: [], damaged: true };
     const records: EscalationRecord[] = [];
+    let damaged = false;
     for (const entry of parsed) {
-      if (!entry || typeof entry !== "object") continue;
-      if (typeof entry.pane !== "string" || !PANE_PATTERN.test(entry.pane)) continue;
-      if (typeof entry.agent !== "string" || !AGENT_PATTERN.test(entry.agent)) continue;
-      if (typeof entry.time !== "number" || !Number.isFinite(entry.time)) continue;
+      if (!entry || typeof entry !== "object") { damaged = true; continue; }
+      if (typeof entry.pane !== "string" || !PANE_PATTERN.test(entry.pane)) { damaged = true; continue; }
+      if (typeof entry.agent !== "string" || !AGENT_PATTERN.test(entry.agent)) { damaged = true; continue; }
+      if (typeof entry.time !== "number" || !Number.isFinite(entry.time)) { damaged = true; continue; }
       const attempts = Number(entry.attempts);
       const record: EscalationRecord = {
         pane: entry.pane,
@@ -106,9 +108,22 @@ function readEscalations(file: string): EscalationRecord[] {
       if (typeof entry.owner === "string" && OWNER_PATTERN.test(entry.owner)) record.owner = entry.owner;
       records.push(record);
     }
-    return records;
-  } catch (e) {}
-  return [];
+    return { records, damaged };
+  } catch (e) {
+    return { records: [], damaged: existsSync(file) };
+  }
+}
+
+function readEscalations(file: string): EscalationRecord[] {
+  return parseEscalations(file).records;
+}
+
+function readEscalationsForUpdate(file: string): EscalationRecord[] {
+  const { records, damaged } = parseEscalations(file);
+  if (damaged) {
+    try { copyFileSync(file, `${file}.corrupt.${Date.now()}.${randomBytes(3).toString("hex")}`); } catch (e) {}
+  }
+  return records;
 }
 
 function writeEscalations(file: string, escalations: EscalationRecord[]) {
@@ -143,6 +158,11 @@ function restoreGrave(file: string, grave: string) {
 }
 
 function takeOverWithoutSnapshot(file: string, grave: string, isStale: (path: string) => boolean): TakeOver {
+  try {
+    if (!isStale(file)) return "fresh";
+  } catch (e: any) {
+    return e?.code === "ENOENT" ? "missing" : "fresh";
+  }
   try {
     renameSync(file, grave);
   } catch (e: any) {
@@ -218,25 +238,29 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
     } catch (e: any) {
       if (e?.code !== "EEXIST") throw e;
       const expired = Date.now() > deadline;
-      if (expired && overtime++ >= LOCK_OVERTIME_TAKEOVERS) throw new Error("escalation_lock_timeout");
-      let stale = expired;
-      if (!stale) {
-        try {
-          stale = Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS;
-        } catch (err: any) {
-          if (err?.code === "ENOENT") continue;
-        }
+      let age = 0;
+      try {
+        age = Date.now() - statSync(lockFile).mtimeMs;
+      } catch (err: any) {
+        if (err?.code === "ENOENT") continue;
       }
-      if (stale) {
+      const stale = age > LOCK_STALE_MS;
+      const future = age < -CLOCK_SKEW_MS;
+      if (expired && !stale && !future) throw new Error("escalation_lock_timeout");
+      if (expired && overtime++ >= LOCK_OVERTIME_TAKEOVERS) throw new Error("escalation_lock_timeout");
+      if (stale || (expired && future)) {
         await hooks.afterStaleLockSeen?.();
-        const outcome = takeOverStale(lockFile, (snapshot) => expired || Date.now() - statSync(snapshot).mtimeMs > LOCK_STALE_MS);
+        const outcome = takeOverStale(lockFile, (snapshot) => {
+          const snapshotAge = Date.now() - statSync(snapshot).mtimeMs;
+          return snapshotAge > LOCK_STALE_MS || (expired && snapshotAge < -CLOCK_SKEW_MS);
+        });
         if (outcome === "taken" || outcome === "missing") continue;
       }
       await sleep(15);
     }
   }
   try {
-    writeEscalations(file, mutate(readEscalations(file)));
+    writeEscalations(file, mutate(readEscalationsForUpdate(file)));
   } finally {
     releaseLock(lockFile, token);
   }
@@ -255,7 +279,7 @@ function recordKey(record: EscalationRecord): string {
   return `${record.pane}|${record.owner ?? ""}|${record.time}`;
 }
 
-function bumpAttempts(records: EscalationRecord[], failed: ReadonlySet<string>): EscalationRecord[] {
+function bumpAttempts(records: EscalationRecord[], failed: ReadonlySet<string>, onExhausted?: () => void): EscalationRecord[] {
   const next: EscalationRecord[] = [];
   for (const record of records) {
     if (!failed.has(recordKey(record))) {
@@ -264,6 +288,7 @@ function bumpAttempts(records: EscalationRecord[], failed: ReadonlySet<string>):
     }
     const attempts = (record.attempts || 0) + 1;
     if (attempts < MAX_RELEASE_ATTEMPTS) next.push({ ...record, attempts });
+    else onExhausted?.();
   }
   return next;
 }
@@ -278,6 +303,23 @@ function ownerAlive(owner: string | undefined): boolean {
   } catch (e: any) {
     return e?.code === "EPERM";
   }
+}
+
+type Verification = "blocked" | "not_blocked" | "unavailable";
+
+function verifyBlocked(res: HerdrCommandResult): Verification {
+  if (!res.ok) return "unavailable";
+  let status: unknown;
+  try {
+    const data = JSON.parse(res.stdout);
+    status = data.result?.agent?.agent_status ?? data.agent?.agent_status ?? data.agent_status ?? data.result?.status ?? data.status;
+  } catch {}
+  if (status === "blocked") return "blocked";
+  const observed = readHerdrObservedState(res);
+  if (observed === "blocked") return "blocked";
+  if (typeof status === "string" && status !== "") return "not_blocked";
+  if (observed === "idle" || observed === "working" || observed === "done" || observed === "unknown") return "not_blocked";
+  return "unavailable";
 }
 
 function sanitizePaneId(pane: string) {
@@ -350,6 +392,11 @@ function isTransientFailure(res: { stdout?: string; stderr?: string }, record: E
   return TRANSIENT_FAILURE.test(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
 }
 
+function hookAllowedUnderGuard(hook: string): boolean {
+  if (!hook.includes("/") && !hook.includes(sep)) return false;
+  return isInsideDir(hook, resolveFakeBinDir());
+}
+
 function realOrResolved(path: string): string {
   try { return realpathSync(path); } catch (e) { return resolve(path); }
 }
@@ -360,9 +407,9 @@ export function isInsideDir(path: string, root: string): boolean {
 }
 
 function sanitizeOutbound(text: string, limit: number): string {
-  const first = redactSecrets(text.slice(0, limit));
+  const first = redactSecrets(text);
   const cleaned = first.replace(ANSI_PATTERN, "").replace(/[\x00-\x1F\x7F-\x9F]/g, " ");
-  return redactSecrets(cleaned);
+  return redactSecrets(cleaned).slice(0, limit);
 }
 
 function runHook(hook: string, args: string[], timeoutMs: number, killGraceMs: number): Promise<boolean> {
@@ -406,7 +453,7 @@ function runHook(hook: string, args: string[], timeoutMs: number, killGraceMs: n
     child.on("error", () => finish(false));
     child.on("close", (code, exitSignal) => {
       if (timedOut) signal("SIGKILL");
-      finish(code === 0 && exitSignal === null);
+      finish(!timedOut && code === 0 && exitSignal === null);
     });
   });
 }
@@ -524,6 +571,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
 
   if (!opts.dryRun) {
+    let cooldownPersisted = true;
     try {
       const res = await runner([herdrBin, "notification", "show", safeTitle, "--body", body, "--sound", "request"]);
       if (!res.ok) {
@@ -531,14 +579,16 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
       }
       try {
         writeStateFile(stateFile, now);
-      } catch (e) {}
+      } catch (e) {
+        cooldownPersisted = false;
+      }
     } finally {
-      releaseClaim(claimFile, claimToken);
+      if (cooldownPersisted) releaseClaim(claimFile, claimToken);
     }
     channels.push("herdr");
 
     const hook = resolveNotifyHook();
-    if (hook && !(isTestGuardActive() && !isInsideDir(hook, resolveFakeBinDir()))) {
+    if (hook && !(isTestGuardActive() && !hookAllowedUnderGuard(hook))) {
       const ran = await runHook(
         hook,
         [safeTitle, body, opts.pane!, opts.reason!],
@@ -578,36 +628,39 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         if (!recorded) {
           escalationResult = "ineffective";
         } else {
-          let isBlocked = false;
+          let verification: Verification | "report_failed" = "report_failed";
           try {
             const repRes = await runner([herdrBin, "pane", "report-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText]);
             if (repRes.ok) {
-              const getRes = await runner([herdrBin, "agent", "get", opts.pane!]);
-              if (getRes.ok) {
-                try {
-                  const data = JSON.parse(getRes.stdout);
-                  const status = data.result?.agent?.agent_status ?? data.agent?.agent_status ?? data.agent_status ?? data.result?.status ?? data.status;
-                  if (status === "blocked") isBlocked = true;
-                } catch {}
-                if (!isBlocked && readHerdrObservedState(getRes) === "blocked") {
-                  isBlocked = true;
-                }
-              }
+              verification = "unavailable";
+              try {
+                verification = verifyBlocked(await runner([herdrBin, "agent", "get", opts.pane!]));
+              } catch (e) {}
             }
           } catch (e) {}
-          if (isBlocked) {
+          if (verification === "blocked") {
             channels.push("escalation");
             escalationResult = "applied";
           } else {
             escalationResult = "ineffective";
             const key = recordKey(record);
-            try {
-              await updateEscalations(escalationsFile, (records) => {
-                const kept = records.filter((e) => recordKey(e) !== key);
-                const restore = kept.some((e) => e.pane === opts.pane) ? [] : displaced;
-                return [...kept, ...restore];
-              });
-            } catch (e) {}
+            let dropRecord = verification === "report_failed";
+            const restoreDisplaced = verification === "report_failed";
+            if (verification === "not_blocked") {
+              try {
+                const relRes = await runner([herdrBin, "pane", "release-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent]);
+                dropRecord = relRes.ok;
+              } catch (e) {}
+            }
+            if (dropRecord) {
+              try {
+                await updateEscalations(escalationsFile, (records) => {
+                  const kept = records.filter((e) => recordKey(e) !== key);
+                  const restore = restoreDisplaced && !kept.some((e) => e.pane === opts.pane) ? displaced : [];
+                  return [...kept, ...restore];
+                });
+              } catch (e) {}
+            }
           }
         }
       } else {
@@ -679,7 +732,6 @@ async function releaseRecords(
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
   const done = new Set<string>();
   const failed = new Set<string>();
-  let exhausted = 0;
   for (const record of records) {
     const paneRes = await runner([herdrBin, "pane", "get", record.pane]);
     if (!paneRes.ok && isPaneGone(paneRes)) {
@@ -694,12 +746,13 @@ async function releaseRecords(
       done.add(recordKey(record));
     } else if (!isTransientFailure(res, record, now)) {
       failed.add(recordKey(record));
-      if ((record.attempts || 0) + 1 >= MAX_RELEASE_ATTEMPTS) exhausted++;
     }
   }
-  await updateEscalations(escalationsFile, (current) =>
-    bumpAttempts(current.filter((e) => !done.has(recordKey(e))), failed),
-  );
+  let exhausted = 0;
+  await updateEscalations(escalationsFile, (current) => {
+    exhausted = 0;
+    return bumpAttempts(current.filter((e) => !done.has(recordKey(e))), failed, () => { exhausted++; });
+  });
   return done.size + exhausted;
 }
 
