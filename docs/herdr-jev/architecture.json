@@ -7,343 +7,766 @@
     "quality_profile": "showcase",
     "views": [
       {
-        "id": "full-flow",
-        "label": "Full Orchestration Flow",
+        "id": "cli-surface",
+        "label": "CLI by purpose",
         "focus": [
-          "ui_lantern",
-          "cli_router",
+          "operator",
+          "entry",
+          "cli_route",
+          "cli_classify",
+          "cli_notify",
+          "cli_spawn",
+          "cli_peer",
+          "cli_reports",
+          "cli_runs",
+          "cli_models"
+        ],
+        "note": "Every herdr-jev command group and the module it drives."
+      },
+      {
+        "id": "launch-path",
+        "label": "Launcher and peers",
+        "focus": [
+          "cli_spawn",
+          "launcher",
+          "grid",
+          "ready",
+          "trust",
+          "worktree",
+          "herdr_split",
+          "herdr_read",
+          "herdr_send",
+          "peer"
+        ],
+        "note": "In-tab grid, readiness wait, trust dialog detection, worktree option and peer messaging."
+      },
+      {
+        "id": "reports-notify",
+        "label": "Reports and alerts",
+        "focus": [
+          "routines",
+          "cli_reports",
+          "standup",
+          "daily",
+          "state_dir",
+          "cli_notify",
+          "notify_core",
+          "notify_native",
+          "notify_hook",
+          "notify_escalate"
+        ],
+        "note": "Scheduled standup and daily, plus the notification path with its opt-in escalation."
+      },
+      {
+        "id": "office",
+        "label": "Jev Office",
+        "focus": [
+          "office_app",
+          "office_scene",
+          "office_swarm",
+          "office_ended",
+          "office_poll",
+          "classifier",
           "typesafe_jev",
-          "grid_launcher",
-          "agent_claude",
-          "agent_codex",
+          "herdr_socket"
+        ],
+        "note": "Pixel-art desks, swarm panel, ended desks and rate limited Jev classification."
+      },
+      {
+        "id": "delivery",
+        "label": "Harness and review",
+        "focus": [
+          "cli_runs",
+          "pipeline",
           "harness_bridge",
-          "harness_core"
-        ],
-        "note": "End-to-end task journey from operator prompt to verified outcome."
-      },
-      {
-        "id": "ui-panes",
-        "label": "Herdr UI & Plugin Panes",
-        "focus": [
-          "ui_lantern",
-          "ui_actions",
-          "ui_radar",
-          "ui_office",
-          "swarm_data",
-          "cli_router"
-        ],
-        "note": "Lantern assistant, Radar overview, Jev Office floor plan and modal action panes."
-      },
-      {
-        "id": "triage-routing",
-        "label": "Triage & Route Plane",
-        "focus": [
-          "cli_router",
-          "vault_sec",
-          "typesafe_jev",
-          "catalog_quota"
-        ],
-        "note": "TypeSafe System One fast classifier (~260ms) and quota cascade circuit breaker."
-      },
-      {
-        "id": "grid-workers",
-        "label": "Grid Planner & Swarm Layer",
-        "focus": [
-          "grid_launcher",
-          "swarm_data",
-          "run_history",
-          "socket_api",
-          "herdr_host"
-        ],
-        "note": "In-tab grid layout planner, worker tracking lifecycle and swarm telemetry."
-      },
-      {
-        "id": "cross-harness",
-        "label": "Cross-Harness & Review",
-        "focus": [
-          "harness_bridge",
+          "review_gate",
           "harness_core",
           "agent_claude",
           "agent_codex",
           "agent_antigravity",
           "agent_kiro"
         ],
-        "note": "Multi-model Triad execution, independent review gates and peer delegation."
+        "note": "Triad pipeline, AI Harness bridge, review gate and the agent harnesses."
       }
     ]
   },
   "components": [
     {
-      "id": "vault_sec",
-      "type": "security",
-      "label": "KeePassXC Vault",
-      "sublabel": "TypeSafe API Key CLI",
-      "tag": "zero-secret-leak",
+      "id": "operator",
+      "type": "external",
+      "label": "Operator",
+      "sublabel": "CLI, actions, keybinds",
+      "tag": "caller",
       "pos": [
-        60,
+        40,
+        872
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "entry",
+      "type": "backend",
+      "label": "herdr-jev CLI",
+      "sublabel": "bin/herdr-jev",
+      "tag": "entrypoint",
+      "brand": "typescript",
+      "pos": [
+        40,
+        1104
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "routines",
+      "type": "external",
+      "label": "Routines Scheduler",
+      "sublabel": "herdr-routines cron",
+      "tag": "scheduler",
+      "pos": [
+        40,
+        1336
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_route",
+      "type": "backend",
+      "label": "Route and Plan",
+      "sublabel": "triage, plan, route",
+      "tag": "cli-group",
+      "pos": [
+        264,
         60
       ],
       "size": [
-        160,
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_classify",
+      "type": "backend",
+      "label": "Classify Pane",
+      "sublabel": "classify-pane stdin",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        176
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_models",
+      "type": "backend",
+      "label": "Models and Quota",
+      "sublabel": "models quota detect",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        640
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_notify",
+      "type": "backend",
+      "label": "Notify",
+      "sublabel": "notify, release",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        872
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_peer",
+      "type": "backend",
+      "label": "Peer Chat",
+      "sublabel": "peer-message peer-read",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        1104
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_reports",
+      "type": "backend",
+      "label": "Reports",
+      "sublabel": "standup daily",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        1278
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_spawn",
+      "type": "backend",
+      "label": "Spawn and Panes",
+      "sublabel": "subagent workers panes",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        1742
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli_runs",
+      "type": "backend",
+      "label": "Runs",
+      "sublabel": "run-status, retry",
+      "tag": "cli-group",
+      "pos": [
+        264,
+        2206
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "triage",
+      "type": "backend",
+      "label": "Triage and Planner",
+      "sublabel": "complexity and effort",
+      "tag": "triage",
+      "pos": [
+        488,
         60
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "classifier",
+      "type": "backend",
+      "label": "Pane Classifier",
+      "sublabel": "state and attention",
+      "tag": "classifier",
+      "pos": [
+        488,
+        176
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "database",
+      "label": "Catalog and Quota",
+      "sublabel": "cascades, breaker",
+      "tag": "catalog",
+      "pos": [
+        488,
+        640
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "notify_core",
+      "type": "backend",
+      "label": "Notify Core",
+      "sublabel": "cooldown, release",
+      "tag": "notify",
+      "pos": [
+        488,
+        872
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "peer",
+      "type": "backend",
+      "label": "Peer Messaging",
+      "sublabel": "send, read, broadcast",
+      "tag": "peer",
+      "pos": [
+        488,
+        1104
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "standup",
+      "type": "backend",
+      "label": "Standup",
+      "sublabel": "file driven, idempotent",
+      "tag": "standup",
+      "pos": [
+        488,
+        1278
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "daily",
+      "type": "backend",
+      "label": "Daily Report",
+      "sublabel": "no model calls",
+      "tag": "daily",
+      "pos": [
+        488,
+        1394
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "test_guard",
+      "type": "security",
+      "label": "Test Guard",
+      "sublabel": "blocks live herdr",
+      "tag": "tests",
+      "pos": [
+        488,
+        1510
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "launcher",
+      "type": "backend",
+      "label": "Launcher",
+      "sublabel": "split, tab, spawn agent",
+      "tag": "launcher",
+      "pos": [
+        488,
+        1800
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Triad Pipeline",
+      "sublabel": "advisor to reviewer",
+      "tag": "pipeline",
+      "pos": [
+        488,
+        2206
+      ],
+      "size": [
+        148,
+        64
       ]
     },
     {
       "id": "typesafe_jev",
       "type": "external",
       "label": "TypeSafe Jev",
-      "sublabel": "System One Triage (~260ms)",
+      "sublabel": "System One, fallback",
       "tag": "fast-decision",
       "pos": [
-        300,
-        60
+        722,
+        118
       ],
       "size": [
-        160,
-        60
+        148,
+        64
       ]
     },
     {
-      "id": "herdr_host",
-      "type": "external",
-      "label": "Herdr Multiplexer",
-      "sublabel": "Daemon Socket & Panes",
-      "tag": "multiplexer",
-      "pos": [
-        540,
-        60
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "harness_core",
-      "type": "cloud",
-      "label": "AI Harness Core",
-      "sublabel": "Review & Report History",
-      "tag": "control-plane",
-      "pos": [
-        780,
-        60
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "ui_lantern",
-      "type": "frontend",
-      "label": "Lantern Assistant",
-      "sublabel": "In-Tab Chat & Routing",
-      "tag": "assistant-tab",
-      "pos": [
-        60,
-        200
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "ui_actions",
-      "type": "frontend",
-      "label": "Modal Action Panes",
-      "sublabel": "Route, Triad, Status, Models",
-      "tag": "modal-actions",
-      "pos": [
-        60,
-        340
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "ui_radar",
-      "type": "frontend",
-      "label": "Radar Overview",
-      "sublabel": "Agents, Status & Quota",
-      "tag": "overview-pane",
-      "pos": [
-        60,
-        480
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "ui_office",
-      "type": "frontend",
-      "label": "Jev Office & Swarm",
-      "sublabel": "Floor Plan & Desk Roster",
-      "tag": "office-pane",
-      "pos": [
-        60,
-        620
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "cli_router",
+      "id": "office_poll",
       "type": "backend",
-      "label": "CLI & Dispatcher",
-      "sublabel": "triage, plan, route, runs",
-      "tag": "cli-router",
+      "label": "Jev Classify Poll",
+      "sublabel": "60s, 20 per minute",
+      "tag": "rate-policy",
+      "brand": "node-js",
       "pos": [
-        300,
-        200
+        488,
+        292
       ],
       "size": [
-        160,
-        60
+        148,
+        64
       ]
     },
     {
-      "id": "socket_api",
-      "type": "messagebus",
-      "label": "Herdr Socket API",
-      "sublabel": "Unix Socket IPC",
-      "tag": "socket-ipc",
+      "id": "office_app",
+      "type": "frontend",
+      "label": "Jev Office",
+      "sublabel": "terminal floor",
+      "tag": "office-pane",
+      "brand": "node-js",
       "pos": [
-        540,
-        200
+        722,
+        292
       ],
       "size": [
-        160,
-        60
+        148,
+        64
+      ]
+    },
+    {
+      "id": "office_ended",
+      "type": "frontend",
+      "label": "Ended Desks",
+      "sublabel": "pane exits, clock",
+      "tag": "punch-clock",
+      "pos": [
+        488,
+        408
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "office_scene",
+      "type": "frontend",
+      "label": "Pixel Desk Scene",
+      "sublabel": "sprites, monitors",
+      "tag": "scene",
+      "pos": [
+        722,
+        408
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "office_swarm",
+      "type": "frontend",
+      "label": "Swarm Panel",
+      "sublabel": "workers per desk",
+      "tag": "swarm",
+      "pos": [
+        722,
+        524
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "security",
+      "label": "KeePassXC Vault",
+      "sublabel": "TypeSafe API key",
+      "tag": "zero-secret-leak",
+      "pos": [
+        946,
+        118
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "notify_native",
+      "type": "frontend",
+      "label": "Native Notification",
+      "sublabel": "herdr notification show",
+      "tag": "channel",
+      "pos": [
+        722,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "notify_hook",
+      "type": "external",
+      "label": "Notify Hook",
+      "sublabel": "optional executable",
+      "tag": "channel",
+      "pos": [
+        722,
+        872
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "notify_escalate",
+      "type": "security",
+      "label": "Blocked Escalation",
+      "sublabel": "opt-in, effect verified",
+      "tag": "channel",
+      "pos": [
+        722,
+        988
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "state_dir",
+      "type": "database",
+      "label": "State Dir",
+      "sublabel": "grid, runs, reports",
+      "tag": "state",
+      "pos": [
+        722,
+        1278
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "grid",
+      "type": "backend",
+      "label": "In-tab Grid",
+      "sublabel": "tracked worker tiles",
+      "tag": "grid-planner",
+      "pos": [
+        722,
+        1684
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "ready",
+      "type": "backend",
+      "label": "Readiness Wait",
+      "sublabel": "prompt match, 45s",
+      "tag": "ready-wait",
+      "pos": [
+        722,
+        1800
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "trust",
+      "type": "security",
+      "label": "Trust Detection",
+      "sublabel": "hands back to peer",
+      "tag": "trust-detect",
+      "pos": [
+        722,
+        1916
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "worktree",
+      "type": "backend",
+      "label": "Worktree Option",
+      "sublabel": "sibling git worktree",
+      "tag": "worktree",
+      "pos": [
+        722,
+        2032
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_socket",
+      "type": "external",
+      "label": "Event Socket",
+      "sublabel": "pane and status events",
+      "tag": "herdr-api",
+      "pos": [
+        946,
+        292
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_notify",
+      "type": "external",
+      "label": "Notifications",
+      "sublabel": "herdr notification show",
+      "tag": "herdr-api",
+      "pos": [
+        946,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_status",
+      "type": "external",
+      "label": "Agent Status",
+      "sublabel": "report-agent, get",
+      "tag": "herdr-api",
+      "pos": [
+        946,
+        988
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_send",
+      "type": "external",
+      "label": "Pane Send and Read",
+      "sublabel": "text in, snapshot out",
+      "tag": "herdr-api",
+      "pos": [
+        946,
+        1104
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_split",
+      "type": "external",
+      "label": "Pane Split and Tab",
+      "sublabel": "layout, spawn, close",
+      "tag": "herdr-api",
+      "pos": [
+        946,
+        1684
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_read",
+      "type": "external",
+      "label": "Pane Text",
+      "sublabel": "prompt snapshots",
+      "tag": "herdr-api",
+      "pos": [
+        946,
+        1800
+      ],
+      "size": [
+        148,
+        64
       ]
     },
     {
       "id": "harness_bridge",
       "type": "backend",
       "label": "AI Harness Bridge",
-      "sublabel": "external-run & Review",
+      "sublabel": "external-run",
       "tag": "harness-bridge",
       "pos": [
-        780,
-        200
+        722,
+        2206
       ],
       "size": [
-        160,
-        60
+        148,
+        64
       ]
     },
     {
-      "id": "grid_launcher",
+      "id": "review_gate",
       "type": "backend",
-      "label": "Grid Planner & Launcher",
-      "sublabel": "In-Tab Grid & Workers",
-      "tag": "grid-planner",
+      "label": "Review Gate",
+      "sublabel": "verify, then judge",
+      "tag": "review-gate",
       "pos": [
-        540,
-        340
+        946,
+        2206
       ],
       "size": [
-        160,
-        60
+        148,
+        64
       ]
     },
     {
-      "id": "catalog_quota",
-      "type": "database",
-      "label": "Catalog & Quota",
-      "sublabel": "Cascades & Breaker",
-      "tag": "circuit-breaker",
+      "id": "harness_core",
+      "type": "cloud",
+      "label": "AI Harness Core",
+      "sublabel": "ledger and reports",
+      "tag": "control-plane",
       "pos": [
-        540,
-        480
+        1170,
+        2206
       ],
       "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "swarm_data",
-      "type": "backend",
-      "label": "Swarm Data Layer",
-      "sublabel": "Agents View & Git Diffs",
-      "tag": "swarm-layer",
-      "pos": [
-        300,
-        480
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "run_history",
-      "type": "database",
-      "label": "Run History Store",
-      "sublabel": "runs list/get/retry & Dagr",
-      "tag": "run-store",
-      "pos": [
-        300,
-        620
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "agent_claude",
-      "type": "backend",
-      "brand": "claude",
-      "label": "Claude Code",
-      "sublabel": "Fable / Sonnet / Opus",
-      "tag": "cross-harness",
-      "pos": [
-        1020,
-        200
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "agent_codex",
-      "type": "backend",
-      "brand": "openai",
-      "label": "Codex CLI",
-      "sublabel": "Astra / Luna / Sol",
-      "tag": "cross-harness",
-      "pos": [
-        1020,
-        340
-      ],
-      "size": [
-        160,
-        60
-      ]
-    },
-    {
-      "id": "agent_antigravity",
-      "type": "backend",
-      "brand": "google-gemini",
-      "label": "AntiGravity",
-      "sublabel": "Opus 4.6 / Flash 3.8",
-      "tag": "cross-harness",
-      "pos": [
-        1020,
-        480
-      ],
-      "size": [
-        160,
-        60
+        148,
+        64
       ]
     },
     {
@@ -351,253 +774,635 @@
       "type": "backend",
       "label": "Kiro CLI",
       "sublabel": "chat trust-tools",
-      "tag": "cross-harness",
+      "tag": "agent-harness",
       "pos": [
-        1020,
-        620
+        1170,
+        1568
       ],
       "size": [
-        160,
-        60
+        148,
+        64
+      ]
+    },
+    {
+      "id": "agent_antigravity",
+      "type": "backend",
+      "label": "AntiGravity",
+      "sublabel": "agy, Gemini models",
+      "tag": "agent-harness",
+      "brand": "google-gemini",
+      "pos": [
+        1170,
+        1684
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "agent_claude",
+      "type": "backend",
+      "label": "Claude Code",
+      "sublabel": "Fable, Sonnet, Opus",
+      "tag": "agent-harness",
+      "brand": "claude",
+      "pos": [
+        1170,
+        1800
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "agent_codex",
+      "type": "backend",
+      "label": "Codex CLI",
+      "sublabel": "Astra, Luna, Sol",
+      "tag": "agent-harness",
+      "brand": "openai",
+      "pos": [
+        1170,
+        1916
+      ],
+      "size": [
+        148,
+        64
       ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Herdr UI Panes",
+      "label": "CLI Commands",
       "wraps": [
-        "ui_lantern",
-        "ui_actions",
-        "ui_radar",
-        "ui_office"
+        "cli_route",
+        "cli_classify",
+        "cli_models",
+        "cli_notify",
+        "cli_peer",
+        "cli_reports",
+        "cli_spawn",
+        "cli_runs"
       ]
     },
     {
-      "kind": "security-group",
-      "label": "External Services",
+      "kind": "region",
+      "label": "Jev Office",
       "wraps": [
-        "vault_sec",
-        "typesafe_jev",
-        "herdr_host",
+        "office_poll",
+        "office_app",
+        "office_ended",
+        "office_scene",
+        "office_swarm"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Notification Path",
+      "wraps": [
+        "notify_core",
+        "notify_native",
+        "notify_hook",
+        "notify_escalate"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Launcher",
+      "wraps": [
+        "launcher",
+        "grid",
+        "ready",
+        "trust",
+        "worktree"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Routines Jobs",
+      "wraps": [
+        "standup",
+        "daily"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "AI Harness",
+      "wraps": [
+        "harness_bridge",
+        "review_gate",
         "harness_core"
       ]
     },
     {
       "kind": "region",
-      "label": "Herdr-Jev Core",
+      "label": "Herdr Multiplexer",
       "wraps": [
-        "cli_router",
-        "socket_api",
-        "harness_bridge",
-        "grid_launcher",
-        "catalog_quota",
-        "swarm_data",
-        "run_history"
+        "herdr_socket",
+        "herdr_notify",
+        "herdr_status",
+        "herdr_send",
+        "herdr_split",
+        "herdr_read"
       ]
     },
     {
       "kind": "region",
       "label": "Agent Harnesses",
       "wraps": [
-        "agent_claude",
-        "agent_codex",
+        "agent_kiro",
         "agent_antigravity",
-        "agent_kiro"
+        "agent_claude",
+        "agent_codex"
       ]
     }
   ],
   "connections": [
     {
-      "id": "vault-to-jev",
-      "from": "vault_sec",
+      "id": "op-entry",
+      "from": "operator",
+      "to": "entry",
+      "label": "run",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        114,
+        950
+      ]
+    },
+    {
+      "id": "cron-entry",
+      "from": "routines",
+      "to": "entry",
+      "label": "cron",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "entry-route",
+      "from": "entry",
+      "to": "cli_route",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "route-triage",
+      "from": "cli_route",
+      "to": "triage",
+      "label": "task",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "triage-jev",
+      "from": "triage",
+      "to": "typesafe_jev",
+      "label": "triage",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "classify-cli",
+      "from": "cli_classify",
+      "to": "classifier",
+      "label": "pane text",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "classifier-jev",
+      "from": "classifier",
+      "to": "typesafe_jev",
+      "label": "classify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "vault-jev",
+      "from": "vault",
       "to": "typesafe_jev",
       "label": "api key",
       "variant": "security",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "cli-to-jev",
-      "from": "cli_router",
-      "to": "typesafe_jev",
-      "label": "triage",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "labelDy": -15
-    },
-    {
-      "id": "socket-to-host",
-      "from": "socket_api",
-      "to": "herdr_host",
-      "label": "socket IPC",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "labelDy": -15
-    },
-    {
-      "id": "bridge-to-core",
-      "from": "harness_bridge",
-      "to": "harness_core",
-      "label": "external-run",
-      "fromSide": "top",
-      "toSide": "bottom",
-      "labelDy": -15
-    },
-    {
-      "id": "lantern-to-cli",
-      "from": "ui_lantern",
-      "to": "cli_router",
-      "label": "prompt",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "actions-to-cli",
-      "from": "ui_actions",
-      "to": "cli_router",
-      "label": "action",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "radar-to-swarm",
-      "from": "ui_radar",
-      "to": "swarm_data",
-      "label": "poll",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "office-to-swarm",
-      "from": "ui_office",
-      "to": "swarm_data",
-      "label": "roster",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "swarm-to-history",
-      "from": "swarm_data",
-      "to": "run_history",
-      "label": "runs",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
-    },
-    {
-      "id": "cli-to-socket",
-      "from": "cli_router",
-      "to": "socket_api",
-      "label": "dispatch",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "socket-to-bridge",
-      "from": "socket_api",
-      "to": "harness_bridge",
-      "label": "delegation",
-      "fromSide": "right",
-      "toSide": "left"
-    },
-    {
-      "id": "socket-to-launcher",
-      "from": "socket_api",
-      "to": "grid_launcher",
-      "label": "plan",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
-    },
-    {
-      "id": "launcher-to-catalog",
-      "from": "grid_launcher",
-      "to": "catalog_quota",
-      "label": "cascades",
-      "variant": "dashed",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
-    },
-    {
-      "id": "launcher-to-swarm",
-      "from": "grid_launcher",
-      "to": "swarm_data",
-      "label": "workers",
       "fromSide": "left",
       "toSide": "right"
     },
     {
-      "id": "bridge-to-claude",
+      "id": "entry-classify",
+      "from": "entry",
+      "to": "cli_classify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entry-models",
+      "from": "entry",
+      "to": "cli_models",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entry-notify",
+      "from": "entry",
+      "to": "cli_notify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entry-peer",
+      "from": "entry",
+      "to": "cli_peer",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entry-reports",
+      "from": "entry",
+      "to": "cli_reports",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entry-spawn",
+      "from": "entry",
+      "to": "cli_spawn",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "entry-runs",
+      "from": "entry",
+      "to": "cli_runs",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "models-catalog",
+      "from": "cli_models",
+      "to": "catalog",
+      "label": "models",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "notify-cli",
+      "from": "cli_notify",
+      "to": "notify_core",
+      "label": "alert",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "notify-native",
+      "from": "notify_core",
+      "to": "notify_native",
+      "label": "show",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "notify-hook",
+      "from": "notify_core",
+      "to": "notify_hook",
+      "label": "hook",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        700,
+        904
+      ]
+    },
+    {
+      "id": "notify-esc",
+      "from": "notify_core",
+      "to": "notify_escalate",
+      "label": "opt-in",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "native-host",
+      "from": "notify_native",
+      "to": "herdr_notify",
+      "label": "notify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "esc-host",
+      "from": "notify_escalate",
+      "to": "herdr_status",
+      "label": "report",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "peer-cli",
+      "from": "cli_peer",
+      "to": "peer",
+      "label": "message",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "peer-host",
+      "from": "peer",
+      "to": "herdr_send",
+      "label": "pane io",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "reports-standup",
+      "from": "cli_reports",
+      "to": "standup",
+      "label": "standup",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "reports-daily",
+      "from": "cli_reports",
+      "to": "daily",
+      "label": "daily",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "standup-peer",
+      "from": "standup",
+      "to": "peer",
+      "label": "send",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "standup-state",
+      "from": "standup",
+      "to": "state_dir",
+      "label": "ran today",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "daily-state",
+      "from": "daily",
+      "to": "state_dir",
+      "label": "report",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "guard-state",
+      "from": "test_guard",
+      "to": "state_dir",
+      "label": "temp dir",
+      "fromSide": "right",
+      "toSide": "bottom"
+    },
+    {
+      "id": "spawn-launcher",
+      "from": "cli_spawn",
+      "to": "launcher",
+      "label": "spawn",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "launcher-grid",
+      "from": "launcher",
+      "to": "grid",
+      "label": "plan",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "launcher-ready",
+      "from": "launcher",
+      "to": "ready",
+      "label": "wait",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        700,
+        1832
+      ]
+    },
+    {
+      "id": "launcher-trust",
+      "from": "launcher",
+      "to": "trust",
+      "label": "scan",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelSegment": 2
+    },
+    {
+      "id": "launcher-worktree",
+      "from": "launcher",
+      "to": "worktree",
+      "label": "git",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelSegment": 2
+    },
+    {
+      "id": "grid-host",
+      "from": "grid",
+      "to": "herdr_split",
+      "label": "split",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "ready-host",
+      "from": "ready",
+      "to": "herdr_read",
+      "label": "snapshot",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "runs-pipeline",
+      "from": "cli_runs",
+      "to": "pipeline",
+      "label": "resume",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "pipeline-launcher",
+      "from": "pipeline",
+      "to": "launcher",
+      "label": "stage",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "pipeline-bridge",
+      "from": "pipeline",
+      "to": "harness_bridge",
+      "label": "run",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "bridge-gate",
       "from": "harness_bridge",
-      "to": "agent_claude",
-      "label": "triad plan",
+      "to": "review_gate",
+      "label": "verify",
       "fromSide": "right",
       "toSide": "left"
     },
     {
-      "id": "grid-to-codex",
-      "from": "grid_launcher",
-      "to": "agent_codex",
-      "label": "tile worker",
+      "id": "gate-core",
+      "from": "review_gate",
+      "to": "harness_core",
+      "label": "judge",
       "fromSide": "right",
       "toSide": "left"
     },
     {
-      "id": "claude-to-codex",
-      "from": "agent_claude",
+      "id": "core-codex",
+      "from": "harness_core",
       "to": "agent_codex",
-      "label": "triad",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
+      "label": "reviewer",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
     },
     {
-      "id": "codex-to-antigravity",
-      "from": "agent_codex",
-      "to": "agent_antigravity",
-      "label": "peer",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
+      "id": "office-poll",
+      "from": "office_app",
+      "to": "office_poll",
+      "label": "poll",
+      "fromSide": "left",
+      "toSide": "right"
     },
     {
-      "id": "antigravity-to-kiro",
-      "from": "agent_antigravity",
+      "id": "office-scene",
+      "from": "office_app",
+      "to": "office_scene",
+      "label": "render",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        796,
+        370
+      ]
+    },
+    {
+      "id": "scene-swarm",
+      "from": "office_scene",
+      "to": "office_swarm",
+      "label": "open",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        796,
+        486
+      ]
+    },
+    {
+      "id": "scene-ended",
+      "from": "office_scene",
+      "to": "office_ended",
+      "label": "ended",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "poll-classifier",
+      "from": "office_poll",
+      "to": "classifier",
+      "label": "classify",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "office-host",
+      "from": "office_app",
+      "to": "herdr_socket",
+      "label": "socket",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "host-kiro",
+      "from": "herdr_split",
       "to": "agent_kiro",
-      "label": "peer",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "host-agy",
+      "from": "herdr_split",
+      "to": "agent_antigravity",
+      "label": "pane",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        1151,
+        1716
+      ]
+    },
+    {
+      "id": "host-claude",
+      "from": "herdr_split",
+      "to": "agent_claude",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "host-codex",
+      "from": "herdr_split",
+      "to": "agent_codex",
+      "fromSide": "right",
+      "toSide": "left"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "System One Semantic Triage",
+      "title": "Launcher guards",
       "items": [
-        "TypeSafe Jev classifies complexity, effort & research need in ~260ms",
-        "Bimodal quantile scoring (0.60 quantile) prevents model underprovisioning",
-        "Deterministic local fallback with zero-overhead on network partition"
-      ]
-    },
-    {
-      "dot": "rose",
-      "title": "AI Harness Bridge & Review Gates",
-      "items": [
-        "Canonical ledger retains reports, attempt history and block reasons",
-        "Deterministic checks verify repository state before independent review",
-        "Read-only reviewer validates the archived report digest"
+        "In-tab grid tracks worker tiles per caller pane",
+        "Readiness wait matches the harness prompt before dispatch",
+        "Trust dialog detection stops the launch and hands off to peer-message",
+        "Worktree option creates a sibling git worktree for the peer"
       ]
     },
     {
       "dot": "amber",
-      "title": "Cross-Harness Peering & Quota",
+      "title": "Alerts and reports",
       "items": [
-        "Cross-harness delegation matrix links Claude, Codex, AntiGravity & Kiro",
-        "Automated model cascades trigger on 429 exhaustion via quota detect",
-        "Dagr run.json sanitized state projections with immutable digest receipts"
+        "Notify dedupes by cooldown, then Herdr native, optional hook and opt-in escalation",
+        "Escalation counts only when the native status turns blocked",
+        "Routines run standup --auto and daily on a schedule",
+        "Daily and standup keep their output in the state dir"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Office rate policy",
+      "items": [
+        "Classifications are cached by the last 30 cleaned lines",
+        "Working desks once a minute, idle desks after two stable ticks",
+        "A cap of 20 calls per minute bounds cost to 1200 an hour"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safety rails",
+      "items": [
+        "Test guard blocks live herdr, real hooks and unmocked standup in tests",
+        "Review gate needs deterministic verify before independent judge",
+        "TypeSafe key comes from the vault, never from the repository"
       ]
     }
   ]
