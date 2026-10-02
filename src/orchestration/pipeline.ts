@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { externalRun, harnessCommand, recordAutoImprovement, type DelegationInput } from "../harness/bridge.js";
-import { buildInlineCommand, launchStageInHerdr, type SplitDirectionOption } from "../herdr/launcher.js";
+import { buildInlineCommand, launchStageInHerdr, readonlyReviewerArgs, type SplitDirectionOption } from "../herdr/launcher.js";
 import { createHerdrClient, readHerdrObservedState, requiresTrustConfirmation } from "../herdr/client.js";
 import type { PipelinePlan, StageSpec } from "../types/index.js";
 import { assertRunId, retryableStages } from "./run-history.js";
@@ -36,10 +36,10 @@ export function projectRun(id: string): string {
 }
 
 export function reviewerCommand(client: string, stage: StageSpec, prompt: string): string[] {
-  const command = buildInlineCommand(client, stage, prompt, true);
-  if (client === "codex") return [...command, "--sandbox", "read-only"];
-  if (client === "claude") return [...command, "--tools", "Read,Glob,Grep"];
-  throw new Error("readonly_reviewer_adapter_unavailable");
+  const reviewStage: StageSpec = { ...stage, role: "reviewer" };
+  const readonly = readonlyReviewerArgs(client, reviewStage);
+  if (!readonly.length) throw new Error("readonly_reviewer_adapter_unavailable");
+  return [...buildInlineCommand(client, reviewStage, prompt, true), ...readonly];
 }
 
 export async function runPipeline(plan: PipelinePlan, options: RunOptions) {

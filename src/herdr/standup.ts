@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { readOverview } from "./overview.js";
 import { converseWithPeer } from "./peer.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
-import { resolveStateDir } from "./state-dir.js";
+import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
 import { redactSecrets } from "./pane-text.js";
 
 export interface StandupOptions {
@@ -383,7 +383,7 @@ export async function runStandup(
   targets: StandupTarget[],
   deps: StandupRunDeps = {},
 ): Promise<StandupTargetResult[]> {
-  if (process.env.HERDR_JEV_TEST_GUARD === '1' && !deps.sendPeer) throw new Error('standup_requires_injected_deps_in_tests');
+  if (isTestGuardActive() && !deps.sendPeer) throw new Error('standup_requires_injected_deps_in_tests');
   const results: StandupTargetResult[] = [];
   const herdr = deps.herdr ?? createHerdrClient();
 

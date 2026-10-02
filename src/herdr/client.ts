@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { sep } from "node:path";
 import type { HerdrCommandResult } from "../types/index.js";
 import { ANSI_PATTERN } from "./pane-text.js";
+import { isTestGuardActive } from "./state-dir.js";
 
 const TRUSTED_TMP_ROOTS: readonly string[] = ["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"];
 
@@ -67,6 +68,7 @@ export interface HerdrClient {
   readAgent?(target: string, lines?: number, source?: "visible" | "recent"): Promise<HerdrCommandResult>;
   readPane?(paneId: string, lines?: number): Promise<HerdrCommandResult>;
   getAgent?(target: string): Promise<HerdrCommandResult>;
+  sendKeys?(target: string, keys: readonly string[]): Promise<HerdrCommandResult>;
   reportSpawn?(paneId: string, tokens: Record<string, string>): Promise<HerdrCommandResult>;
   notify(title: string, body: string, sound?: string): Promise<HerdrCommandResult>;
 }
@@ -82,7 +84,7 @@ export function createProcessCommandAdapter(
         resolve({ ok: false, code: 1, stdout: "", stderr: "missing command" });
         return;
       }
-      if (process.env.HERDR_JEV_TEST_GUARD === '1' && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
+      if (isTestGuardActive() && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
         if (!isTestSafeBinary(command)) {
           const cmdPath = args.join(" ");
           const isReadOnly = /^(?:agent|pane) (?:get|list|read|layout|current)\b/.test(cmdPath);
@@ -335,6 +337,9 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
     },
     getAgent(target) {
       return runCommand([herdrBin, "agent", "get", target]);
+    },
+    sendKeys(target, keys) {
+      return runCommand([herdrBin, "agent", "send-keys", target, ...keys]);
     },
     notify(title, body, sound = "none") {
       return runCommand([herdrBin, "notification", "show", title, "--body", body, "--sound", sound]);
