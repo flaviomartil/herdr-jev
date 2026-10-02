@@ -31,7 +31,8 @@ const DEFAULT_CONFIG_PATH = join(
 );
 
 function userConfigDir(): string {
-  return join(homedir(), ".config", "herdr");
+  const override = process.env.HERDR_JEV_CONFIG_DIR?.trim();
+  return override ? override : join(homedir(), ".config", "herdr");
 }
 
 function userConfigFile(): string {

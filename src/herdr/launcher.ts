@@ -4,7 +4,9 @@ import { mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "nod
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
-import { classifyHerdrCommandFailure, createHerdrClient, readHerdrObservedState, requiresTrustConfirmation, type HerdrClient, type HerdrObservedState } from "./client.js";
+import { classifyHerdrCommandFailure, classifyPaneBlock, createHerdrClient, looksLikeSelectionMenu, normalizePaneText, readHerdrObservedState, readHerdrStructuredState, type HerdrClient, type HerdrObservedState, type PaneBlockKind } from "./client.js";
+import { ANSI_PATTERN } from "./pane-text.js";
+import { resolveStateDir } from "./state-dir.js";
 import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
 
 export interface LaunchResult {
@@ -17,6 +19,7 @@ export interface LaunchResult {
   paneCreated?: boolean;
   promptPending?: boolean;
   trustRequired?: boolean;
+  selectionRequired?: boolean;
   promptDelivered?: boolean;
   hint?: string;
   agentName?: string;
@@ -128,7 +131,7 @@ export type ClosePlanItem = {
   status: string;
 };
 
-export function gridStateDir(stateDir = process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev")): string {
+export function gridStateDir(stateDir = resolveStateDir()): string {
   return join(stateDir, "grid");
 }
 
@@ -398,6 +401,52 @@ export function resolveSplitLayout(
   return "grid";
 }
 
+export function isClientPromptReady(baseClient: string, rawText: string): boolean {
+  const clean = normalizePaneText(rawText);
+  if (looksLikeSelectionMenu(clean)) return false;
+  if (baseClient === "antigravity") return /(^|\n)>\s*(?=\n|$)/.test(clean);
+  if (baseClient === "codex") return /(^|\n)› /.test(clean);
+  if (baseClient === "claude") return /(^|\n)(?:[│┃|][ \t]*)?[❯>](?: |\n|$)/.test(clean);
+  return true;
+}
+
+function hasReadyPattern(baseClient: string): boolean {
+  return baseClient === "antigravity" || baseClient === "codex" || baseClient === "claude";
+}
+
+const UNKNOWN_STATE_STABLE_MS = 1000;
+const UNKNOWN_STATE_GRACE_MS = 3000;
+
+function paneBlockedResult(
+  kind: PaneBlockKind,
+  context: { agentName: string; paneId: string; commandText: string; direction: "right" | "down" },
+): LaunchResult {
+  const base: LaunchResult = {
+    ok: false,
+    ackStatus: "blocked",
+    completionState: "blocked",
+    completionObserved: false,
+    workEvidence: "not_checked",
+    promptPending: true,
+    paneCreated: true,
+    ...context,
+  };
+  if (kind === "trust") {
+    return {
+      ...base,
+      trustRequired: true,
+      hint: "confirm trust in the pane, then send the task with peer-message",
+      error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.",
+    };
+  }
+  return {
+    ...base,
+    selectionRequired: true,
+    hint: "choose an option in the pane, then send the task with peer-message",
+    error: "Agent is waiting on a selection menu; resolve it in the pane before dispatching work.",
+  };
+}
+
 export function parseHerdrPaneId(stdout: string): string | undefined {
   const trimmed = stdout.trim();
   if (!trimmed) return undefined;
@@ -417,16 +466,23 @@ export function parseHerdrPaneId(stdout: string): string | undefined {
 
 import { resolveBaseClientKind, resolveClientExecutable } from "../config/aliases.js";
 
+const CLAUDE_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  "fable-5": "claude-fable-5-1",
+  "fable-5-1": "claude-fable-5-1",
+  "sonnet-5": "claude-sonnet-5-5",
+  "sonnet-5-5": "claude-sonnet-5-5",
+  "opus-5": "claude-opus-5-5",
+  "opus-5-5": "claude-opus-5-5",
+  "haiku-4-5": "claude-haiku-4-5-20251001",
+  "haiku-4-5-20251001": "claude-haiku-4-5-20251001",
+};
+
 export function resolveClaudeModel(modelId: string): string {
   if (!modelId) return modelId;
   const trimmed = modelId.trim();
 
-  if (trimmed === "fable-5" || trimmed === "fable-5.1" || trimmed === "claude-fable-5") return "claude-fable-5-1";
-  if (trimmed === "sonnet-5" || trimmed === "claude-sonnet-5" || trimmed === "sonnet-5.5") return "claude-sonnet-5-5";
-  if (trimmed === "opus-5" || trimmed === "claude-opus-5" || trimmed === "opus-5.5") return "claude-opus-5-5";
-  if (trimmed === "haiku-4.5" || trimmed === "haiku-4-5" || trimmed === "claude-haiku-4-5") return "claude-haiku-4-5-20251001";
-
-  if (trimmed.startsWith("claude-") && /\d$/.test(trimmed)) return trimmed;
+  const alias = CLAUDE_MODEL_ALIASES[trimmed.replace(/^claude-/, "").replace(/\./g, "-")];
+  if (alias) return alias;
 
   return trimmed;
 }
@@ -730,9 +786,8 @@ async function launchStageInHerdrAttempt(input: {
   // 3. Send initial prompt/handoff immediately into the split pane
   if (herdr.readAgent) {
     const screen = await herdr.readAgent(agentName);
-    if (screen.ok && requiresTrustConfirmation(screen)) {
-      return { ok: false, ackStatus: "blocked", completionState: "blocked", paneCreated: true, promptPending: true, trustRequired: true, hint: "confirm trust in the pane, then send the task with peer-message", agentName, paneId, commandText, error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.", direction: splitDirection };
-    }
+    const initialBlock = screen.ok ? classifyPaneBlock(screen) : null;
+    if (initialBlock) return paneBlockedResult(initialBlock, { agentName, paneId, commandText, direction: splitDirection });
   }
   let promptDelivered = false;
   if (input.handoffPrompt && input.handoffPrompt.trim().length > 0) {
@@ -741,6 +796,7 @@ async function launchStageInHerdrAttempt(input: {
     const readyTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 45000;
     const readyDeadline = clock.now() + readyTimeoutMs;
     let isReady = false;
+    let unknownSince: number | null = null;
 
     while (clock.now() < readyDeadline) {
       if (herdr.getAgent && herdr.readAgent) {
@@ -749,39 +805,29 @@ async function launchStageInHerdrAttempt(input: {
           herdr.readAgent(agentName)
         ]);
         if (screenRes && screenRes.ok) {
-          if (requiresTrustConfirmation(screenRes)) {
-            return {
-              ok: false,
-              ackStatus: "blocked",
-              completionState: "blocked",
-              completionObserved: false,
-              workEvidence: "not_checked",
-              promptPending: true,
-              trustRequired: true,
-              hint: "confirm trust in the pane, then send the task with peer-message",
-              error: "Agent requires repository trust confirmation; resolve it in the pane before dispatching work.",
-              paneCreated: true,
-              agentName,
-              paneId,
-              commandText,
-              direction: splitDirection,
-            };
-          }
+          const block = classifyPaneBlock(screenRes);
+          if (block) return paneBlockedResult(block, { agentName, paneId, commandText, direction: splitDirection });
         }
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
-          if (state === "idle") {
-            const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-            let readyMatch = false;
-            if (baseClient === "antigravity") readyMatch = /(^|\n)>\s*(?=\n|$)/.test(cleanText);
-            else if (baseClient === "codex") readyMatch = /(^|\n)› /.test(cleanText);
-            else if (baseClient === "claude") readyMatch = /(^|\n)[❯>] /.test(cleanText);
-            else readyMatch = true;
-
-            if (readyMatch) {
+          if (state === "idle" || state === "unknown") {
+            const readyMatch = isClientPromptReady(baseClient, `${screenRes.stdout}\n${screenRes.stderr}`);
+            if (readyMatch && state === "idle") {
               isReady = true;
               break;
             }
+            if (readyMatch) {
+              unknownSince ??= clock.now();
+              const required = hasReadyPattern(baseClient) ? UNKNOWN_STATE_STABLE_MS : UNKNOWN_STATE_GRACE_MS;
+              if (clock.now() - unknownSince >= required) {
+                isReady = true;
+                break;
+              }
+            } else {
+              unknownSince = null;
+            }
+          } else {
+            unknownSince = null;
           }
         }
       } else {
@@ -824,7 +870,7 @@ async function launchStageInHerdrAttempt(input: {
         ]);
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
-          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\s+/g, " ");
+          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(ANSI_PATTERN, "").replace(/\s+/g, " ");
           const normalizedPrompt = input.handoffPrompt.replace(/\s+/g, " ").trim();
           const firstLinePrefix = normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 16));
           if (state === "idle" && !cleanText.includes(firstLinePrefix)) {
@@ -841,12 +887,14 @@ async function launchStageInHerdrAttempt(input: {
     }
 
     if (!prompted.ok) {
+      const stalledWithText = `${prompted.stdout}\n${prompted.stderr}`.includes("agent_prompt_stalled");
       return {
         ok: false,
         ackStatus: classifyHerdrCommandFailure(prompted),
         completionState: "not_requested",
         completionObserved: false,
         workEvidence: "not_checked",
+        ...(stalledWithText ? { promptPending: true, hint: "prompt may be typed but unsent in the pane; submit or clear the input before using peer-message" } : {}),
         error: `Prompt dispatch failed: ${prompted.stderr || prompted.stdout || "no acknowledgement"}`,
         paneCreated: true,
         agentName,
@@ -866,7 +914,7 @@ async function launchStageInHerdrAttempt(input: {
           : await herdr.readPane!(paneId);
         if (readResult && readResult.ok) {
           const output = `${readResult.stdout}\n${readResult.stderr}`;
-          const cleanOutput = output.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
+          const cleanOutput = output.replace(ANSI_PATTERN, "");
           if (output.includes(promptPrefix) || cleanOutput.includes(promptPrefix)) {
             promptDelivered = true;
             break;
@@ -876,7 +924,7 @@ async function launchStageInHerdrAttempt(input: {
       if (herdr.getAgent) {
         const agentResult = await herdr.getAgent(agentName);
         if (agentResult && agentResult.ok) {
-          const observed = readHerdrObservedState(agentResult);
+          const observed = readHerdrStructuredState(agentResult);
           if (observed !== null && observed !== "idle" && observed !== "unknown") {
             promptDelivered = true;
             break;

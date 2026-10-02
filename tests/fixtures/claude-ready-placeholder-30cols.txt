@@ -1,0 +1,6 @@
+──────────────────────────────
+❯ Try "write a test for
+…"
+──────────────────────────────
+  ⏵⏵ bypass permissions on
+  (shift+tab to cycle)

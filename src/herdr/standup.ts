@@ -146,30 +146,29 @@ export function parseStandupFile(
   let max = 12;
 
   const trimmedStart = normalized.trimStart();
-  if (trimmedStart.startsWith("---")) {
-    const match = trimmedStart.match(/^---\n(?:([\s\S]*?)\n)?---[ \t]*(?:\n|$)([\s\S]*)$/);
-    if (match) {
-      const fm = match[1] ?? "";
-      content = match[2];
-      const lines = fm ? fm.split("\n") : [];
-      for (const line of lines) {
-        const colonIdx = line.indexOf(":");
-        if (colonIdx > 0) {
-          const key = line.slice(0, colonIdx).trim().toLowerCase();
-          const val = line.slice(colonIdx + 1).trim();
-          if (key === "states") {
-            const parsedStates = val
-              .split(",")
-              .map((s) => s.trim().toLowerCase())
-              .filter(Boolean);
-            if (parsedStates.length > 0) {
-              states = parsedStates;
-            }
-          } else if (key === "max") {
-            const parsedMax = Number.parseInt(val, 10);
-            if (!Number.isNaN(parsedMax) && parsedMax > 0) {
-              max = Math.min(parsedMax, 100);
-            }
+  if (/^---[ \t]*(?:\n|$)/.test(trimmedStart)) {
+    const match = trimmedStart.match(/^---[ \t]*\n(?:([\s\S]*?)\n)?---[ \t]*(?:\n|$)([\s\S]*)$/);
+    if (!match) throw new Error("Standup front matter is not closed with ---");
+    const fm = match[1] ?? "";
+    content = match[2];
+    const lines = fm ? fm.split("\n") : [];
+    for (const line of lines) {
+      const colonIdx = line.indexOf(":");
+      if (colonIdx > 0) {
+        const key = line.slice(0, colonIdx).trim().toLowerCase();
+        const val = line.slice(colonIdx + 1).trim();
+        if (key === "states") {
+          const parsedStates = val
+            .split(",")
+            .map((s) => s.trim().toLowerCase())
+            .filter(Boolean);
+          if (parsedStates.length > 0) {
+            states = parsedStates;
+          }
+        } else if (key === "max") {
+          const parsedMax = Number.parseInt(val, 10);
+          if (!Number.isNaN(parsedMax) && parsedMax > 0) {
+            max = Math.min(parsedMax, 100);
           }
         }
       }
@@ -529,6 +528,7 @@ export async function executeStandupCommand(
     if (options.json) {
       log(JSON.stringify(planResult, null, 2));
     } else {
+      if (targets.length === 0 && skipped.length === 0) log("no eligible targets");
       for (const t of targets) {
         log(`${t.pane} ${t.agent} (${t.project}): planned`);
       }
@@ -583,6 +583,7 @@ export async function executeStandupCommand(
   if (options.json) {
     log(JSON.stringify(resultObj, null, 2));
   } else {
+    if (results.length === 0 && skipped.length === 0) log("no eligible targets");
     for (const r of results) {
       if (r.sent) {
         log(`${r.pane} ${r.agent} (${r.project}): sent`);
