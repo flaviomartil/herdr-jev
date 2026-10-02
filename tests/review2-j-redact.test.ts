@@ -45,10 +45,10 @@ test("round 2 finding 1: ordinary adjacent lines are still shown", () => {
   expect(lastMeaningfulLine("see the token\nreference guide")).toBe("reference guide");
 });
 
-test("round 2 finding 9: a line holding its own secret is shown redacted instead of dropped", () => {
-  expect(lastMeaningfulLine(`done building\nAPI_KEY=${VALUE}`)).toBe("API_KEY=[REDACTED]");
+test("round 2 finding 9: a line holding its own secret is dropped instead of shown", () => {
+  expect(lastMeaningfulLine(`done building\nAPI_KEY=${VALUE}`)).toBe("done building");
   expect(lastMeaningfulLine(`export TOKEN=${VALUE}\nstatus ok`)).not.toContain(VALUE);
-  expect(lastMeaningfulLine(`status ok\nexport TOKEN=${VALUE}`)).toBe("export TOKEN=[REDACTED]");
+  expect(lastMeaningfulLine(`status ok\nexport TOKEN=${VALUE}`)).toBe("status ok");
 });
 
 test("round 2 finding 2: a scheme word after a secret key does not shield the token", () => {
@@ -65,7 +65,7 @@ test("round 2 finding 3: an unquoted secret keeps going across semicolons, amper
   expect(out).toBe("DB_PASSWORD=[REDACTED]");
   expect(redactSecrets(`password: ${password}`)).toBe("password: [REDACTED]");
   expect(redactSecrets(`--password ${password} --verbose`)).toBe("--password [REDACTED] --verbose");
-  expect(lastMeaningfulLine(`DB_PASSWORD=${password}`)).toBe("DB_PASSWORD=[REDACTED]");
+  expect(lastMeaningfulLine(`DB_PASSWORD=${password}`)).toBe("");
 });
 
 test("round 2 finding 3: delimiters between separate pairs, commands and JSON fields are kept", () => {

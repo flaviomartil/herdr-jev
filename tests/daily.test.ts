@@ -273,7 +273,8 @@ test("buildDailyReport resolves repository from main worktree git-common-dir, re
   const betaGroup = report.projects.find((p) => p.project === "proj-beta");
   expect(betaGroup).toBeDefined();
   const rev = betaGroup?.agents.find((a) => a.handle === "jev-rev-1");
-  expect(rev?.lastLine).toBe("Waiting for user input: password=[REDACTED]");
+  expect(rev?.lastLine ?? "").not.toContain("hunter2");
+  expect(rev?.lastLine ?? null).toBeNull();
 });
 
 test("formatDailyMarkdown formats in Brazilian Portuguese, prints repo facts under heading, omits empty fields, collapses inactive agents, and asserts no emoji and no en/em dashes", async () => {
@@ -895,7 +896,7 @@ test("Finding 7: lastMeaningfulLine redacts before truncating and masks key: val
   const fullLine = "• " + prefix + token;
   const meaningful = lastMeaningfulLine(fullLine);
   expect(meaningful).not.toContain("4a8f9b2c3d4e5f6a7b8c9");
-  expect(meaningful).toContain("[REDACTED]");
+  expect(meaningful).toBe("");
 
   expect(redactSecrets("password: mysecretpassword123")).toBe("password: [REDACTED]");
   expect(redactSecrets('"token": "my-secret-token"')).toBe('"token": "[REDACTED]"');
@@ -929,7 +930,7 @@ test("Finding 17: redactSecrets covers AWS access key ids, user:pass@host URLs, 
   expect(redactSecrets("dGhpcy9pcy9hL3Zlcnkvc2VjcmV0L3Rva2VuMTIzNDU2Nzg5MA==")).toBe("[REDACTED]");
 
   const wrapped = "Running command with token sk-proj-1234567890abcdef1234567890123\n4567890";
-  expect(lastMeaningfulLine(wrapped)).toBe("Running command with token [REDACTED]");
+  expect(lastMeaningfulLine(wrapped)).toBe("");
 });
 
 test("Finding 18: commit subjects in daily report are redacted before sanitization", async () => {
