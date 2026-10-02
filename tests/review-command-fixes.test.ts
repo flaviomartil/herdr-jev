@@ -70,21 +70,22 @@ afterEach(() => {
 });
 
 describe("item 1: environment leak", () => {
-  it("preload removes every HERDR_JEV configuration variable and keeps only the guard and a private state directory", () => {
+  it("preload removes every HERDR_JEV configuration variable and keeps only the guard and private state and config directories", () => {
     const preload = resolve(import.meta.dir, "preload.ts");
     const result = spawnSync(process.execPath, ["--preload", preload, "-e", "console.log(JSON.stringify(Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('HERDR_JEV_') || key === 'AI_HARNESS_ROOT'))))"], {
       encoding: "utf8", env: { PATH: process.env.PATH ?? "", HERDR_JEV_CROSS_HARNESS: "", HERDR_JEV_CODEX_EXHAUSTED: "1", HERDR_JEV_STATE_DIR: "/preset/state", HERDR_JEV_ANTIGRAVITY_REVIEWER: "x", AI_HARNESS_ROOT: "/kept/root" } });
     expect(result.status).toBe(0);
     const seen = JSON.parse(result.stdout);
-    expect(Object.keys(seen).sort()).toEqual(["AI_HARNESS_ROOT", "HERDR_JEV_STATE_DIR", "HERDR_JEV_TEST_GUARD"]);
+    expect(Object.keys(seen).sort()).toEqual(["AI_HARNESS_ROOT", "HERDR_JEV_CONFIG_DIR", "HERDR_JEV_STATE_DIR", "HERDR_JEV_TEST_GUARD"]);
     expect(seen.HERDR_JEV_TEST_GUARD).toBe("1");
     expect(seen.HERDR_JEV_STATE_DIR).not.toBe("/preset/state");
     expect(seen.HERDR_JEV_STATE_DIR.startsWith(tmpdir())).toBe(true);
+    expect(seen.HERDR_JEV_CONFIG_DIR.startsWith(tmpdir())).toBe(true);
     expect(seen.AI_HARNESS_ROOT).toBe("/kept/root");
   });
 
-  it("the running suite carries no HERDR_JEV configuration besides the guard and state directory", () => {
-    const configuration = Object.keys(process.env).filter((key) => key.startsWith("HERDR_JEV_") && !["HERDR_JEV_STATE_DIR", "HERDR_JEV_TEST_GUARD"].includes(key));
+  it("the running suite carries no HERDR_JEV configuration besides the guard and the state and config directories", () => {
+    const configuration = Object.keys(process.env).filter((key) => key.startsWith("HERDR_JEV_") && !["HERDR_JEV_STATE_DIR", "HERDR_JEV_CONFIG_DIR", "HERDR_JEV_TEST_GUARD"].includes(key));
     expect(configuration).toEqual([]);
   });
 

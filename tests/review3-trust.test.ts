@@ -140,7 +140,8 @@ describe("trust acceptance is reported once enter was sent and the dialog is gon
     expect(pane.keys).toEqual(["enter"]);
     expect(result.ok).toBe(false);
     expect(result.trustRequired).toBeUndefined();
-    expect(result.trustConfirmed).toBe(true);
+    expect(result.trustConfirmed).toBeUndefined();
+    expect(result.trustPolicyReason).toBe("trust_dialog_reappeared");
     expect(pane.prompts).toEqual([]);
   });
 });

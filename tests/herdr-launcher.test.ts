@@ -443,7 +443,7 @@ describe("canonical route execution", () => {
     const log = join(root, "calls.jsonl");
     const repo = join(root, "repo");
     mkdirSync(repo);
-    for (const argv of [["init"], ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-m", "fixture"]]) {
+    for (const argv of [["init"], ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--allow-empty", "-m", "fixture"]]) {
       expect(spawnSync("git", argv, { cwd: repo }).status).toBe(0);
     }
     const verify = join(root, "verify.json");
