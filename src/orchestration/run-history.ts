@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import type { HarnessWorkerRun } from "../harness/bridge.js";
+import { resolveStateDir } from "../herdr/state-dir.js";
 
 export const runIdPattern = /^[a-f0-9-]{36}$/;
 export const retryableStageStates = new Set(["failed", "unknown", "blocked"]);
@@ -13,7 +13,7 @@ export type RunHistoryEntry = {
   timestampMs: number;
 };
 
-export function runStateDir(stateDir = process.env.HERDR_JEV_STATE_DIR ?? join(homedir(), ".local/state/herdr-jev")): string {
+export function runStateDir(stateDir = resolveStateDir()): string {
   return stateDir;
 }
 

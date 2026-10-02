@@ -243,14 +243,23 @@ export interface ModelResolution {
   cliModel: string;
   effort: string | null;
   effortArgs: string[];
-  bypassArgs: string[];
+  bypassArgs: string[] | null;
   readonlyArgs: string[];
 }
 
-const probeCache = new Map<string, unknown>();
+const FAILURE_CACHE_MS = 30_000;
+const probeCache = new Map<string, { value: unknown; expires: number | null }>();
 
 export function resetHarnessCaches(): void {
   probeCache.clear();
+}
+
+function memoizeProbe<T>(key: string, failed: (value: T) => boolean, compute: () => T): T {
+  const hit = probeCache.get(key);
+  if (hit && (hit.expires === null || hit.expires > Date.now())) return hit.value as T;
+  const value = compute();
+  probeCache.set(key, { value, expires: failed(value) ? Date.now() + FAILURE_CACHE_MS : null });
+  return value;
 }
 
 function cacheKey(...parts: string[]): string {
@@ -264,31 +273,29 @@ function stringArray(value: unknown): string[] | null {
 export function parseModelResolution(value: any): ModelResolution | null {
   if (!value || typeof value !== "object" || typeof value.cliModel !== "string" || !value.cliModel.trim()) return null;
   const effortArgs = stringArray(value.effortArgs ?? []);
-  const bypassArgs = stringArray(value.bypassArgs ?? []);
+  const bypassArgs = value.bypassArgs === undefined || value.bypassArgs === null ? null : stringArray(value.bypassArgs);
   const readonlyArgs = stringArray(value.readonlyArgs ?? []);
-  if (!effortArgs || !bypassArgs || !readonlyArgs) return null;
+  if (!effortArgs || !readonlyArgs || (bypassArgs === null && value.bypassArgs != null)) return null;
   return { client: String(value.client ?? ""), known: value.known === true, model: typeof value.model === "string" ? value.model : value.cliModel,
     cliModel: value.cliModel.trim(), effort: typeof value.effort === "string" ? value.effort : null, effortArgs, bypassArgs, readonlyArgs };
 }
 
 export function harnessModelResolve(input: { client: string; model: string; effort?: string; role?: HarnessRole }): ModelResolution | null {
   const key = cacheKey("model-resolve", input.client, input.model, input.effort ?? "", input.role ?? "");
-  if (probeCache.has(key)) return probeCache.get(key) as ModelResolution | null;
-  const probe = harnessProbe(["model-resolve", "--client", input.client, "--model", input.model,
-    ...(input.effort ? ["--effort", input.effort] : []), ...(input.role ? ["--role", input.role] : [])]);
-  const resolution = probe.ok ? parseModelResolution(probe.value) : null;
-  probeCache.set(key, resolution);
-  return resolution;
+  return memoizeProbe<ModelResolution | null>(key, (value) => value === null, () => {
+    const probe = harnessProbe(["model-resolve", "--client", input.client, "--model", input.model,
+      ...(input.effort ? ["--effort", input.effort] : []), ...(input.role ? ["--role", input.role] : [])]);
+    return probe.ok ? parseModelResolution(probe.value) : null;
+  });
 }
 
 export function harnessModelCatalog(client?: string): HarnessProbe<any> {
   const key = cacheKey("model-catalog", client ?? "");
-  if (probeCache.has(key)) return probeCache.get(key) as HarnessProbe<any>;
-  const probe = harnessProbe(["model-catalog", ...(client ? ["--client", client] : [])]);
-  const result: HarnessProbe<any> = probe.ok && probe.value && typeof probe.value === "object" && probe.value.clients && typeof probe.value.clients === "object"
-    ? probe : { ok: false, error: probe.ok ? "invalid_model_catalog" : probe.error, unsupported: probe.ok ? true : probe.unsupported };
-  probeCache.set(key, result);
-  return result;
+  return memoizeProbe<HarnessProbe<any>>(key, (value) => !value.ok, () => {
+    const probe = harnessProbe(["model-catalog", ...(client ? ["--client", client] : [])]);
+    return probe.ok && probe.value && typeof probe.value === "object" && probe.value.clients && typeof probe.value.clients === "object"
+      ? probe : { ok: false, error: probe.ok ? "invalid_model_catalog" : probe.error, unsupported: probe.ok ? true : probe.unsupported };
+  });
 }
 
 export interface TrustPolicy {

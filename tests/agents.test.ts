@@ -12,6 +12,7 @@ import {
   readGridWorkers,
   readGridWorkerRecords,
   writeGridWorkers,
+  updateGridWorkers,
   gridStatePath,
   type GridWorkerRecord,
 } from "../src/herdr/launcher.js";
@@ -173,7 +174,7 @@ test("buildAgentsView measures change counts against recorded fork SHA, not movi
   expect(statusCalls).toEqual(["status --porcelain"]);
 });
 
-test("legacy tracking migration converts legacy array format on read and preserves pane ids", async () => {
+test("legacy tracking format is read without rewriting and migrated by the next write, preserving pane ids", async () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-jev-legacy-"));
   try {
     const callerId = "legacy-caller";
@@ -184,13 +185,15 @@ test("legacy tracking migration converts legacy array format on read and preserv
     const paneIds = readGridWorkers(callerId, root);
     expect(paneIds).toEqual(["worker-leg-1", "worker-leg-2"]);
 
+    expect(JSON.parse(readFileSync(legacyPath, "utf8"))).toEqual(["worker-leg-1", "worker-leg-2"]);
+    updateGridWorkers(callerId, (current) => current, root);
     const migratedJson = JSON.parse(readFileSync(legacyPath, "utf8"));
     expect(Array.isArray(migratedJson)).toBe(false);
     expect(migratedJson.callerPaneId).toBe(callerId);
     expect(migratedJson.workerPaneIds).toEqual(["worker-leg-1", "worker-leg-2"]);
     expect(migratedJson.workers).toEqual([
-      { paneId: "worker-leg-1" },
-      { paneId: "worker-leg-2" },
+      { paneId: "worker-leg-1", handle: null, cwd: null, branch: null, forkSha: null },
+      { paneId: "worker-leg-2", handle: null, cwd: null, branch: null, forkSha: null },
     ]);
 
     const records = readGridWorkerRecords(callerId, root);
@@ -229,7 +232,7 @@ test("legacy tracking migration converts legacy array format on read and preserv
   }
 });
 
-test("legacy tracking migration handles object with workerPaneIds missing workers array", () => {
+test("legacy tracking object with workerPaneIds only is read as is and gains workers on the next write", () => {
   const root = mkdtempSync(join(tmpdir(), "herdr-jev-legacy-obj-"));
   try {
     const callerId = "caller-obj-leg";
@@ -240,6 +243,8 @@ test("legacy tracking migration handles object with workerPaneIds missing worker
     const records = readGridWorkerRecords(callerId, root);
     expect(records.map((r) => r.paneId)).toEqual(["w-1", "w-2"]);
 
+    expect(JSON.parse(readFileSync(legacyPath, "utf8")).workers).toBeUndefined();
+    updateGridWorkers(callerId, (current) => current, root);
     const migratedJson = JSON.parse(readFileSync(legacyPath, "utf8"));
     expect(Array.isArray(migratedJson.workers)).toBe(true);
     expect(migratedJson.workers.length).toBe(2);
