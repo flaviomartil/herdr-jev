@@ -115,6 +115,12 @@ if (process.env.FAKE_HANG === command) {
   writeFileSync(join(dir, "grandchild.pid"), String(grandchild.pid));
   await new Promise(() => {});
 }
+if (process.env.FAKE_STUBBORN_CHILD === command) {
+  const stubborn = spawn("sh", ["-c", 'trap "" TERM; while :; do sleep 1; done'], { stdio: "inherit" });
+  writeFileSync(join(dir, "stubborn.pid"), String(stubborn.pid));
+  process.on("SIGTERM", () => process.exit(143));
+  await new Promise(() => {});
+}
 if (mode === "unknown" && !["delegation-plan", "usage-record"].includes(command)) fail("unknown_command");
 if (mode === "legacy" && !legacyAllowed() && !["usage-record"].includes(command)) fail("unknown_command");
 
