@@ -140,14 +140,15 @@ function launch(pane: Scripted) {
     agentName: `trust-peer-${process.pid}-${counter}`, herdr: pane.client, cwd: workdir, clock: clock() });
 }
 
-describe("trustConfirmed means the agent is ready", () => {
-  it("does not report a confirmation for a worker that quit after enter", async () => {
+describe("trustConfirmed reports the acceptance, readiness is separate", () => {
+  it("reports the acceptance separately from a worker that never became ready after enter", async () => {
     install();
     const pane = scripted({ frames: ({ enters }) => enters > 0 ? "Exiting...\n" : DIALOG_YES });
     const result = await launch(pane);
     expect(pane.keys).toEqual(["enter"]);
     expect(result.ok).toBe(false);
-    expect(result.trustConfirmed).toBeUndefined();
+    expect(result.trustConfirmed).toBe(true);
+    expect(result.trustPolicyReason).toBe("under_trust_root");
     expect(result.trustRequired).toBeUndefined();
     expect(result.error).toBe("Agent prompt readiness timed out");
     expect(pane.prompts).toEqual([]);
