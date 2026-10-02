@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 function startupCwd(): string {
   try {
@@ -76,8 +76,18 @@ function copyEntry(from: string, to: string): "copied" | "exists" {
       if (code === "EEXIST") return "exists";
       if (code !== "EPERM" && code !== "EXDEV") throw error;
     }
-    if (existsSync(to)) return "exists";
-    renameSync(staging, to);
+    try {
+      closeSync(openSync(to, "wx", 0o600));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return "exists";
+      throw error;
+    }
+    try {
+      renameSync(staging, to);
+    } catch (error) {
+      rmSync(to, { force: true });
+      throw error;
+    }
     return "copied";
   } finally {
     rmSync(staging, { force: true });
@@ -89,6 +99,21 @@ function sameEntry(from: string, to: string): boolean {
   const b = statSync(to);
   if (a.dev === b.dev && a.ino === b.ino) return true;
   return a.isFile() && b.isFile() && a.size === b.size && readFileSync(from).equals(readFileSync(to));
+}
+
+function sameRoot(a: string, b: string): boolean {
+  try {
+    if (realpathSync(a) === realpathSync(b)) return true;
+    const first = statSync(a);
+    const second = statSync(b);
+    return first.dev === second.dev && first.ino === second.ino;
+  } catch {
+    return false;
+  }
+}
+
+function sameDirectoryEntry(from: string, to: string): boolean {
+  return join(realpathSync(dirname(from)), basename(from)) === join(realpathSync(dirname(to)), basename(to));
 }
 
 function moveEntries(source: string, target: string, errors: string[], prefix = ""): void {
@@ -126,6 +151,7 @@ function moveEntries(source: string, target: string, errors: string[], prefix = 
         errors.push(`${label}: conflict`);
         continue;
       }
+      if (sameDirectoryEntry(from, to)) continue;
       unlinkSync(from);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${label}: ${errorCode(error)}`);
@@ -140,6 +166,7 @@ function moveEntries(source: string, target: string, errors: string[], prefix = 
 export function migrateLegacyState(legacy: string, configured: string, hooks: { beforeMove?: () => void } = {}): string[] {
   const errors: string[] = [];
   if (legacy === configured || !existsSync(legacy)) return errors;
+  if (sameRoot(legacy, configured)) return errors;
   try {
     mkdirSync(dirname(configured), { recursive: true, mode: 0o700 });
     if (!existsSync(configured)) {
