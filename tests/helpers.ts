@@ -17,6 +17,18 @@ export function createTestStateDir(): { stateDir: string; cleanup: () => void } 
   };
 }
 
+const tempHomes: string[] = [];
+
+export function createTempHome(): string {
+  const home = mkdtempSync(join(tmpdir(), "herdr-jev-test-home-"));
+  tempHomes.push(home);
+  return home;
+}
+
+process.on("exit", () => {
+  for (const home of tempHomes) rmSync(home, { recursive: true, force: true });
+});
+
 export function assertNoRealHomeStateLeaks(): void {
   const realHome = homedir();
   const realGridDir = join(realHome, ".local/state/herdr-jev/grid");
@@ -29,7 +41,7 @@ export function assertNoRealHomeStateLeaks(): void {
 import { writeFileSync, chmodSync } from "node:fs";
 export function createFakeHerdr(dir: string, options?: { defaultAgentStatus?: string; logFile?: string }): string {
   const fakeHerdr = join(dir, "herdr");
-  const script = `#!/usr/bin/env node
+  const script = `#!${process.execPath}
 const args = process.argv.slice(2);
 ${options?.logFile ? `require("node:fs").appendFileSync(${JSON.stringify(options.logFile)}, JSON.stringify(args) + "\\n");` : ""}
 let afterDashDash = false;

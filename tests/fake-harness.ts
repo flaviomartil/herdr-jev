@@ -181,6 +181,10 @@ else if (command === "model-catalog") {
     out({ key: "k", revision: 1, status });
     process.exit(status === "changes_required" ? 1 : 0);
   } else {
+    const logEvent = (event) => appendFileSync(join(dir, "judge-events.jsonl"), JSON.stringify({ event, scope: options["--scope"] || null, at: Date.now() }) + "\\n");
+    logEvent("start");
+    while (process.env.FAKE_JUDGE_GATE && !existsSync(process.env.FAKE_JUDGE_GATE)) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    if (process.env.FAKE_JUDGE_SLEEP_MS) await new Promise((resolveWait) => setTimeout(resolveWait, Number(process.env.FAKE_JUDGE_SLEEP_MS)));
     if (options["--scope"] !== undefined && mode === "legacy") fail("unknown_option:--scope");
     if (options["--timeout-ms"] !== undefined && mode === "legacy") fail("unknown_option:--timeout-ms");
     const name = options["--scope"] || "default";
@@ -196,6 +200,7 @@ else if (command === "model-catalog") {
     if (flaky && attempts < Number(flaky.split(":")[1] || 1)) { verdict = "pending"; reason = "timeout"; }
     writeFileSync(join(reviewDir, "verdict-" + name + ".json"), JSON.stringify({ name, verdict, reason, findings: "findings for " + name + ": " + verdict + "\\nREVIEW_GATE_VERDICT: " + verdict }));
     const status = reviewStatus(reviewDir).status;
+    logEvent("end");
     out({ key: "k", revision: 1, status });
     process.exit(status === "changes_required" ? 1 : 0);
   }
@@ -256,6 +261,11 @@ export function createFakeHarness(mode: FakeHarnessMode = "contract", extraEnv: 
       rmSync(dir, { recursive: true, force: true });
     },
   };
+}
+
+export function fakeJudgeEvents(harness: FakeHarness): Array<{ event: "start" | "end"; scope: string | null; at: number }> {
+  const path = join(harness.dir, "judge-events.jsonl");
+  return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 }
 
 export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[]; env: Record<string, string | null>; mode: number }> {

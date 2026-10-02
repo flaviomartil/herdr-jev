@@ -1,13 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import { join } from "node:path";
 import { reviewerCommand } from "../orchestration/pipeline.js";
 import { resolveStageSpec } from "../pipelines/matrix.js";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import type { StageSpec } from "../types/index.js";
 import { withoutKeys } from "../config/env-file.js";
-import { harnessProbeAsync, resolveHarnessDelegation, type HarnessProbe } from "./bridge.js";
+import { harnessProbeAsync, resolveHarnessDelegation, terminateHarnessProcesses, type HarnessProbe } from "./bridge.js";
 
 export interface ReviewScope {
   name: string;
@@ -28,17 +29,26 @@ const MAX_PROMPT_FILES = 200;
 const MAX_RANGES_PER_FILE = 20;
 const MAX_TEXT_CHARS = 4000;
 const MAX_TOTAL_SCOPES = 32;
+export const MAX_CONCURRENT_JUDGES = 4;
 const SCOPE_OPTION_UNSUPPORTED = /^unknown_option:--scopes?\b/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-const SENSITIVE_UNTRACKED = [
+const SENSITIVE_FILES = [
   /(^|\/)\.env(\.(?!example$|sample$|template$|dist$)[^/]*)?$/,
   /\.(pem|key|p12|pfx|jks|keystore)$/i,
   /(^|\/)id_(rsa|dsa|ecdsa|ed25519)$/,
-  /(^|\/)(credentials|secrets?)(\.[A-Za-z]+)?$/i,
+  /(^|\/)(credentials|secrets?)(\.(json|ya?ml|toml|txt|ini|conf|cfg|properties|env|xml))?$/i,
 ];
 export const DERIVED_SCOPE_LIMIT = 4;
 export const DEFAULT_JUDGE_TIMEOUT_MS = 600_000;
 export const MAX_JUDGE_TIMEOUT_MS = 1_800_000;
+
+const REPOSITORY_ROOT = ".";
+
+function normalizeScopePath(path: string): string {
+  if (!path) return "";
+  const segments = path.split("/").filter((segment) => segment && segment !== ".");
+  return segments.length ? segments.join("/") : REPOSITORY_ROOT;
+}
 
 export function parseScopes(spec: string): DeclaredScope[] {
   const declared: DeclaredScope[] = [];
@@ -48,11 +58,12 @@ export function parseScopes(spec: string): DeclaredScope[] {
     const name = part.slice(0, separator).trim();
     if (!SCOPE_NAME.test(name)) throw new Error(`invalid_scopes: invalid scope name "${name}"`);
     if (declared.some((scope) => scope.name === name)) throw new Error(`invalid_scopes: duplicate scope "${name}"`);
-    const paths = part.slice(separator + 1).split(",").map((item) => item.trim().replace(/^\.\//, "").replace(/\/+$/, "")).filter(Boolean);
-    if (paths.length === 0) throw new Error(`invalid_scopes: scope "${name}" has no paths`);
-    for (const path of paths) {
+    const rawPaths = part.slice(separator + 1).split(",").map((item) => item.trim().replace(/\/+$/, "")).filter(Boolean);
+    if (rawPaths.length === 0) throw new Error(`invalid_scopes: scope "${name}" has no paths`);
+    for (const path of rawPaths) {
       if (path.startsWith("/") || path.split("/").includes("..")) throw new Error(`invalid_scopes: path "${path}" must be relative to the repository`);
     }
+    const paths = rawPaths.map(normalizeScopePath);
     declared.push({ name, paths });
   }
   if (declared.length === 0) throw new Error("invalid_scopes: no scopes declared");
@@ -65,8 +76,23 @@ function git(cwd: string, args: string[]): { ok: boolean; stdout: string } {
   return { ok: result.status === 0, stdout: result.stdout ?? "" };
 }
 
+function gitStrict(cwd: string, args: string[]): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (result.status === 0 && !result.error) return result.stdout ?? "";
+  const detail = result.error ? (result.error as NodeJS.ErrnoException).code ?? result.error.message : (result.stderr ?? "").trim().split(/\r?\n/)[0] ?? "";
+  const subcommand = args.find((arg) => !arg.startsWith("-") && arg !== "core.quotePath=false") ?? args[0];
+  throw new Error(`git_failed: git ${subcommand} ${result.status === null ? "did not finish" : `exited ${result.status}`}${detail ? `: ${printable(detail).slice(0, 200)}` : ""}`);
+}
+
 function nulList(output: string): string[] {
   return output.split("\0").filter(Boolean);
+}
+
+function repositoryRoot(cwd: string): string {
+  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
+  const root = top.stdout.trim();
+  if (!top.ok || !root) throw new Error(`not_a_git_repository: ${printable(cwd).slice(0, 200)}`);
+  return root;
 }
 
 export function resolveDefaultBranch(cwd: string): string | null {
@@ -116,40 +142,42 @@ export interface ChangedFiles {
 }
 
 export function listChangedFiles(cwd: string, baseRef?: string): ChangedFiles {
-  const top = git(cwd, ["rev-parse", "--show-toplevel"]);
-  const root = top.ok && top.stdout.trim() ? top.stdout.trim() : cwd;
+  const root = repositoryRoot(cwd);
   let label: string | null;
   let rangeBase: string;
   let mergeBaseSha: string | null;
   let tracked: string[];
+  const working = nulList(gitStrict(root, ["diff", "--name-only", "-z", "HEAD", "--"]));
   if (baseRef !== undefined) {
     const ref = baseRef.trim();
     if (!ref || ref.startsWith("-") || !git(root, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]).ok) throw new Error(`invalid_base: "${baseRef}" is not a commit in this repository`);
-    const mergeBase = git(root, ["merge-base", ref, "HEAD"]);
-    mergeBaseSha = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : null;
-    rangeBase = mergeBaseSha ?? ref;
-    const committed = git(root, ["diff", "--name-only", "-z", `${ref}...HEAD`, "--"]);
-    const working = git(root, ["diff", "--name-only", "-z", "HEAD", "--"]);
-    tracked = [...(committed.ok ? nulList(committed.stdout) : []), ...(working.ok ? nulList(working.stdout) : [])];
+    mergeBaseSha = mergeBaseOf(root, ref);
+    rangeBase = mergeBaseSha;
+    tracked = [...nulList(gitStrict(root, ["diff", "--name-only", "-z", `${mergeBaseSha}...HEAD`, "--"])), ...working];
     label = ref;
   } else {
     const defaultBranch = resolveDefaultBranch(root);
-    const mergeBase = defaultBranch ? git(root, ["merge-base", defaultBranch, "HEAD"]) : { ok: false, stdout: "" };
-    mergeBaseSha = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : null;
+    mergeBaseSha = defaultBranch ? mergeBaseOf(root, defaultBranch) : null;
     rangeBase = mergeBaseSha ?? "HEAD";
-    const diff = git(root, ["diff", "--name-only", "-z", rangeBase, "--"]);
-    tracked = diff.ok ? nulList(diff.stdout) : [];
+    tracked = nulList(gitStrict(root, ["diff", "--name-only", "-z", rangeBase, "--"]));
     label = defaultBranch;
   }
-  const untracked = git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--full-name", "--", ":/"]);
-  const untrackedFiles = untracked.ok ? nulList(untracked.stdout) : [];
+  const untrackedFiles = nulList(gitStrict(root, ["ls-files", "-z", "--others", "--exclude-standard", "--full-name", "--", ":/"]));
   const files = [...new Set([...tracked, ...untrackedFiles])].sort();
-  const hunks = git(root, ["-c", "core.quotePath=false", "diff", "-U0", "--no-color", "--no-ext-diff", rangeBase, "--"]);
-  const ranges = hunks.ok ? parseHunkRanges(hunks.stdout) : {};
+  const hunks = gitStrict(root, ["-c", "core.quotePath=false", "diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", rangeBase, "--"]);
+  const ranges = parseHunkRanges(hunks);
   for (const file of untrackedFiles) ranges[file] = ["new file"];
   for (const file of Object.keys(ranges)) if (!files.includes(file)) delete ranges[file];
-  const sensitive = untrackedFiles.filter((file) => SENSITIVE_UNTRACKED.some((pattern) => pattern.test(file))).sort();
+  const uncommitted = [...new Set([...working, ...untrackedFiles])].filter((file) => existsSync(join(root, file)));
+  const sensitive = uncommitted.filter((file) => SENSITIVE_FILES.some((pattern) => pattern.test(file))).sort();
   return { base: label, mergeBase: mergeBaseSha, root, files, ranges, sensitive };
+}
+
+function mergeBaseOf(root: string, ref: string): string {
+  const result = spawnSync("git", ["merge-base", ref, "HEAD"], { cwd: root, encoding: "utf8" });
+  const sha = (result.stdout ?? "").trim();
+  if (result.status !== 0 || result.error || !sha) throw new Error(`no_merge_base: "${printable(ref).slice(0, 100)}" and HEAD share no history; fetch more history or choose another --base`);
+  return sha;
 }
 
 function uniqueName(preferred: string, taken: ReadonlySet<string>): string {
@@ -182,7 +210,11 @@ export function deriveScopes(files: readonly string[], limit = DERIVED_SCOPE_LIM
 }
 
 function insideScope(file: string, path: string): boolean {
-  return file === path || file.startsWith(`${path}/`);
+  return path === REPOSITORY_ROOT || file === path || file.startsWith(`${path}/`);
+}
+
+export function missingScopePaths(declared: readonly DeclaredScope[], changed: readonly string[], exists: (path: string) => boolean): string[] {
+  return declared.flatMap((scope) => scope.paths.filter((path) => path !== REPOSITORY_ROOT && !changed.some((file) => insideScope(file, path)) && !exists(path)));
 }
 
 export function assignScopes(declared: readonly DeclaredScope[], changed: readonly string[]): ReviewScope[] {
@@ -268,6 +300,8 @@ export function buildJudgePrompt(scope: ReviewScope, base: string | null, ranges
   return lines.join("\n");
 }
 
+const SAFE_SCRIPT_WORD = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
 export function detectVerifyCommand(cwd: string): string[] | null {
   try {
     const manifest = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8"));
@@ -277,7 +311,8 @@ export function detectVerifyCommand(cwd: string): string[] | null {
     if (has("pnpm-lock.yaml")) return ["pnpm", "test"];
     if (has("yarn.lock")) return ["yarn", "test"];
     if (has("package-lock.json")) return ["npm", "test"];
-    if (/^bun test(\s|$)/.test(script.trim())) return ["bun", "test"];
+    const words = script.trim().split(/\s+/);
+    if (words[0] === "bun" && words[1] === "test" && words.every((word) => SAFE_SCRIPT_WORD.test(word))) return words;
     return has("bun.lock") || has("bun.lockb") ? ["bun", "run", "test"] : ["npm", "test"];
   } catch {
   }
@@ -357,17 +392,22 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(session)) throw new Error("invalid_session");
   const changed = listChangedFiles(options.cwd, options.base);
   const { base, files, ranges } = changed;
+  const cwd = changed.root;
   const declared = options.scopes ? parseScopes(options.scopes) : null;
-  if (changed.sensitive.length) throw new Error(`sensitive_untracked_files: ${changed.sensitive.map((file) => JSON.stringify(file)).join(", ")}; ignore or remove them before the review`);
+  if (changed.sensitive.length) throw new Error(`sensitive_uncommitted_files: ${changed.sensitive.map((file) => JSON.stringify(file)).join(", ")}; ignore, commit or remove them before the review`);
+  if (declared) {
+    const missing = missingScopePaths(declared, files, (path) => existsSync(join(cwd, path)));
+    if (missing.length) throw new Error(`invalid_scopes: ${missing.map((path) => JSON.stringify(path)).join(", ")} not found in the repository`);
+  }
   let scopes = splitOversizedScopes(declared ? assignScopes(declared, files) : deriveScopes(files));
   const env = options.excludeEnv?.length ? withoutKeys(process.env, options.excludeEnv) : undefined;
-  const report: ReviewReport = { session, client: options.client, cwd: options.cwd, base, scopes: [], judges: [], status: null };
+  const report: ReviewReport = { session, client: options.client, cwd, base, scopes: [], judges: [], status: null };
   if (scopes.length === 0) return { ...report, error: "no_changed_files" };
   const judgedFiles = new Set(scopes.flatMap((scope) => scope.files));
   const unjudged = files.filter((file) => !judgedFiles.has(file));
   if (unjudged.length) return { ...report, scopes: scopes.map((scope) => ({ name: scope.name, fileCount: scope.files.length })), error: `unjudged_files: ${unjudged.length}` };
 
-  const verifyArgv = options.verifyCommandJson ? readVerifyCommand(options.verifyCommandJson) : detectVerifyCommand(options.cwd);
+  const verifyArgv = options.verifyCommandJson ? readVerifyCommand(options.verifyCommandJson) : detectVerifyCommand(cwd);
   if (!verifyArgv) return { ...report, scopes: scopes.map((scope) => ({ name: scope.name, fileCount: scope.files.length })), error: "verify_command_required" };
   const reviewer = resolveReviewerStage(options.client, { model: options.model, availableModels: options.availableModels });
   const reviewerClient = reviewer.stage.client ?? options.client;
@@ -376,14 +416,53 @@ export async function runReview(options: ReviewOptions): Promise<ReviewReport> {
   const commands = scopes.map((scope) => reviewerCommand(reviewerClient, reviewer.stage, buildJudgePrompt(scope, reference, ranges, deleted)));
   report.reviewer = { source: reviewer.source, client: reviewerClient, model: launchedModel(commands[0]!, reviewer.stage.cliModel ?? reviewer.stage.model), effort: reviewer.stage.effort };
 
-  const dir = join(resolveStateDir(), "review", session);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const parent = join(resolveStateDir(), "review");
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  chmodSync(parent, 0o700);
+  const dir = mkdtempSync(join(parent, `${session}-`));
   chmodSync(dir, 0o700);
+  const release = guardShutdown(dir);
   try {
-    return await execute({ options, report, scopes, commands, verifyArgv, dir, env, timeoutMs, reviewer, reviewerClient, reference, ranges, deleted });
+    return await execute({ options: { ...options, cwd }, report, scopes, commands, verifyArgv, dir, env, timeoutMs, reviewer, reviewerClient, reference, ranges, deleted });
   } finally {
+    release();
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+const SHUTDOWN_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
+function guardShutdown(dir: string): () => void {
+  const cleanup = () => {
+    terminateHarnessProcesses();
+    try { rmSync(dir, { recursive: true, force: true }); } catch {}
+  };
+  const handlers = SHUTDOWN_SIGNALS.map((signal) => {
+    const handler = () => {
+      cleanup();
+      process.exit(128 + (osConstants.signals[signal] ?? 0));
+    };
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  process.on("exit", cleanup);
+  return () => {
+    for (const [signal, handler] of handlers) process.off(signal, handler);
+    process.off("exit", cleanup);
+  };
+}
+
+async function mapLimit<T, R>(items: readonly T[], limit: number, work: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const lane = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]!, index);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane));
+  return results;
 }
 
 interface Execution {
@@ -437,14 +516,14 @@ async function execute(run: Execution): Promise<ReviewReport> {
   let findings: HarnessProbe<{ status?: string; scopes?: Array<{ name: string; verdict: string; reason?: string }> }> | undefined;
   if (verify.value?.status === "pending_review") {
     const judgeCommands = scoped ? run.commands : [reviewerCommand(reviewerClient, reviewer.stage, buildJudgePrompt(scopes[0]!, reference, ranges, deleted))];
-    report.judges = await Promise.all(scopes.map((scope, index) => judgeScope(scope, judgeCommands[index]!)));
+    report.judges = await mapLimit(scopes, MAX_CONCURRENT_JUDGES, (scope, index) => judgeScope(scope, judgeCommands[index]!));
     findings = await fetchFindings();
     const timedOut = scoped && findings.ok
       ? (findings.value?.scopes ?? []).filter((item) => item.verdict === "pending" && item.reason === "timeout").map((item) => item.name) : [];
     const retry = scopes.filter((scope) => timedOut.includes(scope.name));
     if (retry.length) {
       report.retried = retry.map((scope) => scope.name);
-      const again = await Promise.all(retry.map((scope) => judgeScope(scope, judgeCommands[scopes.indexOf(scope)]!)));
+      const again = await mapLimit(retry, MAX_CONCURRENT_JUDGES, (scope) => judgeScope(scope, judgeCommands[scopes.indexOf(scope)]!));
       report.judges = report.judges.map((judge) => again.find((item) => item.scope === judge.scope) ?? judge);
       findings = await fetchFindings();
     }
@@ -489,24 +568,24 @@ export function formatReviewReport(report: ReviewReport): string {
   if (report.reviewer) lines.push(`Reviewer ${report.reviewer.client}/${report.reviewer.model} (${report.reviewer.effort}, ${report.reviewer.source})`);
   if (report.degraded) lines.push("Harness without scope support: reviewed as a single scope");
   for (const scope of report.scopes) lines.push(`Scope ${scope.name}: ${scope.fileCount} files`);
-  if (report.verify) lines.push(`Verify: ${report.verify.status ?? report.verify.error ?? "unknown"}`);
+  if (report.verify) lines.push(`Verify: ${printable(report.verify.status ?? report.verify.error ?? "unknown")}`);
   const stored = report.findings as StoredFindings | undefined;
   if (report.verify?.status && report.verify.status !== "pending_review") {
     const verification = stored?.verification;
     if (verification && (verification.output || verification.status)) {
-      lines.push(`Verification ${verification.status ?? report.verify.status}:`);
+      lines.push(`Verification ${printable(verification.status ?? report.verify.status)}:`);
       if (verification.output) lines.push(cap(verification.output));
-    } else {
+    } else if (report.verify.status === "changes_required") {
       const rerun = report.verify.command?.length ? ` Rerun it by hand in ${report.cwd}: ${report.verify.command.map(shellWord).join(" ")}` : "";
       lines.push(`The check command failed and the Harness returned no output.${rerun}`);
     }
   }
   if (report.retried?.length) lines.push(`Retried after timeout: ${report.retried.join(", ")}`);
-  for (const judge of report.judges) lines.push(`Judge ${judge.scope}: ${judge.status ?? judge.error ?? "unknown"}`);
+  for (const judge of report.judges) lines.push(`Judge ${judge.scope}: ${printable(judge.status ?? judge.error ?? "unknown")}`);
   for (const scope of stored?.scopes ?? []) {
-    lines.push(`Verdict ${scope.name}: ${scope.verdict}${scope.reason ? ` (${scope.reason})` : ""}`);
+    lines.push(`Verdict ${printable(scope.name)}: ${printable(scope.verdict)}${scope.reason ? ` (${printable(scope.reason)})` : ""}`);
     if (scope.findings) lines.push(cap(scope.findings));
   }
-  lines.push(`Status: ${report.status ?? "unavailable"}${report.error ? ` (${report.error})` : ""}`);
+  lines.push(`Status: ${printable(report.status ?? "unavailable")}${report.error ? ` (${printable(report.error)})` : ""}`);
   return lines.join("\n");
 }

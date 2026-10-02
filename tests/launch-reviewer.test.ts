@@ -318,8 +318,11 @@ describe("a failed model resolution is not pinned for the whole process", () => 
     setSystemTime(new Date(Date.now() + 31_000));
     expect(harnessModelResolve(input)?.known).toBe(true);
     expect(harness!.callsFor("model-resolve")).toHaveLength(2);
-    setSystemTime(new Date(Date.now() + 3_600_000));
+    setSystemTime(new Date(Date.now() + 60_000));
     expect(harnessModelResolve(input)?.known).toBe(true);
     expect(harness!.callsFor("model-resolve")).toHaveLength(2);
+    setSystemTime(new Date(Date.now() + 6 * 60_000));
+    expect(harnessModelResolve(input)?.known).toBe(true);
+    expect(harness!.callsFor("model-resolve")).toHaveLength(3);
   });
 });

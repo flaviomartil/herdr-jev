@@ -33,7 +33,7 @@ export function envFileKeys(): string[] {
 }
 
 export function reviewExcludedEnv(keys: readonly string[]): string[] {
-  return keys.filter((key) => key !== "AI_HARNESS_ROOT");
+  return keys.filter((key) => key.startsWith("HERDR_JEV_"));
 }
 
 export function withoutKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): NodeJS.ProcessEnv {
