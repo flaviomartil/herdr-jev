@@ -159,7 +159,7 @@ test("finding 1: argv builder propagates blocked states and dry run", () => {
   const match = child.stdout.match(/\{.*\}/);
   const out = JSON.parse(match ? match[0] : child.stdout.trim());
   expect(out.dryRun).toBe(true);
-  expect(out.wouldSend).toContain("escalation");
+  expect(out.wouldSend).toContain("escalation (unverified)");
 });
 
 test("finding 2: extract buildNotifyArgs and use dynamic import", () => { expect(true).toBe(true); });
