@@ -159,3 +159,23 @@ test("review 5 property: 40 keyword, operator and value combinations never leak 
     expect(shown === "" || shown === CLEAN).toBe(true);
   }
 });
+
+test("review 5 non-blocking: a secret wrapped over three narrow rows with a letters only tail is dropped", () => {
+  const rows = ["abcdefghij0123456789", "klmnopqr", "stuvwxyz"];
+  const out = lastMeaningfulLine(rows.join("\n"));
+  expect(out).toBe("");
+  for (const row of rows) expect(out).not.toContain(row.slice(0, 4));
+  expect(lastMeaningfulLine(`${CLEAN}\n${rows.join("\n")}`)).toBe(CLEAN);
+  expect(lastMeaningfulLine(`${CLEAN}\n│ ${rows[0]} │\n│ ${rows[1]} │\n│ ${rows[2]} │`)).toBe(CLEAN);
+});
+
+test("review 5 non-blocking: a secret wrapped over four narrow rows leaks no row", () => {
+  const rows = ["Zq81mXk3Vb", "pLw92Hs0Tn", "qrstuvwx", "yzabcdef"];
+  const out = lastMeaningfulLine(`${CLEAN}\n${rows.join("\n")}`);
+  expect(out).toBe(CLEAN);
+});
+
+test("review 5 non-blocking: short unrelated token rows are still shown", () => {
+  expect(lastMeaningfulLine("src\nlib\ntests")).toBe("tests");
+  expect(lastMeaningfulLine(`${CLEAN}\nnode_modules\nsrc\npackage`)).toBe("package");
+});

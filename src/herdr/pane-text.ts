@@ -125,6 +125,46 @@ function leaksIntoNext(current: string, following: string, sep: string, redact: 
   return joined.slice(redacted.length).trimStart().startsWith("[REDACTED]");
 }
 
+function wrapRun(lines: string[], index: number, redact: Redactor): { run: string[]; at: number } | null {
+  const plain = (chunk: string) => !/\s/.test(chunk) && redact(chunk) === chunk && !SENSITIVE_LINE.test(chunk);
+  const current = unboxLine(lines[index]);
+  if (!current || !plain(current)) return null;
+  const before: string[] = [];
+  let size = current.length;
+  for (let i = index - 1; i >= 0 && before.length < WRAP_CONTEXT_LINES; i--) {
+    const candidate = unboxLine(lines[i]);
+    if (!candidate) continue;
+    if (!plain(candidate)) break;
+    size += candidate.length;
+    if (size > WRAP_CONTEXT_CHARS) break;
+    before.unshift(candidate);
+  }
+  const after: string[] = [];
+  for (let i = index + 1; i < lines.length && after.length < WRAP_CONTEXT_LINES; i++) {
+    const candidate = unboxLine(lines[i]);
+    if (!candidate) continue;
+    if (!plain(candidate)) break;
+    size += candidate.length;
+    if (size > WRAP_CONTEXT_CHARS) break;
+    after.push(candidate);
+  }
+  return { run: [...before, current, ...after], at: before.length };
+}
+
+function leaksAcrossRun(lines: string[], index: number, redact: Redactor): boolean {
+  const found = wrapRun(lines, index, redact);
+  if (!found || found.run.length < 3) return false;
+  const { run, at } = found;
+  for (let from = 0; from <= at; from++) {
+    for (let to = Math.max(at, from + 2); to < run.length; to++) {
+      const parts = run.slice(from, to + 1);
+      const joined = parts.join("");
+      if (redact(joined) !== parts.map(redact).join("")) return true;
+    }
+  }
+  return false;
+}
+
 export function lastMeaningfulLine(text: string): string {
   if (!text) return "";
   const cleaned = text.replace(ANSI_PATTERN, "");
@@ -158,6 +198,7 @@ export function lastMeaningfulLine(text: string): string {
       if (dropped) break;
     }
     if (dropped) continue;
+    if (leaksAcrossRun(lines, i, redact)) continue;
     if (nextLine && JOIN_SEPARATORS.some((sep) => leaksIntoNext(current, nextLine, sep, redact))) continue;
 
     const isAction = /^[•●]/.test(line);
