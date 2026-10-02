@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { assignScopes, buildJudgePrompt, deriveScopes, formatReviewReport, listChangedFiles, parseScopes, runReview } from "../src/harness/review.js";
 import { createFakeHarness, fakeHarnessCommands, type FakeHarness, type FakeHarnessMode } from "./fake-harness.js";
-import { assertNoRealHomeStateLeaks, createTestStateDir } from "./helpers.js";
+import { assertNoRealHomeStateLeaks, createTempHome, createTestStateDir } from "./helpers.js";
 
 let testEnv: { stateDir: string; cleanup: () => void };
 let harness: FakeHarness | undefined;
@@ -250,7 +250,7 @@ describe("review through the harness", () => {
 describe("herdr-jev review and models catalog commands", () => {
   const cli = resolve(import.meta.dir, "../src/cli.ts");
   const run = (args: string[]) => spawnSync(process.execPath, [cli, ...args], { encoding: "utf8", cwd: repo, timeout: 120_000,
-    env: { ...process.env, HERDR_ENV: "0", TYPESAFE_API_KEY: "", HERDR_JEV_CONFIG_DIR: join(repo, "..", `cfg-${process.pid}`) } });
+    env: { ...process.env, HOME: createTempHome(), HERDR_ENV: "0", TYPESAFE_API_KEY: "", HERDR_JEV_CONFIG_DIR: join(repo, "..", `cfg-${process.pid}`) } });
 
   it("prints the full report as JSON and exits 0 only when the harness status is ready", () => {
     install("contract", { FAKE_PROFILE: "1" });

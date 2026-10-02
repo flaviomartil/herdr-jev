@@ -6,7 +6,7 @@ import { converseWithPeer, resolvePeerStage } from "../src/herdr/peer.js";
 import type { HerdrClient } from "../src/herdr/client.js";
 import { readHerdrObservedState, createHerdrClient, createProcessCommandAdapter, requiresTrustConfirmation, classifyHerdrCommandFailure } from "../src/herdr/client.js";
 import { buildAgentCommand, buildInlineCommand, formatHerdrAgentName, nativeStageEffort, writeGridWorkers } from "../src/herdr/launcher.js";
-import { createTestStateDir, assertNoRealHomeStateLeaks } from "./helpers.js";
+import { createTestStateDir, assertNoRealHomeStateLeaks, createTempHome } from "./helpers.js";
 
 let testEnv: { stateDir: string; cleanup: () => void };
 
@@ -380,6 +380,7 @@ test("mutual exclusivity of target and --all", async () => {
 test("peer-message CLI enforces mutual exclusivity of <agent> and --all", async () => {
   const cliPath = join(import.meta.dir, "../src/cli.ts");
   const child = Bun.spawn([process.execPath, "run", cliPath, "peer-message", "worker-1", "hello", "--all"], {
+    env: { ...process.env, HOME: createTempHome() },
     stderr: "pipe",
     stdout: "pipe",
   });
@@ -432,6 +433,7 @@ process.exit(1);
       HERDR_BIN_PATH: mockHerdr,
       HERDR_JEV_STATE_DIR: stateDir,
       HERDR_PANE_ID: callerPane,
+      HOME: createTempHome(),
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -483,6 +485,7 @@ process.exit(1);
       HERDR_BIN_PATH: mockHerdr,
       HERDR_JEV_STATE_DIR: stateDir,
       HERDR_PANE_ID: callerPane,
+      HOME: createTempHome(),
     },
     stdout: "pipe",
     stderr: "pipe",

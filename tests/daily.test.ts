@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, chmodSync, unlinkSync
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { createTempHome } from "./helpers.js";
 import { lastMeaningfulLine, redactSecrets } from "../src/herdr/pane-text.js";
 import {
   buildDailyReport,
@@ -577,6 +578,7 @@ process.exit(0);
       ...process.env,
       HERDR_BIN_PATH: fakeHerdr,
       HERDR_JEV_STATE_DIR: tempState,
+      HOME: createTempHome(),
     };
     delete env.HERDR_PANE_ID;
 
@@ -1006,6 +1008,7 @@ process.exit(0);
       HERDR_BIN_PATH: fakeHerdr,
       HERDR_PLUGIN_ID: "herdr-jev",
       HERDR_PLUGIN_STATE_DIR: tempState,
+      HOME: createTempHome(),
     };
     delete env.HERDR_JEV_STATE_DIR;
     delete env.HERDR_PANE_ID;

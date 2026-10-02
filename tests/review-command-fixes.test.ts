@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { envFileKeys, loadEnvFile, reviewExcludedEnv, withoutKeys } from "../src/config/env-file.js";
 import { buildJudgePrompt, formatReviewReport, listChangedFiles, parseHunkRanges, runReview } from "../src/harness/review.js";
 import { createFakeHarness, fakeHarnessCommands, type FakeHarness, type FakeHarnessMode } from "./fake-harness.js";
-import { assertNoRealHomeStateLeaks, createTestStateDir } from "./helpers.js";
+import { assertNoRealHomeStateLeaks, createTempHome, createTestStateDir } from "./helpers.js";
 
 let testEnv: { stateDir: string; cleanup: () => void };
 let harness: FakeHarness | undefined;
@@ -277,7 +277,7 @@ describe("item 2: --base", () => {
     const first = seedMergedRepository();
     install("contract", { FAKE_PROFILE: "1" });
     const cli = resolve(import.meta.dir, "../src/cli.ts");
-    const env = { ...process.env, HERDR_ENV: "0", TYPESAFE_API_KEY: "" };
+    const env = { ...process.env, HOME: createTempHome(), HERDR_ENV: "0", TYPESAFE_API_KEY: "" };
     const ok = spawnSync(process.execPath, [cli, "review", "--client", "codex", "--json", "--base", first, "--scopes", "core=src", "--session", "base-cli"], { encoding: "utf8", env, cwd: repo, timeout: 120_000 });
     expect(JSON.parse(ok.stdout).base).toBe(first);
     expect(ok.status).toBe(0);

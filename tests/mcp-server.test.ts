@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
+import { createTempHome } from "./helpers.js";
 
 describe("Herdr-Jev MCP Server", () => {
   const cliPath = join(import.meta.dir, "../src/cli.ts");
@@ -14,6 +15,7 @@ describe("Herdr-Jev MCP Server", () => {
     const res = spawnSync("bun", [cliPath, "mcp"], {
       input: inputPayload,
       encoding: "utf8",
+      env: { ...process.env, HOME: createTempHome() },
     });
 
     expect(res.status).toBe(0);

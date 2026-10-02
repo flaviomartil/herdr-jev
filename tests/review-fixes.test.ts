@@ -17,7 +17,7 @@ import { resolveClaudeModel, runAgentInline, runAgentCaptured } from "../src/her
 import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createFakeHerdr } from "./helpers.js";
+import { createFakeHerdr, createTempHome } from "./helpers.js";
 
 test("1", async () => {
   let gitArgs: string[][] = [];
@@ -152,7 +152,7 @@ test("finding 1: argv builder propagates blocked states and dry run", () => {
   };
   const argv = buildNotifyArgs(person);
   const child = spawnSync("bun", ["src/cli.ts", ...argv, "--dry-run"], {
-    env: { ...process.env, HERDR_JEV_ESCALATE_BLOCKED: "1" },
+    env: { ...process.env, HOME: createTempHome(), HERDR_JEV_ESCALATE_BLOCKED: "1" },
     encoding: "utf-8"
   });
   expect(child.status).toBe(0);
