@@ -10,8 +10,9 @@ import { createFakeHarness, type FakeHarness, type FakeHarnessMode } from "./fak
 import { assertNoRealHomeStateLeaks, createTestStateDir } from "./helpers.js";
 
 const fixture = (name: string) => readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
-const DIALOG_NO = fixture("claude-trust-dialog-27cols.txt");
-const DIALOG_YES = DIALOG_NO.replace("❯ No, exit\n  Yes, I trust this", "  No, exit\n❯ Yes, I trust this");
+const DIALOG_NO_FIXTURE = fixture("claude-trust-dialog-27cols.txt");
+let DIALOG_NO: string;
+let DIALOG_YES: string;
 const READY = fixture("claude-ready-placeholder-30cols.txt");
 const ok = (stdout = ""): HerdrCommandResult => ({ ok: true, code: 0, stdout, stderr: "" });
 const stage: StageSpec = { role: "implementer", model: "sonnet-5", effort: "high", extraFlags: [], description: "synthetic" };
@@ -34,6 +35,8 @@ function install(mode: FakeHarnessMode = "contract", trustRoots = workdir) {
 beforeEach(() => {
   testEnv = createTestStateDir();
   workdir = realpathSync(mkdtempSync(join(tmpdir(), "launch-trust-")));
+  DIALOG_NO = `Accessing workspace:\n\n${workdir}\n\n${DIALOG_NO_FIXTURE}`;
+  DIALOG_YES = DIALOG_NO.replace("❯ No, exit\n  Yes, I trust this", "  No, exit\n❯ Yes, I trust this");
   process.env.HERDR_ENV = "1";
   delete process.env.HERDR_JEV_AUTO_TRUST;
 });

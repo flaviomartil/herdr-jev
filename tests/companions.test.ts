@@ -55,22 +55,29 @@ test("native Codex effort is verified without retry, launch or composer submissi
     "›\nwrapped draft\ngpt-6.1-sol medium", "›\ngpt-6.1-sol medium Plan mode"]) {
     expect(()=>codexEffortScreen(unsafe)).toThrow();
   }
-  const pane = process.env.HERDR_PANE_ID || "w1:p1";
-  const agent = { pane_id: pane, terminal_id: "term-1", agent: "codex", agent_status: "idle" };
-  let effort = "medium";
-  const calls: string[][] = [];
-  const run: RunCommand = async argv => {
-    calls.push([...argv]);
-    if (argv.includes("get")) return success({ agent });
-    if (argv.includes("send-keys")) { effort = "high"; return success({}); }
-    return { ok: true, code: 0, stdout: `›\ngpt-6.1-sol ${effort}`, stderr: "" };
-  };
-  expect(await changeEffort(pane,"high",run,unlocked)).toMatchObject({ status: "applied", effective: "next-turn" });
-  expect(calls.filter(call=>call.includes("send-keys"))).toHaveLength(1);
-  expect(calls.find(call=>call.includes("send-keys"))!.at(-1)).toBe("alt+.");
-  expect(calls.some(call=>call.includes("enter") || call.includes("start"))).toBe(false);
-  agent.agent_status = "blocked";
-  await expect(changeEffort(pane,"low",run,unlocked)).rejects.toThrow("idle Codex");
+  const pane = "w1:p1";
+  const savedPane = process.env.HERDR_PANE_ID;
+  process.env.HERDR_PANE_ID = pane;
+  try {
+    const agent = { pane_id: pane, terminal_id: "term-1", agent: "codex", agent_status: "idle" };
+    let effort = "medium";
+    const calls: string[][] = [];
+    const run: RunCommand = async argv => {
+      calls.push([...argv]);
+      if (argv.includes("get")) return success({ agent });
+      if (argv.includes("send-keys")) { effort = "high"; return success({}); }
+      return { ok: true, code: 0, stdout: `›\ngpt-6.1-sol ${effort}`, stderr: "" };
+    };
+    expect(await changeEffort(pane,"high",run,unlocked)).toMatchObject({ status: "applied", effective: "next-turn" });
+    expect(calls.filter(call=>call.includes("send-keys"))).toHaveLength(1);
+    expect(calls.find(call=>call.includes("send-keys"))!.at(-1)).toBe("alt+.");
+    expect(calls.some(call=>call.includes("enter") || call.includes("start"))).toBe(false);
+    agent.agent_status = "blocked";
+    await expect(changeEffort(pane,"low",run,unlocked)).rejects.toThrow("idle Codex");
+  } finally {
+    if (savedPane === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = savedPane;
+  }
 });
 
 test("session selection uses exact native identity and refuses duplicate live sessions", async () => {

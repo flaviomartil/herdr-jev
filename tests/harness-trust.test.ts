@@ -10,8 +10,9 @@ import { createFakeHarness, type FakeHarness, type FakeHarnessMode } from "./fak
 import { assertNoRealHomeStateLeaks, createTestStateDir } from "./helpers.js";
 
 const fixture = (name: string) => readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
-const CLAUDE_DIALOG_NO = fixture("claude-trust-dialog-27cols.txt");
-const CLAUDE_DIALOG_YES = CLAUDE_DIALOG_NO.replace("❯ No, exit\n  Yes, I trust this", "  No, exit\n❯ Yes, I trust this");
+const CLAUDE_DIALOG_NO_FIXTURE = fixture("claude-trust-dialog-27cols.txt");
+let CLAUDE_DIALOG_NO: string;
+let CLAUDE_DIALOG_YES: string;
 const CLAUDE_READY = fixture("claude-ready-placeholder-30cols.txt");
 const AGY_FIXTURE = fixture("agy-trust-dialog-27cols.txt");
 const agyDialog = (path: string) => AGY_FIXTURE.replace("/tmp/jev-live-Mnv4-wt-t3", path);
@@ -95,6 +96,8 @@ function install(mode: FakeHarnessMode = "contract", trustRoots = workdir) {
 beforeEach(() => {
   testEnv = createTestStateDir();
   workdir = realpathSync(mkdtempSync(join(tmpdir(), "trust-work-")));
+  CLAUDE_DIALOG_NO = `Accessing workspace:\n\n${workdir}\n\n${CLAUDE_DIALOG_NO_FIXTURE}`;
+  CLAUDE_DIALOG_YES = CLAUDE_DIALOG_NO.replace("❯ No, exit\n  Yes, I trust this", "  No, exit\n❯ Yes, I trust this");
   process.env.HERDR_ENV = "1";
   delete process.env.HERDR_JEV_AUTO_TRUST;
 });
