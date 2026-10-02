@@ -66,12 +66,13 @@ import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.
 
 import { spawnSync } from "node:child_process";
 import { envFileKeys, loadEnvFile } from "./config/env-file.js";
+import { isTestGuardActive } from "./herdr/state-dir.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
 // Automatically load from ~/.config/herdr/.env and repo .env
 loadEnvFile(join(homedir(), ".config/herdr/.env"));
-if (process.env.HERDR_JEV_TEST_GUARD !== "1") loadEnvFile(join(import.meta.dir, "../.env"));
+if (!isTestGuardActive()) loadEnvFile(join(import.meta.dir, "../.env"));
 
 const program = new Command();
 
