@@ -1,13 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, renameSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision, ReasoningEffort } from "../types/index.js";
 import { classifyHerdrCommandFailure, classifyPaneBlock, createHerdrClient, isTestSafeBinary, looksLikeSelectionMenu, normalizePaneText, readHerdrObservedState, readHerdrStructuredState, type HerdrClient, type HerdrObservedState, type PaneBlockKind } from "./client.js";
 import { ANSI_PATTERN } from "./pane-text.js";
 import { isTestGuardActive, resolveStateDir } from "./state-dir.js";
-import { reserveHerdrHandle, claimHerdrSpawn } from "./reservation.js";
+import { reserveHerdrHandle, claimHerdrSpawn, releaseHerdrSpawn } from "./reservation.js";
 import { autoTrustEnabled, confirmWorkspaceTrust, type TrustOutcome } from "./trust.js";
 import { createWorkerRun, harnessModelResolve, settleWorkerRun } from "../harness/bridge.js";
 
@@ -154,25 +154,35 @@ export interface GridWorkerRecord {
   runId?: string | null;
 }
 
-export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): GridWorkerRecord[] {
-  const filePath = gridStatePath(callerPaneId, stateDir);
+interface ParsedGridFile {
+  records: GridWorkerRecord[];
+  callerPaneId?: string;
+  corrupt: boolean;
+}
+
+function parseGridFile(filePath: string): ParsedGridFile {
+  let raw: string;
+  try {
+    raw = readFileSync(filePath, "utf8");
+  } catch {
+    return { records: [], corrupt: false };
+  }
   let value: unknown;
   try {
-    value = JSON.parse(readFileSync(filePath, "utf8"));
+    value = JSON.parse(raw);
   } catch {
-    return [];
+    return { records: [], corrupt: true };
   }
-  let needsMigration = false;
   let rawList: unknown[] = [];
+  let callerPaneId: string | undefined;
   if (Array.isArray(value)) {
-    needsMigration = true;
     rawList = value;
   } else if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
+    if (typeof obj.callerPaneId === "string") callerPaneId = obj.callerPaneId;
     if (Array.isArray(obj.workers)) {
       rawList = obj.workers;
     } else if (Array.isArray(obj.workerPaneIds)) {
-      needsMigration = true;
       rawList = obj.workerPaneIds;
     }
   }
@@ -180,7 +190,6 @@ export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): 
   const seen = new Set<string>();
   for (const item of rawList) {
     if (typeof item === "string") {
-      needsMigration = true;
       if (!seen.has(item)) {
         seen.add(item);
         records.push({ paneId: item });
@@ -202,31 +211,52 @@ export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): 
       }
     }
   }
-  if (needsMigration) {
-    try {
-      mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
-      writeFileSync(
-        filePath,
-        JSON.stringify({
-          callerPaneId,
-          workerPaneIds: records.map((r) => r.paneId),
-          workers: records,
-        }),
-        { mode: 0o600 },
-      );
-    } catch {
-    }
-  }
-  return records;
+  return { records, callerPaneId, corrupt: false };
+}
+
+export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): GridWorkerRecord[] {
+  return parseGridFile(gridStatePath(callerPaneId, stateDir)).records;
 }
 
 export function readGridWorkers(callerPaneId: string, stateDir?: string): string[] {
   return readGridWorkerRecords(callerPaneId, stateDir).map((r) => r.paneId);
 }
 
-export function writeGridWorkers(callerPaneId: string, workers: Array<string | GridWorkerRecord>, stateDir?: string): void {
-  const path = gridStatePath(callerPaneId, stateDir);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+const GRID_LOCK_WAIT_MS = 15_000;
+const GRID_LOCK_STALE_MS = 10_000;
+
+function withGridLock<T>(filePath: string, action: () => T): T {
+  const lock = `${filePath}.lock`;
+  mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
+  const deadline = Date.now() + GRID_LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      mkdirSync(lock, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      let age: number;
+      try {
+        age = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (age > GRID_LOCK_STALE_MS) {
+        rmSync(lock, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() > deadline) throw new Error("grid_state_lock_timeout");
+      Bun.sleepSync(5);
+    }
+  }
+  try {
+    return action();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+function toGridRecords(workers: ReadonlyArray<string | GridWorkerRecord>): GridWorkerRecord[] {
   const records: GridWorkerRecord[] = [];
   const seen = new Set<string>();
   for (const item of workers) {
@@ -248,15 +278,48 @@ export function writeGridWorkers(callerPaneId: string, workers: Array<string | G
       );
     }
   }
-  writeFileSync(
-    path,
-    JSON.stringify({
-      callerPaneId,
-      workerPaneIds: records.map((r) => r.paneId),
-      workers: records,
-    }),
-    { mode: 0o600 },
-  );
+  return records;
+}
+
+function writeGridFile(filePath: string, callerPaneId: string, records: readonly GridWorkerRecord[]): void {
+  const temporary = `${filePath}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    writeFileSync(
+      temporary,
+      JSON.stringify({ callerPaneId, workerPaneIds: records.map((r) => r.paneId), workers: records }),
+      { mode: 0o600 },
+    );
+    renameSync(temporary, filePath);
+  } catch (error) {
+    rmSync(temporary, { force: true });
+    throw error;
+  }
+}
+
+export function updateGridWorkers(
+  callerPaneId: string,
+  mutate: (records: GridWorkerRecord[]) => Array<string | GridWorkerRecord> | null,
+  stateDir?: string,
+): { before: GridWorkerRecord[]; after: GridWorkerRecord[] } {
+  const path = gridStatePath(callerPaneId, stateDir);
+  return withGridLock(path, () => {
+    const current = parseGridFile(path);
+    if (current.corrupt) {
+      try {
+        renameSync(path, `${path}.corrupt`);
+      } catch {
+      }
+    }
+    const next = mutate([...current.records]);
+    if (next === null) return { before: current.records, after: current.records };
+    const after = toGridRecords(next);
+    writeGridFile(path, callerPaneId, after);
+    return { before: current.records, after };
+  });
+}
+
+export function writeGridWorkers(callerPaneId: string, workers: Array<string | GridWorkerRecord>, stateDir?: string): void {
+  updateGridWorkers(callerPaneId, () => workers, stateDir);
 }
 
 export function listAllGridWorkers(stateDir?: string): TrackedWorkerRecord[] {
@@ -330,31 +393,36 @@ export function filterWorkerClosePlan(
   return plan;
 }
 
-export function pruneGridWorkers(closedPaneIds: readonly string[], stateDir?: string): void {
+export function pruneGridWorkers(closedPaneIds: readonly string[], stateDir?: string): GridWorkerRecord[] {
   const closedSet = new Set(closedPaneIds);
   const dir = gridStateDir(stateDir);
   let files: string[];
   try {
     files = readdirSync(dir);
   } catch {
-    return;
+    return [];
   }
+  const removed: GridWorkerRecord[] = [];
   for (const file of files) {
     if (!file.endsWith(".json")) continue;
     const filePath = join(dir, file);
     try {
-      const content = JSON.parse(readFileSync(filePath, "utf8"));
-      const callerPaneId = typeof content?.callerPaneId === "string" ? content.callerPaneId : file.slice(0, -5);
-      const records = readGridWorkerRecords(callerPaneId, stateDir);
-      const remaining = records.filter((r) => !closedSet.has(r.paneId));
-      if (remaining.length === 0) {
-        rmSync(filePath, { force: true });
-      } else {
-        writeGridWorkers(callerPaneId, remaining, stateDir);
-      }
+      withGridLock(filePath, () => {
+        const current = parseGridFile(filePath);
+        if (current.corrupt) return;
+        const remaining = current.records.filter((r) => !closedSet.has(r.paneId));
+        if (remaining.length === 0) {
+          removed.push(...current.records);
+          rmSync(filePath, { force: true });
+        } else if (remaining.length !== current.records.length) {
+          removed.push(...current.records.filter((r) => closedSet.has(r.paneId)));
+          writeGridFile(filePath, current.callerPaneId ?? file.slice(0, -5), remaining);
+        }
+      });
     } catch {
     }
   }
+  return removed;
 }
 
 export interface WorkerSettlement {
@@ -377,11 +445,8 @@ function gitHead(cwd: string | null | undefined, branch?: string | null): string
 }
 
 export function recordGridWorkerRun(callerPaneId: string, paneId: string, runId: string, stateDir?: string): void {
-  const records = readGridWorkerRecords(callerPaneId, stateDir);
-  const index = records.findIndex((record) => record.paneId === paneId);
-  if (index === -1) return;
-  records[index] = { ...records[index]!, runId };
-  writeGridWorkers(callerPaneId, records, stateDir);
+  updateGridWorkers(callerPaneId, (records) => records.some((record) => record.paneId === paneId)
+    ? records.map((record) => record.paneId === paneId ? { ...record, runId } : record) : null, stateDir);
 }
 
 export function registerWorkerRun(input: {
@@ -407,21 +472,46 @@ export function registerWorkerRun(input: {
   return run.id;
 }
 
+export interface WorkerCloseOutcome {
+  closed: string[];
+  failed: Array<{ paneId: string; error: string }>;
+  settlements: WorkerSettlement[];
+}
+
+const PANE_ALREADY_GONE = /pane_not_found|\bnot_found\b/;
+
+export function settleClosedWorkerRuns(records: readonly GridWorkerRecord[]): WorkerSettlement[] {
+  const seen = new Set<string>();
+  return records.flatMap((record) => {
+    if (!record.runId || seen.has(record.runId)) return [];
+    seen.add(record.runId);
+    return [{ paneId: record.paneId, runId: record.runId,
+      settled: settleWorkerRun({ id: record.runId, state: "closed", head: gitHead(record.cwd, record.branch) }) !== null }];
+  });
+}
+
+export async function closeWorkerPanes(
+  client: HerdrClient,
+  plan: readonly ClosePlanItem[],
+  stateDir?: string,
+): Promise<WorkerCloseOutcome> {
+  const closed: string[] = [];
+  const failed: Array<{ paneId: string; error: string }> = [];
+  for (const item of plan) {
+    const result = await client.closePane(item.paneId);
+    if (result.ok || PANE_ALREADY_GONE.test(`${result.stdout}\n${result.stderr}`)) closed.push(item.paneId);
+    else failed.push({ paneId: item.paneId, error: (result.stderr || result.stdout).trim().slice(0, 200) || "close_failed" });
+  }
+  const removed = pruneGridWorkers(closed, stateDir);
+  return { closed, failed, settlements: settleClosedWorkerRuns(removed) };
+}
+
 export async function executeWorkerClose(
   client: HerdrClient,
   plan: readonly ClosePlanItem[],
   stateDir?: string,
 ): Promise<WorkerSettlement[]> {
-  const runs = plan.flatMap((item) => {
-    const record = readGridWorkerRecords(item.callerPaneId, stateDir).find((candidate) => candidate.paneId === item.paneId);
-    return record?.runId ? [{ paneId: item.paneId, runId: record.runId, head: gitHead(record.cwd, record.branch) }] : [];
-  });
-  for (const item of plan) {
-    await client.closePane(item.paneId);
-  }
-  pruneGridWorkers(plan.map((p) => p.paneId), stateDir);
-  return runs.map((run) => ({ paneId: run.paneId, runId: run.runId,
-    settled: settleWorkerRun({ id: run.runId, state: "closed", head: run.head }) !== null }));
+  return (await closeWorkerPanes(client, plan, stateDir)).settlements;
 }
 
 /**
@@ -482,7 +572,7 @@ const UNKNOWN_STATE_GRACE_MS = 3000;
 
 function paneBlockedResult(
   kind: PaneBlockKind,
-  context: { agentName: string; paneId: string; commandText: string; direction: "right" | "down" },
+  context: { agentName: string; paneId: string; commandText: string; direction: "right" | "down"; trustPolicyReason?: string },
 ): LaunchResult {
   const base: LaunchResult = {
     ok: false,
@@ -653,7 +743,7 @@ function resolveLaunchProfile(client: ClientKind, stage: StageSpec): LaunchProfi
   return {
     model: stage.cliModel?.trim() || (known ? resolution!.cliModel : fallbackModel),
     effortArgs: known && native ? resolution!.effortArgs : localEffortArgs(client, stage),
-    bypassArgs: resolution?.bypassArgs.length ? resolution.bypassArgs : [...(FALLBACK_BYPASS_ARGS[base] ?? [])],
+    bypassArgs: resolution && resolution.bypassArgs !== null ? resolution.bypassArgs : [...(FALLBACK_BYPASS_ARGS[base] ?? [])],
     readonlyArgs: resolution?.readonlyArgs.length ? resolution.readonlyArgs : [...(FALLBACK_READONLY_ARGS[base] ?? [])],
   };
 }
@@ -668,14 +758,48 @@ export function readonlyReviewerArgs(client: ClientKind, stage: StageSpec): stri
   return resolveLaunchProfile(client, { ...stage, role: "reviewer" }).readonlyArgs;
 }
 
+const REVIEWER_FORBIDDEN_FLAGS: ReadonlySet<string> = new Set([
+  ...Object.values(FALLBACK_BYPASS_ARGS).flat(),
+  "--yolo", "-y", "--full-auto", "--allow-dangerously-skip-permissions", "--trust-all-tools",
+]);
+
+const REVIEWER_FORBIDDEN_VALUED: ReadonlySet<string> = new Set([
+  "--permission-mode", "--allowedTools", "--allowed-tools", "--tools", "--sandbox", "-s", "--ask-for-approval", "-a",
+]);
+
+const REVIEWER_FORBIDDEN_CONFIG = /^(?:sandbox_mode|approval_policy)\s*=/;
+
+function stripReviewerFlags(flags: readonly string[], profile: LaunchProfile): string[] {
+  const forbidden = new Set([...REVIEWER_FORBIDDEN_FLAGS, ...profile.bypassArgs]);
+  const valued = new Set([...REVIEWER_FORBIDDEN_VALUED,
+    ...profile.readonlyArgs.filter((arg) => arg.startsWith("-")).map((arg) => arg.split("=", 1)[0]!)]);
+  const kept: string[] = [];
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i]!;
+    const name = flag.split("=", 1)[0]!;
+    if (name === "-c" || name === "--config") {
+      const inline = flag.includes("=") ? flag.slice(name.length + 1) : flags[i + 1] ?? "";
+      if (REVIEWER_FORBIDDEN_CONFIG.test(inline)) { if (!flag.includes("=")) i++; continue; }
+    }
+    if (forbidden.has(flag) || forbidden.has(name)) continue;
+    if (valued.has(name)) {
+      if (!flag.includes("=") && flags[i + 1] !== undefined && !flags[i + 1]!.startsWith("-")) i++;
+      continue;
+    }
+    kept.push(flag);
+  }
+  return kept;
+}
+
 function stageFlags(client: ClientKind, stage: StageSpec, profile: LaunchProfile): string[] {
   const base = resolveBaseClientKind(client);
-  if (base !== "codex" && base !== "claude" && base !== "antigravity") return stage.extraFlags;
+  const requested = stage.role === "reviewer" ? stripReviewerFlags(stage.extraFlags, profile) : stage.extraFlags;
+  if (base !== "codex" && base !== "claude" && base !== "antigravity") return requested;
   const flags: string[] = [];
-  for (let i = 0; i < stage.extraFlags.length; i++) {
-    if (base === "codex" && stage.extraFlags[i] === "-c" && stage.extraFlags[i + 1]?.startsWith("model_reasoning_effort=")) { i++; continue; }
-    if ((base === "claude" || base === "antigravity") && stage.extraFlags[i] === "--effort") { i++; continue; }
-    flags.push(stage.extraFlags[i]);
+  for (let i = 0; i < requested.length; i++) {
+    if (base === "codex" && requested[i] === "-c" && requested[i + 1]?.startsWith("model_reasoning_effort=")) { i++; continue; }
+    if ((base === "claude" || base === "antigravity") && requested[i] === "--effort") { i++; continue; }
+    flags.push(requested[i]!);
   }
   if (base === "antigravity") return flags;
   return [...flags, ...profile.effortArgs];
@@ -691,23 +815,37 @@ interface PreparedLaunch {
   model: string;
   flags: string[];
   bypass: string[];
+  readonly: string[];
 }
 
 function prepareLaunch(client: ClientKind, stage: StageSpec, structural: readonly string[] = []): PreparedLaunch {
   const profile = resolveLaunchProfile(client, stage);
   const flags = stageFlags(client, stage, profile);
-  return { model: profile.model, flags, bypass: bypassFlags(client, stage, profile, [...structural, ...flags]) };
+  return {
+    model: profile.model,
+    flags,
+    bypass: bypassFlags(client, stage, profile, [...structural, ...flags]),
+    readonly: stage.role === "reviewer" ? profile.readonlyArgs : [],
+  };
+}
+
+function kiroTrustFlags(stage: StageSpec): string[] {
+  return stage.role === "reviewer" ? [] : ["--trust-all-tools"];
+}
+
+function optionSafe(text: string): string {
+  return text.startsWith("-") ? ` ${text}` : text;
 }
 
 export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[] {
   const base = resolveBaseClientKind(client);
   const bin = resolveClientExecutable(client);
-  const launch = prepareLaunch(client, stage, base === "kiro" ? ["--trust-all-tools"] : []);
+  const launch = prepareLaunch(client, stage, base === "kiro" ? kiroTrustFlags(stage) : []);
   switch (base) {
     case "claude":
     case "codex":
     case "antigravity": {
-      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass];
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
     }
     case "cursor": {
       return [bin, "--model", stage.model];
@@ -716,10 +854,10 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
       return [bin, "--model", stage.model];
     }
     case "kimi": {
-      return [bin, "-m", stage.model, ...launch.bypass, ...launch.flags];
+      return [bin, "-m", launch.model, ...launch.bypass, ...launch.flags, ...launch.readonly];
     }
     case "kiro": {
-      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...launch.flags];
+      return [bin, "chat", ...kiroTrustFlags(stage), "--agent", "ai-harness", "--model", stage.model, ...launch.flags, ...launch.readonly];
     }
   }
 }
@@ -771,8 +909,17 @@ function resolveGitBranchAndForkSha(cwd: string): { branch?: string; forkSha?: s
 
 interface TrustState {
   outcome?: TrustOutcome;
+  failure?: string;
   attempted: boolean;
 }
+
+const PANE_DECORATION = /[\s\u2500-\u257f|]+/g;
+
+function compactPaneText(value: string): string {
+  return value.replace(ANSI_PATTERN, "").replace(PANE_DECORATION, "");
+}
+
+const AGENT_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 type LaunchInput = {
   client: ClientKind;
@@ -820,16 +967,22 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   }
 
   const agentName = input.agentName ?? formatHerdrAgentName(effectiveClient, input.stage.role, input.stage.model);
+  if (!AGENT_NAME.test(agentName)) {
+    return { ok: false, ackStatus: "rejected", error: "Invalid agent name: use letters, digits, '.', '_', ':' or '-', starting with a letter or digit", commandText };
+  }
+  const readyBase = resolveBaseClientKind(effectiveClient);
   const resolveBlock = async (kind: PaneBlockKind, context: { paneId: string; direction: "right" | "down" }): Promise<LaunchResult | null> => {
     if (kind === "trust" && !trust.attempted) {
       trust.attempted = true;
-      const outcome = await confirmWorkspaceTrust({ herdr, target: agentName, cwd: input.cwd ?? process.cwd(), clock });
+      const outcome = await confirmWorkspaceTrust({ herdr, target: agentName, cwd: input.cwd ?? process.cwd(), clock,
+        ready: (text) => isClientPromptReady(readyBase, text) });
       if (outcome.confirmed) {
         trust.outcome = outcome;
         return null;
       }
+      trust.failure = outcome.reason;
     }
-    return paneBlockedResult(kind, { agentName, commandText, ...context });
+    return paneBlockedResult(kind, { agentName, commandText, ...context, ...(kind === "trust" && trust.failure ? { trustPolicyReason: trust.failure } : {}) });
   };
   if (input.reuseExisting) {
     if (!input.agentName || !herdr.getAgent) return { ok: false, ackStatus: "rejected", error: "A stable agent name and native lookup are required for retry recovery", commandText };
@@ -848,36 +1001,37 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   try { claimHerdrSpawn(`spawn:${agentName}`); }
   catch (error) { return { ok: false, ackStatus: "unknown", agentName, commandText,
     error: `Named spawn already attempted or cannot be fenced. Inspect existing tabs/panes before choosing a fresh handle: ${String(error)}` }; }
+  const releaseFence = () => { try { releaseHerdrSpawn(`spawn:${agentName}`); } catch {} };
   const splitLayout = resolveSplitLayout(input.stage.role, input.triage, input.direction);
   let splitDirection: "right" | "down" = splitLayout === "down" ? "down" : "right";
   let splitPaneId = input.sourcePaneId;
   let splitRatio: number | undefined;
   const callerPaneId = input.sourcePaneId ?? process.env.HERDR_PANE_ID;
   const existingRecords = callerPaneId ? readGridWorkerRecords(callerPaneId) : [];
-  let liveRecords = existingRecords;
-  let gridWorkers: string[] = [];
+  let deadPaneIds = new Set<string>();
   if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId && herdr.paneLayout) {
     const layoutResult = await herdr.paneLayout(callerPaneId);
-    if (!layoutResult.ok) return { ok: false, ackStatus: classifyHerdrCommandFailure(layoutResult), error: `Pane layout failed: ${layoutResult.stderr || layoutResult.stdout}`, commandText };
+    if (!layoutResult.ok) { releaseFence(); return { ok: false, ackStatus: classifyHerdrCommandFailure(layoutResult), error: `Pane layout failed: ${layoutResult.stderr || layoutResult.stdout}`, commandText }; }
     let layout: PaneLayoutInput;
-    try { layout = JSON.parse(layoutResult.stdout); } catch { return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
+    try { layout = JSON.parse(layoutResult.stdout); } catch { releaseFence(); return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
     const livePaneIds = new Set(layoutPanes(layout).map((pane) => pane.id));
-    liveRecords = existingRecords.filter((r) => livePaneIds.has(r.paneId));
-    gridWorkers = liveRecords.map((r) => r.paneId);
-    const plan = planGridSplit(layout, callerPaneId, gridWorkers);
+    const liveRecords = existingRecords.filter((r) => livePaneIds.has(r.paneId));
+    deadPaneIds = new Set(existingRecords.filter((r) => !livePaneIds.has(r.paneId)).map((r) => r.paneId));
+    const plan = planGridSplit(layout, callerPaneId, liveRecords.map((r) => r.paneId));
     splitPaneId = plan.targetPaneId;
     splitDirection = plan.direction;
     splitRatio = plan.ratio;
-    writeGridWorkers(callerPaneId, liveRecords);
   }
 
   // 1. Split current pane with resolved direction
   const split = input.layout === "tab"
     ? await herdr.createTab?.({ label: agentName, cwd: input.cwd ?? process.cwd(), workspaceId: input.workspaceId })
     : await herdr.splitCurrent({ direction: splitDirection, paneId: splitPaneId, ratio: splitRatio, cwd: input.cwd });
-  if (!split) return { ok: false, ackStatus: "rejected", error: "Tab creation unavailable", commandText };
+  if (!split) { releaseFence(); return { ok: false, ackStatus: "rejected", error: "Tab creation unavailable", commandText }; }
   if (!split.ok) {
-    return { ok: false, ackStatus: classifyHerdrCommandFailure(split), completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Pane split failed: ${split.stderr || split.stdout}`, commandText, direction: splitDirection };
+    const splitAck = classifyHerdrCommandFailure(split);
+    if (splitAck === "rejected") releaseFence();
+    return { ok: false, ackStatus: splitAck, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Pane split failed: ${split.stderr || split.stdout}`, commandText, direction: splitDirection };
   }
 
   const paneId = parseHerdrPaneId(split.stdout);
@@ -895,7 +1049,8 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
       branch: gitInfo.branch,
       forkSha: gitInfo.forkSha,
     };
-    writeGridWorkers(callerPaneId, [...liveRecords, newRecord]);
+    const { before } = updateGridWorkers(callerPaneId, (records) => [...records.filter((r) => !deadPaneIds.has(r.paneId) && r.paneId !== paneId), newRecord]);
+    settleClosedWorkerRuns(before.filter((r) => deadPaneIds.has(r.paneId)));
   }
 
   let releasePane: (() => Promise<void>) | undefined;
@@ -1031,10 +1186,9 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
         ]);
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
-          const cleanText = `${screenRes.stdout}\n${screenRes.stderr}`.replace(ANSI_PATTERN, "").replace(/\s+/g, " ");
-          const normalizedPrompt = input.handoffPrompt.replace(/\s+/g, " ").trim();
-          const firstLinePrefix = normalizedPrompt.slice(0, Math.min(normalizedPrompt.length, 16));
-          if (state === "idle" && !cleanText.includes(firstLinePrefix)) {
+          const visible = compactPaneText(`${screenRes.stdout}\n${screenRes.stderr}`);
+          const promptPrefix = compactPaneText(input.handoffPrompt).slice(0, 16);
+          if (state === "idle" && !visible.includes(promptPrefix)) {
             await clock.sleep(2000);
             prompted = await herdr.prompt({
               target: agentName,
@@ -1064,7 +1218,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
         direction: splitDirection,
       };
     }
-    const compactText = (value: string) => value.replace(ANSI_PATTERN, "").replace(/\s+/g, "");
+    const compactText = compactPaneText;
     const promptPrefix = compactText(input.handoffPrompt).slice(0, 32);
     const timeoutMs = input.deliveryTimeoutMs ?? 8000;
     const deadline = clock.now() + timeoutMs;
@@ -1189,35 +1343,41 @@ export function buildInlineCommand(
 ): string[] {
   const base = resolveBaseClientKind(client);
   const bin = resolveClientExecutable(client);
-  const launch = prepareLaunch(client, stage, base === "kiro" ? ["--trust-all-tools"] : []);
+  const launch = prepareLaunch(client, stage, base === "kiro" ? kiroTrustFlags(stage) : []);
+  const prompt = optionSafe(promptText);
   switch (base) {
     case "claude": {
-      if (nonInteractive) return [bin, "-p", promptText, "--model", launch.model, ...launch.flags, ...launch.bypass];
-      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, promptText];
+      if (nonInteractive) return [bin, "-p", prompt, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, prompt, ...launch.readonly];
     }
     case "codex": {
-      if (nonInteractive) return [bin, "exec", promptText, "--model", launch.model, ...launch.flags, ...launch.bypass];
-      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, promptText];
+      if (nonInteractive) return [bin, "exec", prompt, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, prompt, ...launch.readonly];
     }
     case "antigravity": {
-      return [bin, nonInteractive ? "-p" : "-i", promptText, "--model", launch.model, ...launch.flags, ...launch.bypass];
+      return [bin, nonInteractive ? "-p" : "-i", prompt, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
     }
     case "cursor": {
-      return [bin, "--model", stage.model, promptText];
+      return [bin, "--model", stage.model, prompt];
     }
     case "opencode": {
-      return [bin, "--model", stage.model, promptText];
+      return [bin, "--model", stage.model, prompt];
     }
     case "kimi": {
       if (nonInteractive) {
-        return [bin, "-m", stage.model, "-p", promptText];
+        return [bin, "-m", launch.model, "-p", prompt, ...launch.readonly];
       }
-      return [bin, "-m", stage.model, ...launch.bypass, promptText];
+      return [bin, "-m", launch.model, ...launch.bypass, prompt, ...launch.readonly];
     }
     case "kiro": {
-      return [bin, "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", stage.model, ...launch.flags, ...(nonInteractive ? ["--no-interactive"] : []), promptText];
+      return [bin, "chat", ...kiroTrustFlags(stage), "--agent", "ai-harness", "--model", stage.model, ...launch.flags, ...(nonInteractive ? ["--no-interactive"] : []), prompt, ...launch.readonly];
     }
   }
+}
+
+function redactPrompt(args: readonly string[], promptText: string): string {
+  const sent = optionSafe(promptText);
+  return args.map((arg) => arg === sent ? "<prompt>" : arg).join(" ");
 }
 
 /**
@@ -1231,7 +1391,7 @@ export function runAgentInline(input: {
 }): InlineRunResult {
   const effectiveClient = input.stage.client ?? input.client;
   const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, input.nonInteractive);
-  const commandText = args.join(" ");
+  const commandText = redactPrompt(args, input.promptText);
 
   if (isTestGuardActive()) {
     if (!isTestSafeBinary(args[0])) {
@@ -1277,7 +1437,7 @@ export function runAgentCaptured(input: {
 }): CapturedRunResult {
   const effectiveClient = input.stage.client ?? input.client;
   const args = buildInlineCommand(effectiveClient, input.stage, input.promptText, true);
-  const commandText = args.join(" ");
+  const commandText = redactPrompt(args, input.promptText);
 
   if (isTestGuardActive()) {
     if (!isTestSafeBinary(args[0])) {

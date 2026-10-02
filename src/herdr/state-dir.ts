@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
+
+const STARTUP_CWD = process.cwd();
 
 export function isTestGuardActive(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.HERDR_JEV_TEST_GUARD === "1" || env.AI_HARNESS_TEST_GUARD === "1";
@@ -38,18 +40,30 @@ export function readToolEnv(env: NodeJS.ProcessEnv = process.env, tool = "herdr-
   }
 }
 
+function absoluteDir(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  const expanded = expandHome(trimmed);
+  return isAbsolute(expanded) ? expanded : resolve(STARTUP_CWD, expanded);
+}
+
+export function legacyStateDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.HOME?.trim() || homedir(), ".local", "state", "herdr-jev");
+}
+
 export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.HERDR_JEV_STATE_DIR) {
-    return env.HERDR_JEV_STATE_DIR;
-  }
+  const explicit = absoluteDir(env.HERDR_JEV_STATE_DIR);
+  if (explicit) return explicit;
   const isForeignPlugin = Boolean(env.HERDR_PLUGIN_ID && env.HERDR_PLUGIN_ID !== "herdr-jev");
-  if (!isForeignPlugin && env.HERDR_PLUGIN_STATE_DIR) {
-    return env.HERDR_PLUGIN_STATE_DIR;
-  }
+  const plugin = isForeignPlugin ? undefined : absoluteDir(env.HERDR_PLUGIN_STATE_DIR);
+  if (plugin) return plugin;
   if (isTestGuardActive(env)) {
     throw new Error("state_dir_required_in_tests");
   }
-  return readToolEnv(env).stateDir ?? join(homedir(), ".local", "state", "herdr-jev");
+  const legacy = legacyStateDir(env);
+  const configured = readToolEnv(env).stateDir;
+  if (!configured) return legacy;
+  return configured !== legacy && !existsSync(configured) && existsSync(legacy) ? legacy : configured;
 }
 
 export function legacyConfigDir(): string {

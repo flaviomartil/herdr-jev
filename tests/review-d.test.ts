@@ -384,7 +384,7 @@ test("N5 (item 3): an empty, unparseable or time-less claim file expires instead
     const pane = `w1:c${i}`;
     const claim = join(notifyDir(), `pane-w1-c${i}.claim`);
     writeFileSync(claim, content);
-    const past = new Date(Date.now() - 60000);
+    const past = new Date(Date.now() - 120000);
     utimesSync(claim, past, past);
     const res = await handleNotifyCommand({ pane, project: "proj", reason: "approval", attention: "now" }, okRunner);
     expect(res.sent).toBe(true);
@@ -494,12 +494,12 @@ test("N8: the Office sends the same 30 line slice that it hashes for the cache k
   expect(key.split(":")[0]).toBe(createHash("sha1").update(sent.paneText).digest("hex"));
 });
 
-test("N9: the hook receives the title with the option guard prefix", async () => {
-  const out = join(stateDir, "hook-first-arg");
-  process.env.HERDR_JEV_NOTIFY_HOOK = writeScript("hook.sh", `printf '%s' "$1" > "${out}"`);
-  const res = await handleNotifyCommand({ pane: "w1:h1", project: "Proj", reason: "approval", attention: "now", agent: "-x" }, okRunner);
+test("N9: the hook receives the body with the option guard prefix", async () => {
+  const out = join(stateDir, "hook-second-arg");
+  process.env.HERDR_JEV_NOTIFY_HOOK = writeScript("hook.sh", `printf '%s' "$2" > "${out}"`);
+  const res = await handleNotifyCommand({ pane: "w1:h1", project: "Proj", reason: "approval", attention: "now", agent: "kiro", task: "-x" }, okRunner);
   expect(res.channels).toContain("hook");
-  expect(readFileSync(out, "utf-8")).toBe("· -x em Proj precisa de você");
+  expect(readFileSync(out, "utf-8")).toBe("· -x: aguardando aprovação");
 });
 
 test("N10: a long token near the old 80 character cut is redacted before it reaches the notification", () => {

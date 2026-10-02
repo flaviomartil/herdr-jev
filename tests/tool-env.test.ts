@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { harnessGeneratedDir, isTestGuardActive, legacyConfigDir, readToolEnv, resolveConfigDir, resolveConfigDirs, resolveStateDir } from "../src/herdr/state-dir.js";
 
 let generated: string;
+let home: string;
 
 function writeToolEnv(body: unknown) {
   writeFileSync(join(generated, "tool-env.json"), typeof body === "string" ? body : JSON.stringify(body));
@@ -12,10 +13,12 @@ function writeToolEnv(body: unknown) {
 
 beforeEach(() => {
   generated = mkdtempSync(join(tmpdir(), "tool-env-"));
+  home = mkdtempSync(join(tmpdir(), "tool-env-home-"));
 });
 
 afterEach(() => {
   rmSync(generated, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
 });
 
 const entry = { tools: { "herdr-jev": { configDir: "/cfg/herdr-jev", stateDir: "/state/herdr-jev" }, other: { stateDir: "/state/other" } } };
@@ -28,7 +31,7 @@ describe("tool-env.json", () => {
 
   it("supplies the state directory when nothing more specific is set", () => {
     writeToolEnv(entry);
-    expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated })).toBe("/state/herdr-jev");
+    expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated, HOME: home })).toBe("/state/herdr-jev");
     expect(readToolEnv({ AI_HARNESS_GENERATED_DIR: generated })).toEqual({ configDir: "/cfg/herdr-jev", stateDir: "/state/herdr-jev" });
   });
 
@@ -36,7 +39,7 @@ describe("tool-env.json", () => {
     writeToolEnv(entry);
     expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated, HERDR_JEV_STATE_DIR: "/explicit" })).toBe("/explicit");
     expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated, HERDR_PLUGIN_ID: "herdr-jev", HERDR_PLUGIN_STATE_DIR: "/plugin" })).toBe("/plugin");
-    expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated, HERDR_PLUGIN_ID: "other", HERDR_PLUGIN_STATE_DIR: "/foreign" })).toBe("/state/herdr-jev");
+    expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated, HERDR_PLUGIN_ID: "other", HERDR_PLUGIN_STATE_DIR: "/foreign", HOME: home })).toBe("/state/herdr-jev");
   });
 
   it("falls back to the current rules when the file is absent, malformed or unusable", () => {
@@ -52,7 +55,7 @@ describe("tool-env.json", () => {
 
   it("expands a leading tilde", () => {
     writeToolEnv({ tools: { "herdr-jev": { stateDir: "~/.local/state/custom-jev", configDir: "~/cfg" } } });
-    expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated })).toBe(join(homedir(), ".local/state/custom-jev"));
+    expect(resolveStateDir({ AI_HARNESS_GENERATED_DIR: generated, HOME: home })).toBe(join(homedir(), ".local/state/custom-jev"));
     expect(resolveConfigDir({ AI_HARNESS_GENERATED_DIR: generated })).toBe(join(homedir(), "cfg"));
   });
 

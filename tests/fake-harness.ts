@@ -87,8 +87,10 @@ function resolveModel() {
     const r = agy(input, effort);
     known = r.known; model = r.model; cli = r.cli;
   }
-  const override = (prefix, fallback) => process.env[prefix + client.toUpperCase()] ? process.env[prefix + client.toUpperCase()].split(" ") : fallback;
-  out({ client, known, model, cliModel: cli, effort: level || null, effortArgs, bypassArgs: override("FAKE_BYPASS_", entry.bypass_args), readonlyArgs: override("FAKE_READONLY_", entry.readonly_args) });
+  const override = (prefix, fallback) => { const value = process.env[prefix + client.toUpperCase()]; return value === "none" ? [] : value ? value.split(" ") : fallback; };
+  const answer = { client, known, model, cliModel: cli, effort: level || null, effortArgs, bypassArgs: override("FAKE_BYPASS_", entry.bypass_args), readonlyArgs: override("FAKE_READONLY_", entry.readonly_args) };
+  for (const field of (process.env.FAKE_OMIT_FIELDS || "").split(",")) delete answer[field];
+  out(answer);
 }
 
 function reviewStatus(reviewDir) {
