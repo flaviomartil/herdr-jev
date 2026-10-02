@@ -24,6 +24,7 @@ export function resolveFakeBinDir(reported: string = tmpdir(), real: (path: stri
 const FAKE_BIN_DIR = resolveFakeBinDir();
 
 export function isTestSafeBinary(path: string): boolean {
+  if (!path.includes("/")) return false;
   try {
     return realpathSync(path).startsWith(FAKE_BIN_DIR + sep);
   } catch {

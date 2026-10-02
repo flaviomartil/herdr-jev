@@ -443,11 +443,24 @@ export function settleWorkerRun(request: { id: string; state: "done" | "failed" 
   return probe.ok ? runObject(probe.value) : null;
 }
 
-export function listHarnessRuns(request: { limit: number; kind: "worker" | "pipeline" | "all"; cwd?: string }): HarnessWorkerRun[] | null {
-  const probe = harnessProbe(["external-run", "--action", "list", "--request-json", JSON.stringify(request)]);
+type ListRunsRequest = { limit: number; kind: "worker" | "pipeline" | "all"; cwd?: string };
+
+function listRunsArgs(request: ListRunsRequest): string[] {
+  return ["external-run", "--action", "list", "--request-json", JSON.stringify(request)];
+}
+
+function runsFromProbe(probe: HarnessProbe<unknown>): HarnessWorkerRun[] | null {
   if (!probe.ok || !Array.isArray(probe.value)) return null;
   return (probe.value as unknown[]).flatMap((item) => {
     const run = runObject(item);
     return run ? [run] : [];
   });
+}
+
+export function listHarnessRuns(request: ListRunsRequest): HarnessWorkerRun[] | null {
+  return runsFromProbe(harnessProbe(listRunsArgs(request)));
+}
+
+export async function listHarnessRunsAsync(request: ListRunsRequest, options: ProbeOptions = {}): Promise<HarnessWorkerRun[] | null> {
+  return runsFromProbe(await harnessProbeAsync(listRunsArgs(request), options));
 }

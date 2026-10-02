@@ -1,11 +1,10 @@
 import { basename } from "node:path";
-import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { readGridWorkerRecords, gridStateDir, pruneGridWorkers, settleDeadRecords, type GridWorkerRecord } from "./launcher.js";
+import { readGridWorkerRecords, readAllGridWorkerRecords, pruneGridWorkers, settleDeadRecords, type GridWorkerRecord } from "./launcher.js";
 import { readOverview, matchRunForPane, formatOverviewRun } from "./overview.js";
 import { listRunHistory, type RunHistoryEntry } from "../orchestration/run-history.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
-import { listHarnessRuns, type HarnessWorkerRun } from "../harness/bridge.js";
+import { listHarnessRunsAsync, type HarnessWorkerRun } from "../harness/bridge.js";
 
 export type AgentState = "blocked" | "working" | "idle" | "done" | "unknown";
 
@@ -49,6 +48,8 @@ export interface AgentsViewDeps {
   herdrClient?: HerdrClient;
   harnessRuns?: readonly HarnessWorkerRun[] | null;
 }
+
+const HARNESS_RUNS_TIMEOUT_MS = 3_000;
 
 export const defaultGitRunner: GitRunner = async (args: string[], cwd?: string) => {
   const proc = spawnSync("git", args, { cwd: cwd ?? process.cwd(), encoding: "utf8" });
@@ -133,22 +134,7 @@ export async function buildAgentsView(
   } else if (process.env.HERDR_PANE_ID) {
     workers = readGridWorkerRecords(process.env.HERDR_PANE_ID, deps?.stateDir);
   } else {
-    const dir = gridStateDir(deps?.stateDir);
-    try {
-      const files = readdirSync(dir);
-      const seen = new Set<string>();
-      for (const file of files) {
-        if (!file.endsWith(".json")) continue;
-        const caller = file.slice(0, -5);
-        for (const item of readGridWorkerRecords(caller, deps?.stateDir)) {
-          if (!seen.has(item.paneId)) {
-            seen.add(item.paneId);
-            workers.push({ ...item, callerPaneId: item.callerPaneId ?? caller });
-          }
-        }
-      }
-    } catch {
-    }
+    workers = readAllGridWorkerRecords(deps?.stateDir);
   }
 
   const herdr = deps?.client ?? deps?.herdrClient ?? (deps?.workers || deps?.stateDir ? undefined : createHerdrClient());
@@ -225,9 +211,11 @@ export async function buildAgentsView(
     }
   }
 
-  const harnessRuns: readonly HarnessWorkerRun[] = workers.some((worker) => worker.runId)
-    ? deps?.harnessRuns ?? listHarnessRuns({ limit: 100, kind: "worker" }) ?? []
-    : [];
+  let harnessRuns: readonly HarnessWorkerRun[] = [];
+  if (workers.some((worker) => worker.runId)) {
+    if (deps?.harnessRuns !== undefined) harnessRuns = deps.harnessRuns ?? [];
+    else harnessRuns = (await listHarnessRunsAsync({ limit: 100, kind: "worker" }, { timeout: HARNESS_RUNS_TIMEOUT_MS })) ?? [];
+  }
 
   const groupsMap = new Map<string, AgentRow[]>();
 
