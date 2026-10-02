@@ -2,252 +2,718 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Herdr-Jev Architecture",
+    "title": "Herdr-Jev Overview",
     "output": "architecture.html",
     "quality_profile": "showcase",
     "views": [
       {
-        "id": "full-flow",
-        "label": "Full Orchestration Flow",
-        "focus": ["user", "herdr", "aliases", "triage", "advisor", "implementer", "reviewer", "catalog", "detector", "harness"],
-        "note": "End-to-end task journey from operator prompt to verified outcome."
+        "id": "commands",
+        "label": "Commands to modules",
+        "focus": [
+          "operator",
+          "routines",
+          "office_poll",
+          "cli",
+          "triage",
+          "classifier",
+          "launcher",
+          "peers",
+          "reports",
+          "notify",
+          "pipeline"
+        ],
+        "note": "Operator, scheduler and Office call one CLI that fans out by purpose."
       },
       {
-        "id": "triage-plane",
-        "label": "Triage and Quota Plane",
-        "focus": ["triage", "vault", "catalog", "detector"],
-        "note": "TypeSafe System One classifier, dynamic quota cascade circuit breaker, and harness discovery."
+        "id": "triage",
+        "label": "Jev decisions",
+        "focus": [
+          "cli",
+          "triage",
+          "classifier",
+          "typesafe_jev",
+          "vault",
+          "office_poll"
+        ],
+        "note": "Task triage and pane classification both use TypeSafe Jev."
       },
       {
-        "id": "triad-pipeline",
-        "label": "Multi-Model Triad",
-        "focus": ["advisor", "implementer", "reviewer", "catalog"],
-        "note": "Staged pipeline (Advisor -> Implementer -> Reviewer) executed inside Herdr panes."
+        "id": "panes",
+        "label": "Panes and agents",
+        "focus": [
+          "launcher",
+          "peers",
+          "herdr_panes",
+          "agent_kiro",
+          "agent_antigravity",
+          "agent_claude",
+          "agent_codex"
+        ],
+        "note": "Grid launch, readiness wait, trust check and peer messages reach the agent harnesses."
       },
       {
-        "id": "cross-harness",
-        "label": "Cross-Harness Delegation",
-        "focus": ["herdr", "aliases", "triage", "advisor", "implementer", "catalog", "detector"],
-        "note": "Subagents, split direction, client aliases gate, and cross-harness peering matrix."
+        "id": "delivery",
+        "label": "Harness and review",
+        "focus": [
+          "pipeline",
+          "harness_bridge",
+          "review_gate",
+          "harness_core",
+          "agent_codex"
+        ],
+        "note": "Triad pipeline through the AI Harness bridge and review gate."
       }
     ]
   },
   "components": [
     {
-      "id": "user",
+      "id": "operator",
       "type": "external",
       "label": "Operator",
-      "sublabel": "Herdr Keybinds / CLI",
-      "pos": [40, 270],
-      "size": [120, 60]
+      "sublabel": "CLI, actions, keybinds",
+      "tag": "caller",
+      "pos": [
+        40,
+        176
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "aliases",
-      "type": "security",
-      "label": "Aliases Gate",
-      "sublabel": "HERDR_JEV_ALLOW_ALIASES",
-      "pos": [240, 90],
-      "size": [140, 60],
-      "tag": "security-gate"
+      "id": "routines",
+      "type": "external",
+      "label": "Routines Scheduler",
+      "sublabel": "standup and daily",
+      "tag": "scheduler",
+      "pos": [
+        40,
+        408
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "herdr",
-      "type": "frontend",
-      "label": "Herdr Runtime",
-      "sublabel": "Overlay Panes & Socket",
-      "pos": [240, 270],
-      "size": [140, 60]
-    },
-    {
-      "id": "detector",
+      "id": "office_poll",
       "type": "backend",
-      "label": "Harness Detector",
-      "sublabel": "Probing & Auto-Config",
-      "pos": [240, 450],
-      "size": [140, 60]
+      "label": "Jev Classify Poll",
+      "sublabel": "60s, 20 per minute",
+      "tag": "rate-policy",
+      "brand": "node-js",
+      "pos": [
+        40,
+        640
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "office_app",
+      "type": "frontend",
+      "label": "Jev Office",
+      "sublabel": "desks, swarm, ended",
+      "tag": "office-pane",
+      "brand": "node-js",
+      "pos": [
+        40,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "cli",
+      "type": "backend",
+      "label": "herdr-jev CLI",
+      "sublabel": "by purpose, 8 groups",
+      "tag": "entrypoint",
+      "brand": "typescript",
+      "pos": [
+        264,
+        408
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "test_guard",
+      "type": "security",
+      "label": "Test Guard",
+      "sublabel": "blocks live herdr",
+      "tag": "tests",
+      "pos": [
+        264,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "triage",
+      "type": "backend",
+      "label": "Triage and Planner",
+      "sublabel": "complexity and effort",
+      "tag": "triage",
+      "pos": [
+        488,
+        60
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "classifier",
+      "type": "backend",
+      "label": "Pane Classifier",
+      "sublabel": "state and attention",
+      "tag": "classifier",
+      "pos": [
+        488,
+        176
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "launcher",
+      "type": "backend",
+      "label": "Launcher",
+      "sublabel": "grid, ready, trust, git",
+      "tag": "launcher",
+      "pos": [
+        488,
+        292
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "peers",
+      "type": "backend",
+      "label": "Peer Messaging",
+      "sublabel": "send, read, standup",
+      "tag": "peer",
+      "pos": [
+        488,
+        408
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "reports",
+      "type": "backend",
+      "label": "Daily Report",
+      "sublabel": "standup and daily",
+      "tag": "reports",
+      "pos": [
+        488,
+        524
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "notify",
+      "type": "backend",
+      "label": "Notify",
+      "sublabel": "native, hook, escalate",
+      "tag": "notify",
+      "pos": [
+        488,
+        640
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "pipeline",
+      "type": "backend",
+      "label": "Triad Pipeline",
+      "sublabel": "advisor to reviewer",
+      "tag": "pipeline",
+      "pos": [
+        488,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "typesafe_jev",
+      "type": "external",
+      "label": "TypeSafe Jev",
+      "sublabel": "System One, fallback",
+      "tag": "fast-decision",
+      "pos": [
+        722,
+        118
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_panes",
+      "type": "external",
+      "label": "Herdr Panes",
+      "sublabel": "split, tab, send, read",
+      "tag": "herdr-api",
+      "pos": [
+        722,
+        350
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "state_dir",
+      "type": "database",
+      "label": "State Dir",
+      "sublabel": "grid, runs, reports",
+      "tag": "state",
+      "pos": [
+        722,
+        524
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "herdr_notify",
+      "type": "external",
+      "label": "Herdr Notifications",
+      "sublabel": "native alert, status",
+      "tag": "herdr-api",
+      "pos": [
+        722,
+        640
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "harness_bridge",
+      "type": "backend",
+      "label": "AI Harness Bridge",
+      "sublabel": "external-run",
+      "tag": "harness-bridge",
+      "pos": [
+        722,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
       "id": "vault",
       "type": "security",
       "label": "KeePassXC Vault",
-      "sublabel": "TypeSafe API Key",
-      "pos": [470, 90],
-      "size": [140, 60],
-      "tag": "zero-secret-leak"
+      "sublabel": "TypeSafe API key",
+      "tag": "zero-secret-leak",
+      "pos": [
+        946,
+        118
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "triage",
+      "id": "agent_kiro",
       "type": "backend",
-      "label": "TypeSafe Jev",
-      "sublabel": "System One (~260ms)",
-      "pos": [470, 270],
-      "size": [140, 60]
+      "label": "Kiro CLI",
+      "sublabel": "chat trust-tools",
+      "tag": "agent-harness",
+      "pos": [
+        946,
+        292
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "catalog",
-      "type": "database",
-      "label": "Models & Quotas",
-      "sublabel": "Circuit Breaker",
-      "pos": [470, 450],
-      "size": [140, 60]
-    },
-    {
-      "id": "advisor",
+      "id": "agent_antigravity",
       "type": "backend",
-      "label": "Advisor Stage",
-      "sublabel": "Fable 5 / Astra / Opus",
-      "pos": [720, 90],
-      "size": [150, 60]
+      "label": "AntiGravity",
+      "sublabel": "agy, Gemini models",
+      "tag": "agent-harness",
+      "brand": "google-gemini",
+      "pos": [
+        946,
+        408
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "implementer",
+      "id": "agent_claude",
       "type": "backend",
-      "label": "Implementer Stage",
-      "sublabel": "Sonnet 5 / Luna / Flash",
-      "pos": [720, 270],
-      "size": [150, 60]
+      "label": "Claude Code",
+      "sublabel": "Fable, Sonnet, Opus",
+      "tag": "agent-harness",
+      "brand": "claude",
+      "pos": [
+        946,
+        524
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "reviewer",
+      "id": "agent_codex",
       "type": "backend",
-      "label": "Reviewer Stage",
-      "sublabel": "Opus 5 / Sol / Opus",
-      "pos": [720, 450],
-      "size": [150, 60]
+      "label": "Codex CLI",
+      "sublabel": "Astra, Luna, Sol",
+      "tag": "agent-harness",
+      "brand": "openai",
+      "pos": [
+        946,
+        640
+      ],
+      "size": [
+        148,
+        64
+      ]
     },
     {
-      "id": "harness",
+      "id": "review_gate",
+      "type": "backend",
+      "label": "Review Gate",
+      "sublabel": "verify, then judge",
+      "tag": "review-gate",
+      "pos": [
+        946,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
+    },
+    {
+      "id": "harness_core",
       "type": "cloud",
-      "label": "AI-Harness Core",
-      "sublabel": "Run Ledger & Reports",
-      "pos": [970, 270],
-      "size": [140, 60]
+      "label": "AI Harness Core",
+      "sublabel": "ledger and reports",
+      "tag": "control-plane",
+      "pos": [
+        1170,
+        756
+      ],
+      "size": [
+        148,
+        64
+      ]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "Herdr Multiplexer Environment (HERDR_ENV=1)",
-      "wraps": ["herdr", "aliases", "detector", "advisor", "implementer", "reviewer"]
+      "label": "Callers",
+      "wraps": [
+        "operator",
+        "routines"
+      ]
     },
     {
-      "kind": "security-group",
-      "label": "Semantic Triage and Quota Plane",
-      "wraps": ["triage", "vault", "catalog"]
+      "kind": "region",
+      "label": "Jev Office",
+      "wraps": [
+        "office_poll",
+        "office_app"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Agent Harnesses",
+      "wraps": [
+        "agent_kiro",
+        "agent_antigravity",
+        "agent_claude",
+        "agent_codex"
+      ]
     }
   ],
   "connections": [
     {
-      "id": "user-to-herdr",
-      "from": "user",
-      "to": "herdr",
-      "label": "task",
-      "labelDy": -15
-    },
-    {
-      "id": "aliases-to-herdr",
-      "from": "aliases",
-      "to": "herdr",
-      "label": "binary sanitizer",
-      "variant": "security",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
-    },
-    {
-      "id": "detector-to-catalog",
-      "from": "detector",
-      "to": "catalog",
-      "label": "probe quotas",
+      "id": "op-cli",
+      "from": "operator",
+      "to": "cli",
+      "label": "run",
       "fromSide": "right",
       "toSide": "left"
     },
     {
-      "id": "herdr-to-triage",
-      "from": "herdr",
-      "to": "triage",
-      "label": "route",
-      "labelDy": -15
+      "id": "cron-cli",
+      "from": "routines",
+      "to": "cli",
+      "label": "cron",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        207,
+        447
+      ]
     },
     {
-      "id": "vault-to-triage",
-      "from": "vault",
-      "to": "triage",
-      "label": "secret",
-      "variant": "security",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
-    },
-    {
-      "id": "triage-to-advisor",
-      "from": "triage",
-      "to": "advisor",
-      "label": "triad plan",
+      "id": "poll-cli",
+      "from": "office_poll",
+      "to": "cli",
+      "label": "classify",
       "fromSide": "right",
       "toSide": "left"
     },
     {
-      "id": "advisor-to-implementer",
-      "from": "advisor",
-      "to": "implementer",
-      "label": "handoff",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
+      "id": "office-poll",
+      "from": "office_app",
+      "to": "office_poll",
+      "label": "tick",
+      "fromSide": "top",
+      "toSide": "bottom"
     },
     {
-      "id": "implementer-to-reviewer",
-      "from": "implementer",
-      "to": "reviewer",
-      "label": "review",
-      "fromSide": "bottom",
-      "toSide": "top",
-      "labelDy": 30
-    },
-    {
-      "id": "catalog-to-implementer",
-      "from": "catalog",
-      "to": "implementer",
-      "label": "quota cascade",
+      "id": "guard-cli",
+      "from": "test_guard",
+      "to": "cli",
+      "label": "guard",
       "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "cli-triage",
+      "from": "cli",
+      "to": "triage",
       "fromSide": "right",
       "toSide": "left"
     },
     {
-      "id": "reviewer-to-harness",
-      "from": "reviewer",
-      "to": "harness",
-      "label": "learnings",
-      "variant": "emphasis"
+      "id": "cli-classifier",
+      "from": "cli",
+      "to": "classifier",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-launcher",
+      "from": "cli",
+      "to": "launcher",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-peers",
+      "from": "cli",
+      "to": "peers",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-reports",
+      "from": "cli",
+      "to": "reports",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-notify",
+      "from": "cli",
+      "to": "notify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cli-pipeline",
+      "from": "cli",
+      "to": "pipeline",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "triage-jev",
+      "from": "triage",
+      "to": "typesafe_jev",
+      "label": "triage",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "classifier-jev",
+      "from": "classifier",
+      "to": "typesafe_jev",
+      "label": "classify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "vault-jev",
+      "from": "vault",
+      "to": "typesafe_jev",
+      "label": "api key",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "id": "launcher-panes",
+      "from": "launcher",
+      "to": "herdr_panes",
+      "label": "spawn",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "peers-panes",
+      "from": "peers",
+      "to": "herdr_panes",
+      "label": "pane io",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "reports-state",
+      "from": "reports",
+      "to": "state_dir",
+      "label": "files",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "notify-herdr",
+      "from": "notify",
+      "to": "herdr_notify",
+      "label": "alert",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "pipeline-bridge",
+      "from": "pipeline",
+      "to": "harness_bridge",
+      "label": "run",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "bridge-gate",
+      "from": "harness_bridge",
+      "to": "review_gate",
+      "label": "verify",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "gate-core",
+      "from": "review_gate",
+      "to": "harness_core",
+      "label": "judge",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "gate-codex",
+      "from": "review_gate",
+      "to": "agent_codex",
+      "label": "reviewer",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "panes-kiro",
+      "from": "herdr_panes",
+      "to": "agent_kiro",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "panes-antigravity",
+      "from": "herdr_panes",
+      "to": "agent_antigravity",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "panes-claude",
+      "from": "herdr_panes",
+      "to": "agent_claude",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "panes-codex",
+      "from": "herdr_panes",
+      "to": "agent_codex",
+      "fromSide": "right",
+      "toSide": "left"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "Semantic Triage",
+      "title": "Where the detail lives",
       "items": [
-        "TypeSafe Jev System One responds in ~260ms",
-        "Classifies complexity, research need, and reasoning effort",
-        "Deterministic fallback with 0ms latency overhead"
+        "The detailed diagram splits the CLI groups, launcher guards, notification channels and Office internals",
+        "Launcher: in-tab grid, readiness wait, trust dialog detection, worktree option"
       ]
     },
     {
-      "dot": "emerald",
-      "title": "Triad Pipeline",
+      "dot": "amber",
+      "title": "Alerts and reports",
       "items": [
-        "Harness retains reports and reconciliation history",
-        "Implementer: Sonnet 5 (1M tokens), Luna, or Flash",
-        "Reviewer validates the archived report digest"
+        "Notify dedupes, then Herdr native, optional hook and opt-in escalation",
+        "Routines run standup --auto and daily; state stays in the state dir"
       ]
     },
     {
       "dot": "rose",
-      "title": "Two-Level Quota Resilience",
+      "title": "Safety rails",
       "items": [
-        "Level 1: Intra-client fallback cascade per model tier",
-        "Level 2: Cross-harness safe return to host harness on exhaustion",
-        "Local circuit breaker preventing 429 rate limits"
+        "Test guard blocks live herdr, real hooks and unmocked standup",
+        "Review gate verifies deterministically before the independent judge"
       ]
     }
   ]
