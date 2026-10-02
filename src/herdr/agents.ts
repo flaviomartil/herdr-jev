@@ -333,29 +333,29 @@ export function formatAgentsTable(groups: AgentProjectGroup[]): string {
 }
 
 export async function setupWorktree(options: { worktree?: boolean | string; name?: string; gitRunner?: any }, finalCwd: string): Promise<{ worktreePath: string | null; worktreeBranch: string | null; error?: string }> {
-  let gitRunner = options.gitRunner || defaultGitRunner;
-  const toplevelRes = await gitRunner(["rev-parse", "--show-toplevel"], finalCwd);
+  const runner: GitRunner = options.gitRunner || defaultGitRunner;
+  const toplevelRes = await execGit(runner, ["rev-parse", "--show-toplevel"], finalCwd);
   if (!toplevelRes.ok) {
     return { worktreePath: null, worktreeBranch: null, error: `Error: Directory is not inside a git repository (${finalCwd})` };
   }
   const repoDir = toplevelRes.stdout.trim();
   const slug = (typeof options.worktree === "string" && options.worktree) ? options.worktree : (options.name || Math.random().toString(36).substring(2, 8));
-  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(slug)) {
-    return { worktreePath: null, worktreeBranch: null, error: `Error: Invalid worktree slug` };
-  }
   if (slug.startsWith("codex/")) {
     return { worktreePath: null, worktreeBranch: null, error: `Error: Worktree branch name cannot start with codex/` };
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(slug) || slug.includes("..") || slug.endsWith(".lock") || slug.endsWith(".")) {
+    return { worktreePath: null, worktreeBranch: null, error: `Error: Invalid worktree slug` };
   }
   const branchName = `wt/${slug}`;
   const targetDir = `${repoDir}-wt-${slug}`;
   if (require("node:path").dirname(targetDir) !== require("node:path").dirname(repoDir)) {
     return { worktreePath: null, worktreeBranch: null, error: `Error: targetDir must be a sibling of repoDir` };
   }
-  const targetCommonDirRes = await gitRunner(["rev-parse", "--path-format=absolute", "--git-common-dir"], targetDir);
+  const targetCommonDirRes = await execGit(runner, ["rev-parse", "--path-format=absolute", "--git-common-dir"], targetDir);
   if (targetCommonDirRes.ok) {
-    const commonDirRes = await gitRunner(["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
+    const commonDirRes = await execGit(runner, ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
     if (commonDirRes.ok && targetCommonDirRes.stdout.trim() === commonDirRes.stdout.trim()) {
-      const targetBranchRes = await gitRunner(["rev-parse", "--abbrev-ref", "HEAD"], targetDir);
+      const targetBranchRes = await execGit(runner, ["rev-parse", "--abbrev-ref", "HEAD"], targetDir);
       if (targetBranchRes.ok && targetBranchRes.stdout.trim() === branchName) {
         return { worktreePath: targetDir, worktreeBranch: branchName };
       }
@@ -364,11 +364,11 @@ export async function setupWorktree(options: { worktree?: boolean | string; name
       return { worktreePath: null, worktreeBranch: null, error: `Error: Directory ${targetDir} already exists but is not a worktree of ${repoDir}` };
     }
   } else {
-    const branchRes = await gitRunner(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repoDir);
+    const branchRes = await execGit(runner, ["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repoDir);
     if (branchRes.ok) {
       return { worktreePath: null, worktreeBranch: null, error: `Error: Branch ${branchName} already exists` };
     }
-    const addRes = await gitRunner(["worktree", "add", "-b", branchName, targetDir, "HEAD"], repoDir);
+    const addRes = await execGit(runner, ["worktree", "add", "-b", branchName, targetDir, "HEAD"], repoDir);
     if (!addRes.ok) {
       return { worktreePath: null, worktreeBranch: null, error: `Error creating worktree: ${addRes.stderr}` };
     }

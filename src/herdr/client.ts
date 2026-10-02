@@ -1,7 +1,24 @@
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { sep } from "node:path";
 import type { HerdrCommandResult } from "../types/index.js";
+import { ANSI_PATTERN } from "./pane-text.js";
+
+function resolveFakeBinDir(): string {
+  let candidate = "/tmp";
+  try {
+    const reported = tmpdir().replace(/\/+$/, "");
+    if (reported === "/tmp" || reported === "/var/tmp" || reported.startsWith("/private/var/folders/")) candidate = reported;
+  } catch {}
+  try {
+    return realpathSync(candidate);
+  } catch {
+    return candidate;
+  }
+}
+
+const FAKE_BIN_DIR = resolveFakeBinDir();
 
 export type RunCommand = (argv: readonly string[]) => Promise<HerdrCommandResult>;
 
@@ -58,10 +75,7 @@ export function createProcessCommandAdapter(
       if (process.env.HERDR_JEV_TEST_GUARD === '1' && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
         let isTempBin = false;
         try {
-          const { realpathSync } = require("node:fs");
-          const { tmpdir } = require("node:os");
-          const { sep } = require("node:path");
-          isTempBin = realpathSync(command).startsWith(realpathSync(tmpdir()) + sep);
+          isTempBin = realpathSync(command).startsWith(FAKE_BIN_DIR + sep);
         } catch {}
         if (!isTempBin) {
           const cmdPath = args.join(" ");
@@ -114,10 +128,9 @@ function completionStateArgs(until?: readonly HerdrAgentState[], timeoutMs?: num
   return buildStateArgs(requested.length > 0 ? requested : [...HERDR_COMPLETION_STATES], timeoutMs);
 }
 
-export function readHerdrObservedState(result: HerdrCommandResult): HerdrObservedState | null {
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+function parseStructuredState(stdout: string): HerdrAgentState | null {
   try {
-    const parsed = JSON.parse(result.stdout) as {
+    const parsed = JSON.parse(stdout) as {
       state?: unknown;
       status?: unknown;
       agent_status?: unknown;
@@ -142,6 +155,17 @@ export function readHerdrObservedState(result: HerdrCommandResult): HerdrObserve
     if (state === "idle" || state === "working" || state === "blocked" || state === "done" || state === "unknown") return state;
   } catch {
   }
+  return null;
+}
+
+export function readHerdrStructuredState(result: HerdrCommandResult): HerdrAgentState | null {
+  return parseStructuredState(result.stdout);
+}
+
+export function readHerdrObservedState(result: HerdrCommandResult): HerdrObservedState | null {
+  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
+  const structured = parseStructuredState(result.stdout);
+  if (structured) return structured;
   if (/\b(?:timeout|timed[ -]?out)\b/.test(output)) return "timeout";
   if (/\bpending\b/.test(output)) return "pending";
   for (const state of ["blocked", "done", "unknown", "working", "idle"] as const) {
@@ -155,15 +179,37 @@ export function classifyHerdrCommandFailure(result: HerdrCommandResult): "reject
   return /(?:transport|timeout|timed[ -]?out|econn|eof|socket|spawn|enoent|closed|agent_not_ready|agent_blocked|agent_prompt_stalled)/.test(output) ? "unknown" : "rejected";
 }
 
-export function requiresTrustConfirmation(result: HerdrCommandResult): boolean {
-  const clean = result.stdout.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").replace(/\s+/g, " ");
-  if (/[❯>]\s*\d+\./.test(clean)) return true;
-  return /Trust and continue/i.test(clean) ||
+export type PaneBlockKind = "trust" | "selection";
+
+const SELECTION_FOOTER = /\b(?:enter|return)\s+(?:to\s+)?(?:confirm|select|choose)\b|\besc\s+to\s+cancel\b|↑\s*\/?\s*↓|\bnavigate\b/i;
+
+export function normalizePaneText(text: string): string {
+  return text.replace(ANSI_PATTERN, "").replace(/\r/g, "").replace(/\u00a0/g, " ");
+}
+
+export function looksLikeSelectionMenu(text: string): boolean {
+  const clean = normalizePaneText(text);
+  const hasFooter = SELECTION_FOOTER.test(clean.replace(/\s+/g, " "));
+  if (/(^|\n)[ \t│┃|]*[❯›>]\s*\d+[.)]\s+\S/.test(clean)) {
+    return hasFooter || /(^|\n)[ \t│┃|]*(?!\s*[❯›>])\d+[.)]\s+\S/.test(clean);
+  }
+  return hasFooter && /(^|\n)[ \t│┃|]*[❯›>][ \t]+\S/.test(clean);
+}
+
+export function classifyPaneBlock(result: HerdrCommandResult): PaneBlockKind | null {
+  const clean = normalizePaneText(result.stdout).replace(/\s+/g, " ");
+  const trust = /Trust and continue/i.test(clean) ||
          (/Yes, I trust (?:this|the) (?:folder|directory|files)/i.test(clean) && /enter (?:to )?confirm|press enter/i.test(clean)) ||
          /Do you trust this folder\?/i.test(clean) ||
          /Do you trust the contents of this project\?/i.test(clean) ||
          /trust the files in this folder/i.test(clean) ||
          /Yes, proceed/i.test(clean);
+  if (trust) return "trust";
+  return looksLikeSelectionMenu(result.stdout) ? "selection" : null;
+}
+
+export function requiresTrustConfirmation(result: HerdrCommandResult): boolean {
+  return classifyPaneBlock(result) !== null;
 }
 
 function waitResult(result: HerdrCommandResult): HerdrCommandResult {
