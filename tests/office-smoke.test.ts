@@ -363,9 +363,13 @@ test("disconnected action keys are refused with footer note", async () => {
   let output = "";
   proc.stdout?.on("data", (d) => { output += d.toString("utf8"); });
 
-  await new Promise((r) => setTimeout(r, 200));
+  const until = async (check: () => boolean) => {
+    const deadline = Date.now() + 30_000;
+    while (!check() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+  };
+  await until(() => output.length > 0);
   proc.stdin?.write("y");
-  await new Promise((r) => setTimeout(r, 200));
+  await until(() => output.includes("cannot do that while disconnected"));
   proc.kill("SIGTERM");
 
   expect(output).toContain("cannot do that while disconnected");

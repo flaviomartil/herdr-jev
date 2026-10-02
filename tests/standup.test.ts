@@ -497,6 +497,10 @@ test("executeStandupCommand concurrent claim with two calls sharing temp state d
   writeFileSync(standupFile, "Daily task for {{agent}}.", "utf-8");
 
   try {
+    let reachedSend!: () => void;
+    const sending = new Promise<void>((resolveSending) => { reachedSend = resolveSending; });
+    let releaseSend!: () => void;
+    const held = new Promise<void>((resolveHeld) => { releaseSend = resolveHeld; });
     const p1 = executeStandupCommand(
       { auto: true, file: standupFile },
       {
@@ -506,15 +510,16 @@ test("executeStandupCommand concurrent claim with two calls sharing temp state d
           { pane: "%1", agent: "alice", project: "App", state: "idle" },
         ],
         sendPeer: async () => {
-          await new Promise((r) => setTimeout(r, 60));
+          reachedSend();
+          await held;
           return { ok: true };
         },
       },
     );
 
     const p2 = (async () => {
-      await new Promise((r) => setTimeout(r, 10));
-      return executeStandupCommand(
+      await sending;
+      const second = await executeStandupCommand(
         { auto: true, file: standupFile },
         {
           stateDir: tmpDir,
@@ -525,6 +530,8 @@ test("executeStandupCommand concurrent claim with two calls sharing temp state d
           sendPeer: async () => ({ ok: true }),
         },
       );
+      releaseSend();
+      return second;
     })();
 
     const [res1, res2] = await Promise.all([p1, p2]);

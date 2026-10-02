@@ -58,7 +58,7 @@ test("idle snapshots do not claim task or turn completion", async () => {
 
 test("native deadlines can exceed the adapter default", async () => {
   const run = createProcessCommandAdapter({ timeoutMs: 5 });
-  const result = await run([process.execPath, "-e", "setTimeout(()=>console.log('finished'),50)", "--", "--timeout", "100"]);
+  const result = await run([process.execPath, "-e", "setTimeout(()=>console.log('finished'),50)", "--", "--timeout", "30000"]);
   expect(result.ok).toBe(true);
   const timedOut = await run([process.execPath, "-e", "setTimeout(()=>console.log('finished'),50)"]);
   expect(timedOut.ok).toBe(false);
