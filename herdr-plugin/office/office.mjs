@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
+import { classifyPane, jevClassificationEnabled, CLASSIFY_TAIL_LINES } from "./src/jev-classify.mjs";
 // Herdr Office: your agents, drawn as people at desks.
 //
 // Runs as a Herdr plugin pane entrypoint (see herdr-plugin.toml) but works
@@ -14,7 +14,7 @@ import { classifyPane, jevClassificationEnabled } from "./src/jev-classify.mjs";
 //   node office.mjs --no-git   do not run git in anybody's checkout
 //   node office.mjs --no-context  do not read how full anybody's context window is
 import { createHash } from "node:crypto";
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -174,6 +174,9 @@ let classifyCountMinute = 0;
 let classifyMinuteStart = Date.now();
 let notifyState = new Map();
 let notifyPending = [];
+let notifyOwner = null;
+let notifyTaskTimeoutMs = 12000;
+const notifyBin = () => process.env.HERDR_JEV_BIN || herdrJevBin;
 let lastJevPoll = 0;
 let swarmPanel = null;
 let jevAgentsCache = new Map();
@@ -417,7 +420,7 @@ function applyJevData(people = roster.people) {
     person.swarmBadge = aggregateSwarmBadge(subs);
     
     if (!DEMO && person.kind !== 'human' && !person.isSubagent) {
-      const state = notifyState.get(person.id) || { rev: -1, attention: '', status: '', escalatedRev: -1 };
+      const state = notifyState.get(person.id) || { rev: -1, attention: '', status: '', escalatedRev: -1, releasePending: false };
       const attentionNow = person.jevAttention === 'now';
       const blockedNow = person.status === 'blocked';
       const attentionChanged = attentionNow && state.attention !== 'now';
@@ -426,26 +429,32 @@ function applyJevData(people = roster.people) {
       if ((attentionChanged || blockedChanged) && !person.focused) {
          if (state.rev !== person.revision) {
              state.rev = person.revision;
-             import('./src/notify-args.mjs').then(({ buildNotifyArgs }) => {
+             import('./src/notify-args.mjs').then(({ buildNotifyArgs, officeOwner }) => {
+               notifyOwner = officeOwner;
                notifyPending.push({
-                 args: buildNotifyArgs(person),
+                 args: buildNotifyArgs(person, officeOwner),
                  onResult: (res) => {
                    if (res && res.channels && res.channels.includes('escalation')) {
                      state.escalatedRev = person.revision;
                    }
                  }
                });
-             });
+             }).catch(() => {});
          }
       }
       
-      if (process.env.HERDR_JEV_ESCALATE_BLOCKED === '1' && state.escalatedRev !== -1 && state.escalatedRev !== person.revision) {
+      if (process.env.HERDR_JEV_ESCALATE_BLOCKED === '1' && state.escalatedRev !== -1 && state.escalatedRev !== person.revision && !state.releasePending) {
+         state.releasePending = true;
          notifyPending.push({
            args: ['notify', '--release', '--pane', person.id, '--agent', person.kind || 'unknown', '--json'],
            onResult: (res) => {
+             state.releasePending = false;
              if (res && (res.sent || res.skippedReason === 'no escalation')) {
                state.escalatedRev = -1;
              }
+           },
+           onSettled: () => {
+             state.releasePending = false;
            }
          });
       }
@@ -770,6 +779,15 @@ function sayWhatWeMissed() {
   note(parts.length ? `shut${shut}: ${parts.join(', ')}` : `shut${shut}: nothing moved`, 6000);
 }
 
+function releaseOwnedEscalations() {
+  if (DEMO || process.env.HERDR_JEV_ESCALATE_BLOCKED !== '1' || !notifyOwner) return;
+  try {
+    const child = spawn(notifyBin(), ['notify', '--release-all', '--owner', notifyOwner], { stdio: 'ignore', detached: true });
+    child.on('error', () => {});
+    child.unref();
+  } catch (e) {}
+}
+
 function quit(code = 0, msg) {
   if (stopped) return;
   stopped = true;
@@ -782,15 +800,7 @@ function quit(code = 0, msg) {
   closeTheBooks();
   events?.close();
   leaveTerminal();
-  if (!DEMO && process.env.HERDR_JEV_ESCALATE_BLOCKED === '1') {
-    for (const [paneId, state] of notifyState.entries()) {
-      if (state.escalatedRev !== -1) {
-        try {
-          spawnSync(herdrJevBin, ['notify', '--release', '--pane', paneId], { stdio: 'ignore', timeout: 2000 });
-        } catch (e) {}
-      }
-    }
-  }
+  releaseOwnedEscalations();
   if (msg) process.stderr.write(`${msg}\n`);
   // The socket stays open just long enough to give the window title back and take
   // the office's pixels down with it, then goes regardless. Half a second is the
@@ -2527,7 +2537,6 @@ if (process.env.HERDR_OFFICE_TEST_UNIT === '1') {
 
 async function main() {
   if (!DEMO && !ROSTER_ARG) {
-    spawn(herdrJevBin, ['notify', '--release-all'], { stdio: 'ignore' });
     try {
       api = await new ApiClient().open();
     } catch (err) {
@@ -2680,16 +2689,17 @@ async function pollJevClassify() {
             if (done) return;
             done = true;
             clearTimeout(timer);
+            try { task.onSettled?.(); } catch (e) {}
             resolve();
           };
           const timer = setTimeout(() => {
             try { child.kill(); } catch (e) {}
             complete();
-          }, 12000);
+          }, notifyTaskTimeoutMs);
           
           let child;
           try {
-            child = spawn(herdrJevBin, task.args, { stdio: ['ignore', 'pipe', 'ignore'] });
+            child = spawn(notifyBin(), task.args, { stdio: ['ignore', 'pipe', 'ignore'] });
           } catch (e) {
             return complete();
           }
@@ -2753,7 +2763,7 @@ async function pollJevClassify() {
         continue;
       }
       
-      const text = outputLines.slice(-30).join('\n');
+      const text = outputLines.slice(-CLASSIFY_TAIL_LINES).join('\n');
       const key = `${createHash('sha1').update(text).digest('hex')}:${person.status}`;
       
       if (classifyCache.has(key)) {
@@ -2799,6 +2809,9 @@ export const _testHooks = {
   get classifyTimestamps() { return classifyTimestamps; },
   get notifyPending() { return notifyPending; },
   get notifyState() { return notifyState; },
+  get notifyOwner() { return notifyOwner; },
+  set notifyTaskTimeoutMs(v) { notifyTaskTimeoutMs = v; },
+  releaseOwnedEscalations,
   get roster() { return roster; },
   set api(v) { api = v; },
   get jevPolling() { return jevPolling; },

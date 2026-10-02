@@ -42,10 +42,56 @@ export function normalizePaneClassification(raw: any): FlatClassification {
 
 import { redactSecrets } from "../herdr/pane-text.js";
 
+export const MAX_CLASSIFY_INPUT_CHARS = 131072;
+export const MAX_CLASSIFY_PANE_TEXT_CHARS = 6000;
+const MAX_CLASSIFY_LABEL_CHARS = 40;
+
+export interface ClassifyInput {
+  paneText: string;
+  agent: string;
+  status: string;
+}
+
+function label(value: unknown): string {
+  return typeof value === "string" && value ? value.slice(0, MAX_CLASSIFY_LABEL_CHARS) : "unknown";
+}
+
+function clipTail(text: string): string {
+  if (text.length <= MAX_CLASSIFY_PANE_TEXT_CHARS) return text;
+  const tail = text.slice(-MAX_CLASSIFY_PANE_TEXT_CHARS);
+  const newline = tail.indexOf("\n");
+  return newline === -1 ? tail : tail.slice(newline + 1);
+}
+
+export function validateClassifyInput(data: unknown): ClassifyInput {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new TypeError("invalid classify-pane input: expected a JSON object");
+  }
+  const { paneText, agent, status } = data as Record<string, unknown>;
+  if (typeof paneText !== "string") {
+    throw new TypeError("invalid classify-pane input: paneText must be a string");
+  }
+  return { paneText, agent: label(agent), status: label(status) };
+}
+
+export function parseClassifyInput(raw: string): ClassifyInput {
+  if (raw.length > MAX_CLASSIFY_INPUT_CHARS) {
+    throw new RangeError("invalid classify-pane input: input too large");
+  }
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new SyntaxError("invalid classify-pane input: not valid JSON");
+  }
+  return validateClassifyInput(data);
+}
+
 export async function classifyPaneText(input: { paneText: string; agent: string; status: string }, client: ResilientJevClient): Promise<FlatClassification> {
-  const safeText = redactSecrets(input.paneText);
+  const { paneText, agent, status } = validateClassifyInput(input);
+  const safeText = clipTail(redactSecrets(clipTail(paneText)));
   const result = await client.ask(
-    { paneText: safeText, agent: input.agent, status: input.status },
+    { paneText: safeText, agent, status },
     {
       state: choice("Given paneText, the recent terminal output of a coding agent, which state is the agent in now? blocked means waiting for a human approval, answer or stuck on an error; working means actively running tools or producing output; idle means at an empty prompt with nothing pending; done means it reported completion; unknown otherwise", {
         blocked: "waiting for a human approval, answer or stuck on an error",

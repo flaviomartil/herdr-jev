@@ -3,6 +3,8 @@ import { summarize } from './summary.mjs';
 
 let inflight = null;
 
+export const CLASSIFY_TAIL_LINES = 30;
+
 export function jevClassificationEnabled(env = process.env, argv = process.argv) {
   if (Array.isArray(env)) {
     argv = env;
@@ -86,7 +88,7 @@ export async function classifyPane(paneId, revision, person, outputLines) {
 
     child.stdin.on('error', () => {});
     child.stdin.write(JSON.stringify({
-      paneText: outputLines.join('\n'),
+      paneText: outputLines.slice(-CLASSIFY_TAIL_LINES).join('\n'),
       agent: person.kind || 'unknown',
       status: person.status
     }));
