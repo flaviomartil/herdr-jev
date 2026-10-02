@@ -144,6 +144,9 @@ export function legacyConfigDir(): string {
 export function resolveConfigDirs(env: NodeJS.ProcessEnv = process.env): string[] {
   const override = absoluteDir(env.HERDR_JEV_CONFIG_DIR);
   if (override) return [override];
+  if (isTestGuardActive(env)) {
+    throw new Error("config_dir_required_in_tests");
+  }
   const configured = readToolEnv(env).configDir;
   return configured ? [configured, legacyConfigDir()] : [legacyConfigDir()];
 }
