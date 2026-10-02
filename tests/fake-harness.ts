@@ -123,7 +123,11 @@ else if (command === "model-catalog") {
   else if (roots.some((root) => path === root || path.startsWith(root + "/"))) out({ trusted: true, reason: "under_trust_root" });
   else out({ trusted: false, reason: "not_under_trust_root" });
 } else if (command === "delegation-plan") {
-  if (process.env.FAKE_PROFILE === "1") {
+  if (options["--role"] === "reviewer") out({ mode: "direct", reason: "child_role" });
+  else if (process.env.FAKE_PROFILE === "claude-fable") {
+    out({ mode: "delegate", profile: { id: "claude-fable-5", client: "claude", advisor: "fable-5",
+      executor: { model: "claude-sonnet-5", cliModel: "claude-sonnet-5-5", effort: "high" }, reviewer: { model: "opus-5", cliModel: "claude-opus-5-5", effort: "xhigh" } } });
+  } else if (process.env.FAKE_PROFILE === "1") {
     out({ mode: "delegate", profile: { id: "fake-profile", client: options["--client"], advisor: "advisor-model",
       executor: { model: "gpt-5.6-luna", cliModel: "gpt-5.6-luna-cli", effort: "high" }, reviewer: { model: "gpt-5.6-sol", cliModel: "gpt-5.6-sol-cli", effort: "xhigh" } } });
   } else out({ mode: "direct", reason: "no_profile" });
@@ -150,7 +154,8 @@ else if (command === "model-catalog") {
   const reviewDir = join(dir, "reviews", [options["--client"], options["--session"]].join("_").replace(/[^A-Za-z0-9_.-]/g, "_"));
   mkdirSync(reviewDir, { recursive: true });
   const commandJson = JSON.parse(readFileSync(options["--command-json"], "utf8"));
-  appendFileSync(join(dir, "commands.jsonl"), JSON.stringify({ command, scope: options["--scope"] || null, argv: commandJson }) + "\\n");
+  const probed = Object.fromEntries((process.env.FAKE_ENV_PROBE || "").split(",").filter(Boolean).map((name) => [name, process.env[name] === undefined ? null : process.env[name]]));
+  appendFileSync(join(dir, "commands.jsonl"), JSON.stringify({ command, scope: options["--scope"] || null, argv: commandJson, env: probed }) + "\\n");
   if (command === "review-verify") {
     if (options["--scopes"] !== undefined && mode === "legacy") fail("unknown_option:--scopes");
     const names = options["--scopes"] ? options["--scopes"].split(",") : ["default"];
@@ -182,7 +187,11 @@ else if (command === "model-catalog") {
   const reviewDir = join(dir, "reviews", [options["--client"], options["--session"]].join("_").replace(/[^A-Za-z0-9_.-]/g, "_"));
   if (!existsSync(join(reviewDir, "scopes.json"))) fail("review_not_found");
   const review = reviewStatus(reviewDir);
-  if (command === "review-findings") out({ snapshot: "snap", status: review.status, scopes: review.scopes });
+  if (command === "review-findings") {
+    const verification = process.env.FAKE_VERIFICATION_OUTPUT !== undefined && JSON.parse(readFileSync(join(reviewDir, "verify.json"), "utf8")).status === "changes_required"
+      ? { verification: { status: "failed", output: process.env.FAKE_VERIFICATION_OUTPUT } } : {};
+    out({ snapshot: "snap", status: review.status, ...verification, scopes: review.scopes });
+  }
   else out({ key: "k", revision: 1, status: review.status, scopes: review.scopes.map((item) => ({ name: item.name, verdict: item.verdict })) });
 } else if (command === "usage-record") {
   out({ recorded: true });
@@ -223,7 +232,7 @@ export function createFakeHarness(mode: FakeHarnessMode = "contract", extraEnv: 
   };
 }
 
-export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[] }> {
+export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[]; env: Record<string, string | null> }> {
   const path = join(harness.dir, "commands.jsonl");
   return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 }

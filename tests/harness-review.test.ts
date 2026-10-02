@@ -78,7 +78,7 @@ describe("scope handling", () => {
 
   it("assigns changed files to declared paths and keeps declared paths for untouched scopes", () => {
     const scopes = assignScopes(parseScopes("core=src;docs=docs/x.md;none=lib"), ["src/a.ts", "src/b.ts", "docs/x.md", "tests/a.test.ts"]);
-    expect(scopes).toEqual([{ name: "core", files: ["src/a.ts", "src/b.ts"] }, { name: "docs", files: ["docs/x.md"] }, { name: "none", files: ["lib"] }]);
+    expect(scopes).toEqual([{ name: "core", files: ["src/a.ts", "src/b.ts"], changed: ["src/a.ts", "src/b.ts"] }, { name: "docs", files: ["docs/x.md"], changed: ["docs/x.md"] }, { name: "none", files: ["lib"], changed: [] }]);
   });
 
   it("lists the files changed against the default branch, including untracked ones", () => {
@@ -102,7 +102,7 @@ describe("review through the harness", () => {
     const report = await runReview({ cwd: repo, client: "codex", session: "s-1" });
     expect(report.error).toBeUndefined();
     expect(report.status).toBe("ready");
-    expect(report.reviewer).toEqual({ source: "profile", client: "codex", model: "gpt-5.6-sol", effort: "xhigh" });
+    expect(report.reviewer).toEqual({ source: "profile", client: "codex", model: "gpt-5.6-sol-cli", effort: "xhigh" });
     expect(report.scopes.map((scope) => scope.name)).toEqual(["src", "docs", "herdr-plugin", "other"]);
 
     const verify = harness!.callsFor("review-verify");

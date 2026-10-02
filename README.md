@@ -149,7 +149,7 @@ Herdr-Jev is completely self-contained and operates seamlessly without external 
 
 ## Environment Configuration Matrix
 
-Herdr-Jev reads configuration from the process environment. At startup the CLI also loads `~/.config/herdr/.env` and the repository `.env` (see [`.env.example`](.env.example)); a variable that is already set in the environment is never overwritten by these files.
+Herdr-Jev reads configuration from the process environment. At startup the CLI also loads `~/.config/herdr/.env` and the repository `.env` (see [`.env.example`](.env.example)); a variable that is already set in the environment is never overwritten by these files. `herdr-jev review` runs the verification and the judges without the variables that came only from those files (`AI_HARNESS_ROOT` is kept), so the repository tests never run with your live settings. The test suite is hermetic in the same way: `tests/preload.ts` removes every `HERDR_JEV_*` variable before the tests run and sets only its own guard and a private state directory.
 
 ### HERDR_JEV_* variables
 
@@ -451,17 +451,21 @@ The output is one flat JSON object, with no nesting:
 ### review
 
 ```sh
-herdr-jev review [--scopes "name=path1,path2;name2=path3"] [--timeout-ms <ms>] [--verify-command-json <path>]
+herdr-jev review [--scopes "name=path1,path2;name2=path3"] [--timeout-ms <ms>] [--verify-command-json <path>] [--base <ref>]
   [--client <client>] [--cwd <path>] [--session <id>] [--model <id>] [--available-models <ids>] [--json]
 ```
 
 Runs the Harness review gate on the current repository:
 
 1. `ai-harness review-verify` with the repository test command (`bun test` when `package.json` has a `test` script; `--verify-command-json` overrides it with a JSON argv file), declaring the scopes.
-2. One `ai-harness review-judge --scope <name>` per scope, all in parallel. The judge is the read-only reviewer command of the delegation profile for the client (model and read-only arguments from the model catalog; without a profile, the reviewer model of the local matrix). Its prompt lists only the files of that scope and ends with the `REVIEW_GATE_VERDICT: APPROVE` or `REVIEW_GATE_VERDICT: CHANGES_REQUIRED` rule. `--timeout-ms` (default 600000, from 1000 to 1800000) bounds each judge.
+2. One `ai-harness review-judge --scope <name>` per scope, all in parallel. The judge is the read-only reviewer command of the delegation profile for the client (model and read-only arguments from the model catalog; without a profile, the reviewer model of the local matrix). The reviewer is always taken from the profile that the Harness returns for the advisor role of the current client and model (`delegation-plan --role reviewer` answers `child_role`, which has no profile), and the report shows the CLI model that is launched. The prompt names the review focus (correctness, error handling, security, races and fallbacks), lists only the files of that scope, states which of them changed since the base with their changed line ranges (hunk headers of `git diff -U0`, at most 20 per file), and ends with the `REVIEW_GATE_VERDICT: APPROVE` or `REVIEW_GATE_VERDICT: CHANGES_REQUIRED` rule. `--timeout-ms` (default 600000, from 1000 to 1800000) bounds each judge.
 3. `ai-harness review-findings`, whose status is the status printed.
 
-Without `--scopes`, up to four scopes are derived from the files changed against the default branch (`origin/HEAD`, `main` or `master`) plus untracked files, grouped by top-level directory; when there are more than four directories the smallest are merged into `other`. A declared scope covers the changed files under its paths, or the declared paths themselves when nothing changed there.
+Without `--scopes`, up to four scopes are derived from the files changed against the default branch (`origin/HEAD`, `main` or `master`) plus untracked files, grouped by top-level directory; when there are more than four directories the smallest are merged into `other`. A declared scope covers the changed files under its paths, or the declared paths themselves when nothing changed there; the prompt then asks the reviewer to read those files in full as they are.
+
+`--base <ref>` replaces the default branch: the changed files are those of `git diff --name-only <ref>...HEAD`, the working tree against `HEAD` and untracked files, and the line ranges come from the diff of the merge base with the working tree. Use it for work that is already merged, where the default branch shows no difference. An unknown ref fails with `invalid_base` before any Harness call.
+
+When `review-verify` answers anything but `pending_review`, no judge runs and the report prints why: the `verification` status and output stored by `review-findings` (redacted and capped by the Harness, and capped again at 4000 characters here), or, when the Harness returns none, that the check command failed with the command to rerun by hand. The text report also prints every scope verdict with its reason and stored findings; `--json` keeps the full object.
 
 A scope the Harness reports as `pending` with reason `timeout` is judged once more on the same snapshot, without a new `review-verify`; the report lists it under `retried` and a scope that stays pending is printed with its reason (`timeout` or `no_verdict`). The command never fabricates a verdict. The printed status is the Harness status (`ready`, `changes_required`, `pending_review`); it is `unavailable` when the Harness cannot answer. The exit code is 0 only for `ready`. A Harness without scope support gets a single `default` scope. Command files and the session live under `<stateDir>/review/<session>/`, never in the repository.
 

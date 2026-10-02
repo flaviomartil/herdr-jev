@@ -63,33 +63,10 @@ import { studio, studioEventPane } from "./herdr/studio.js";
 import { changeEffort } from "./herdr/effort.js";
 import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
 
-import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { envFileKeys, loadEnvFile } from "./config/env-file.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
-
-function loadEnvFile(filePath: string): void {
-  if (!existsSync(filePath)) return;
-  try {
-    const lines = readFileSync(filePath, "utf-8").split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      const eqIdx = trimmed.indexOf("=");
-      if (eqIdx <= 0) continue;
-      const key = trimmed.slice(0, eqIdx).trim();
-      let val = trimmed.slice(eqIdx + 1).trim();
-      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
-        val = val.slice(1, -1);
-      }
-      if (process.env[key] === undefined) {
-        process.env[key] = val;
-      }
-    }
-  } catch {
-    // Ignore read errors
-  }
-}
 
 // Automatically load from ~/.config/herdr/.env and repo .env
 loadEnvFile(join(homedir(), ".config/herdr/.env"));
@@ -552,19 +529,20 @@ program
   .option("--scopes <spec>", "Scopes as name=path1,path2;name2=path3; defaults to up to four scopes derived from the changed files")
   .option("--timeout-ms <ms>", "Deadline for each judge", "600000")
   .option("--verify-command-json <path>", "JSON argv file for the deterministic check; defaults to bun test when package.json has a test script")
+  .option("--base <ref>", "Review the changes since this ref (merge base with HEAD) plus the working tree; defaults to the default branch")
   .option("--client <client>", "Client whose reviewer profile is used; defaults to the caller agent")
   .option("--cwd <path>", "Repository to review; defaults to the current repository")
   .option("--session <id>", "Review session id; generated when omitted")
   .option("--model <id>", "Exact current model used to resolve the delegation profile")
   .option("--available-models <ids>", "Verified available exact model IDs, comma-separated")
   .option("--json", "Output the full report as JSON")
-  .action(async (options: { scopes?: string; timeoutMs: string; verifyCommandJson?: string; client?: string; cwd?: string; session?: string; model?: string; availableModels?: string; json?: boolean }) => {
+  .action(async (options: { scopes?: string; timeoutMs: string; verifyCommandJson?: string; base?: string; client?: string; cwd?: string; session?: string; model?: string; availableModels?: string; json?: boolean }) => {
     try {
       const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: options.cwd ?? process.cwd(), encoding: "utf8" });
       const cwd = options.cwd ?? (top.status === 0 && top.stdout.trim() ? top.stdout.trim() : process.cwd());
       const context = await resolveHerdrContext({ client: options.client, model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) });
       const report = await runReview({ cwd, client: context.client, session: options.session, scopes: options.scopes, timeoutMs: Number(options.timeoutMs),
-        verifyCommandJson: options.verifyCommandJson, model: options.model ?? context.delegation.model,
+        verifyCommandJson: options.verifyCommandJson, base: options.base, excludeEnv: envFileKeys(), model: options.model ?? context.delegation.model,
         availableModels: options.availableModels?.split(",").filter(Boolean) ?? context.delegation.availableModels });
       console.log(options.json ? JSON.stringify(report, null, 2) : formatReviewReport(report));
       if (report.status !== "ready") process.exitCode = 1;

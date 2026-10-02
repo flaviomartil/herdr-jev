@@ -164,6 +164,7 @@ export interface HarnessProbe<T> {
 export interface ProbeOptions {
   timeout?: number;
   acceptNonZeroJson?: boolean;
+  env?: NodeJS.ProcessEnv;
 }
 
 const UNSUPPORTED_ERROR = /^(?:unknown_command|invalid_external_action|unknown_option)/;
@@ -207,7 +208,7 @@ function probeInvocation(args: string[]): string[] | null {
 export function harnessProbe<T = any>(args: string[], options: ProbeOptions = {}): HarnessProbe<T> {
   const argv = probeInvocation(args);
   if (!argv) return { ok: false, error: "harness_unavailable", unsupported: true };
-  const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: options.timeout ?? 10_000, maxBuffer: 4 * 1024 * 1024, env: process.env });
+  const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: options.timeout ?? 10_000, maxBuffer: 4 * 1024 * 1024, env: options.env ?? process.env });
   if (result.error) return { ok: false, error: "harness_command_failed" };
   return interpretProbe<T>(result.status, result.stdout ?? "", result.stderr ?? "", options);
 }
@@ -216,7 +217,7 @@ export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions
   const argv = probeInvocation(args);
   if (!argv) return Promise.resolve({ ok: false, error: "harness_unavailable", unsupported: true });
   return new Promise((resolvePromise) => {
-    const child = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", "pipe", "pipe"], env: process.env });
+    const child = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
     let stdout = "";
     let stderr = "";
     let settled = false;
