@@ -60,11 +60,54 @@ function unboxLine(line: string): string {
   return line.trim().replace(/^[│┃|]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
 }
 
+const JOIN_SEPARATORS = ["", " "] as const;
+
+function neighborLine(lines: string[], from: number, step: 1 | -1): string {
+  for (let i = from + step; i >= 0 && i < lines.length; i += step) {
+    const candidate = unboxLine(lines[i]);
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+type PrevVerdict = { drop: true } | { current: string };
+
+type Redactor = (text: string) => string;
+
+function memoizedRedactor(): Redactor {
+  const cache = new Map<string, string>();
+  return (text) => {
+    let value = cache.get(text);
+    if (value === undefined) {
+      value = redactSecrets(text);
+      cache.set(text, value);
+    }
+    return value;
+  };
+}
+
+function checkPrevJoin(prevLine: string, current: string, sep: string, redact: Redactor): PrevVerdict {
+  const redactedPrev = redact(prevLine);
+  const redactedCurrent = redact(current);
+  const redactedJoin = redact(prevLine + sep + current);
+  if (redactedJoin === redactedPrev + sep + redactedCurrent) return { current };
+  if (redactedPrev === prevLine) return { drop: true };
+  if (!redactedJoin.startsWith(redactedPrev)) return { drop: true };
+  const remainder = redactedJoin.slice(redactedPrev.length).trim();
+  return remainder ? { current: remainder } : { drop: true };
+}
+
+function leaksIntoNext(current: string, nextLine: string, sep: string, redact: Redactor): boolean {
+  if (redact(current) !== current) return false;
+  return redact(current + sep + nextLine) !== current + sep + redact(nextLine);
+}
+
 export function lastMeaningfulLine(text: string): string {
   if (!text) return "";
   const cleaned = text.replace(ANSI_PATTERN, "");
   const lines = cleaned.split(/\r\n|\r|\n/);
 
+  const redact = memoizedRedactor();
   let lastActionLine: string | null = null;
   let lastFallbackLine: string | null = null;
 
@@ -73,22 +116,25 @@ export function lastMeaningfulLine(text: string): string {
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
 
-    const prevLine = i > 0 ? unboxLine(lines[i - 1]) : "";
-    const nextLine = i + 1 < lines.length ? unboxLine(lines[i + 1]) : "";
+    const prevLine = neighborLine(lines, i, -1);
+    const nextLine = neighborLine(lines, i, 1);
     let current = unboxLine(line);
-    if (prevLine && redactSecrets(prevLine + current) !== prevLine + current) {
-      const redactedPrev = redactSecrets(prevLine);
-      const redactedJoin = redactSecrets(prevLine + current);
-      if (redactedPrev === prevLine) continue;
-      if (redactedJoin !== redactedPrev + current) {
-        if (!redactedJoin.startsWith(redactedPrev)) continue;
-        const remainder = redactedJoin.slice(redactedPrev.length).trim();
-        if (!remainder) continue;
-        current = remainder;
-        line = remainder;
+    let dropped = false;
+    if (prevLine) {
+      for (const sep of JOIN_SEPARATORS) {
+        const verdict = checkPrevJoin(prevLine, current, sep, redact);
+        if ("drop" in verdict) {
+          dropped = true;
+          break;
+        }
+        if (verdict.current !== current) {
+          current = verdict.current;
+          line = verdict.current;
+        }
       }
     }
-    if (nextLine && redactSecrets(current) === current && redactSecrets(current + nextLine) !== current + nextLine) continue;
+    if (dropped) continue;
+    if (nextLine && JOIN_SEPARATORS.some((sep) => leaksIntoNext(current, nextLine, sep, redact))) continue;
 
     const isAction = /^[•●]/.test(line);
     const stripped = line.replace(/^[•●·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
@@ -117,8 +163,10 @@ const QUOTED_KEY_VALUE = new RegExp(
   `(?<!${KEY_CHAR})(?=${KEY_CHAR}*?${SECRET_WORD})(?<p>${KEY_CHAR}+["']?\\s*[:=]\\s*)${QUOTED_OR_OPEN}`,
   "gi",
 );
+const PLAIN_VALUE = `(?:(?:bearer|basic)\\s+)?[^\\s"';&,}]+(?:[;&,](?=(?<seg>[^\\s"';&,}=:]+))\\k<seg>(?![=:]))*`;
+
 const PLAIN_KEY_VALUE = new RegExp(
-  `(?<!${KEY_CHAR})(?=${KEY_CHAR}*?${SECRET_WORD})(?<p>${KEY_CHAR}+["']?\\s*[:=]\\s*)[^\\s"';&,}]+`,
+  `(?<!${KEY_CHAR})(?=${KEY_CHAR}*?${SECRET_WORD})(?<p>${KEY_CHAR}+["']?\\s*[:=]\\s*)${PLAIN_VALUE}`,
   "gi",
 );
 const QUOTED_FLAG_VALUE = new RegExp(
@@ -126,7 +174,7 @@ const QUOTED_FLAG_VALUE = new RegExp(
   "gi",
 );
 const PLAIN_FLAG_VALUE = new RegExp(
-  `(?<![a-z0-9_-])(?<p>--[a-z0-9_-]*${SECRET_WORD}\\b["']?\\s+)[^\\s"';&,}]+`,
+  `(?<![a-z0-9_-])(?<p>--[a-z0-9_-]*${SECRET_WORD}\\b["']?\\s+)${PLAIN_VALUE}`,
   "gi",
 );
 

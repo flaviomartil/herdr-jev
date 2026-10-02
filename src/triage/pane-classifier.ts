@@ -45,6 +45,7 @@ import { redactSecrets } from "../herdr/pane-text.js";
 
 export const MAX_CLASSIFY_INPUT_CHARS = 131072;
 export const MAX_CLASSIFY_PANE_TEXT_CHARS = 6000;
+const CLASSIFY_REDACT_MARGIN_CHARS = 1024;
 const MAX_CLASSIFY_LABEL_CHARS = 40;
 
 export interface ClassifyInput {
@@ -57,13 +58,24 @@ function label(value: unknown): string {
   return typeof value === "string" && value ? value.slice(0, MAX_CLASSIFY_LABEL_CHARS) : "unknown";
 }
 
-function clipTail(text: string): string {
-  if (text.length <= MAX_CLASSIFY_PANE_TEXT_CHARS) return text;
-  const tail = text.slice(-MAX_CLASSIFY_PANE_TEXT_CHARS);
-  const newline = tail.indexOf("\n");
-  if (newline !== -1) return tail.slice(newline + 1);
-  const gap = tail.search(/\s/);
-  return gap === -1 ? "" : tail.slice(gap + 1);
+function dropPartialHead(text: string): string {
+  const newline = text.indexOf("\n");
+  if (newline !== -1) {
+    const head = text.slice(0, newline).trim();
+    const rest = text.slice(newline + 1);
+    if (head.split(/\s+/).length > 2) return rest;
+    const next = rest.indexOf("\n");
+    return next === -1 ? "" : rest.slice(next + 1);
+  }
+  const tokens = /^\s*\S*\s*\S*\s*/.exec(text);
+  return tokens ? text.slice(tokens[0].length) : "";
+}
+
+function redactedTail(text: string): string {
+  const clipped = text.length > MAX_CLASSIFY_PANE_TEXT_CHARS;
+  const redacted = redactSecrets(clipped ? text.slice(-(MAX_CLASSIFY_PANE_TEXT_CHARS + CLASSIFY_REDACT_MARGIN_CHARS)) : text);
+  if (!clipped && redacted.length <= MAX_CLASSIFY_PANE_TEXT_CHARS) return redacted;
+  return dropPartialHead(redacted.slice(-MAX_CLASSIFY_PANE_TEXT_CHARS));
 }
 
 export async function readClassifyInput(stream: Readable): Promise<string> {
@@ -102,7 +114,7 @@ export function parseClassifyInput(raw: string): ClassifyInput {
 
 export async function classifyPaneText(input: { paneText: string; agent: string; status: string }, client: ResilientJevClient): Promise<FlatClassification> {
   const { paneText, agent, status } = validateClassifyInput(input);
-  const safeText = clipTail(redactSecrets(clipTail(paneText)));
+  const safeText = redactedTail(paneText);
   const result = await client.ask(
     { paneText: safeText, agent, status },
     {
