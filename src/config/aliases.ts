@@ -87,7 +87,7 @@ export function resolveBaseClientKind(client: ClientKind | string): BaseClientKi
 
   // Explicit user-configured alias map
   const aliases = loadClientAliases();
-  if (aliases[lower]) {
+  if (Object.hasOwn(aliases, lower) && aliases[lower]) {
     return aliases[lower];
   }
 
