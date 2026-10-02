@@ -33,8 +33,22 @@ Environment:
 - `HERDR_JEV_STATE_DIR`: State directory for cooldowns and escalations.
 
 ## Escalation
-If `HERDR_JEV_ESCALATE_BLOCKED=1`, notifications with high confidence (`>= 0.85`) and a natively non-working status (`idle`, `done`, `unknown`) will escalate into Herdr's native agent status, forcing the pane to `blocked`. 
-**Note:** This overrides Herdr's native status until released via `--release` or `--release-stale`. Stale escalations are cleaned up at office startup and quit.
+With Herdr 0.9.0, escalation has no effect on natively detected agents (`claude`, `codex`, `agy`, and the like) because Herdr's native detection retains authority over their status. The feature stays off by default (`HERDR_JEV_ESCALATE_BLOCKED=0`).
+
+When enabled (`HERDR_JEV_ESCALATE_BLOCKED=1`), `herdr-jev` attempts to escalate high-confidence blocked alerts (`>= 0.85`) by calling `herdr pane report-agent <pane>`. It then verifies `herdr agent get <pane>`: if `agent_status` is not `blocked`, the escalation is treated as ineffective (`escalation: "ineffective"`), no escalation record is written, and `escalation` is not listed in active channels. If it applied, stale escalations can be cleaned up via `--release`, `--release-stale`, or `--release-all`. Records whose pane no longer exists or whose release keeps failing are dropped after 3 attempts.
+
+The supported way to be alerted outside the machine is `HERDR_JEV_NOTIFY_HOOK`. When configured, `herdr-jev` executes the hook script with four arguments: `title`, `body`, `pane`, and `reason`.
+
+Example hook script:
+```bash
+#!/usr/bin/env bash
+TITLE="$1"
+BODY="$2"
+PANE="$3"
+REASON="$4"
+
+notify-send "$TITLE" "$BODY (pane $PANE, reason $REASON)"
+```
 
 ## Rate Policy & Cost Control
 Classification calls are heavily optimized to prevent unnecessary costs:
