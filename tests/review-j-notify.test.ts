@@ -160,7 +160,7 @@ test("finding 7: the escalation record exists before report-agent runs and is re
   expect(readRecords()).toEqual([]);
 });
 
-test("finding 7: a crash between report-agent and verification leaves a record for release", async () => {
+test("finding 7: a crash during report-agent leaves a record for release", async () => {
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
   const runner = async (argv: readonly string[]) => {
     if (argv.includes("report-agent")) {
@@ -171,7 +171,7 @@ test("finding 7: a crash between report-agent and verification leaves a record f
   };
   const res = await handleNotifyCommand(blockedOpts("w1:j7b", { now: Date.now() }), runner);
   expect(res.escalation).toBe("ineffective");
-  expect(readRecords()).toEqual([]);
+  expect(readRecords().map((r) => r.pane)).toEqual(["w1:j7b"]);
 });
 
 test("finding 7: a failed report restores the record it displaced and a verified one keeps its record", async () => {

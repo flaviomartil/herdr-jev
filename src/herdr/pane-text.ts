@@ -63,8 +63,26 @@ function unboxLine(line: string): string {
 
 const JOIN_SEPARATORS = ["", " "] as const;
 
-function neighborLine(lines: string[], from: number, step: 1 | -1): string {
-  for (let i = from + step; i >= 0 && i < lines.length; i += step) {
+const WRAP_CONTEXT_LINES = 6;
+const WRAP_CONTEXT_CHARS = 4096;
+
+const LIKELY_CHUNK = /^\S*[^A-Za-z\s]/;
+
+function precedingLines(lines: string[], from: number): string[] {
+  const found: string[] = [];
+  let size = 0;
+  for (let i = from - 1; i >= 0 && found.length < WRAP_CONTEXT_LINES; i--) {
+    const candidate = unboxLine(lines[i]);
+    if (!candidate) continue;
+    size += candidate.length;
+    if (size > WRAP_CONTEXT_CHARS) break;
+    found.push(candidate);
+  }
+  return found;
+}
+
+function followingLine(lines: string[], from: number): string {
+  for (let i = from + 1; i < lines.length; i++) {
     const candidate = unboxLine(lines[i]);
     if (candidate) return candidate;
   }
@@ -98,9 +116,13 @@ function checkPrevJoin(prevLine: string, current: string, sep: string, redact: R
   return remainder ? { current: remainder } : { drop: true };
 }
 
-function leaksIntoNext(current: string, nextLine: string, sep: string, redact: Redactor): boolean {
-  if (redact(current) !== current) return false;
-  return redact(current + sep + nextLine) !== current + sep + redact(nextLine);
+function leaksIntoNext(current: string, following: string, sep: string, redact: Redactor): boolean {
+  const redacted = redact(current);
+  const joined = redact(current + sep + following);
+  if (joined === redacted + sep + redact(following)) return false;
+  if (redacted === current) return true;
+  if (!joined.startsWith(redacted)) return true;
+  return joined.slice(redacted.length).trimStart().startsWith("[REDACTED]");
 }
 
 export function lastMeaningfulLine(text: string): string {
@@ -117,22 +139,22 @@ export function lastMeaningfulLine(text: string): string {
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
 
-    const prevLine = neighborLine(lines, i, -1);
-    const nextLine = neighborLine(lines, i, 1);
+    const before = precedingLines(lines, i);
+    const nextLine = followingLine(lines, i);
     let current = unboxLine(line);
     let dropped = false;
-    if (prevLine) {
-      for (const sep of JOIN_SEPARATORS) {
-        const verdict = checkPrevJoin(prevLine, current, sep, redact);
+    for (const sep of JOIN_SEPARATORS) {
+      for (let k = 1; k <= before.length && !dropped; k++) {
+        if (k > 1 && (/\s/.test(before[k - 2]) || !LIKELY_CHUNK.test(current))) break;
+        const verdict = checkPrevJoin(before.slice(0, k).reverse().join(sep), current, sep, redact);
         if ("drop" in verdict) {
           dropped = true;
-          break;
-        }
-        if (verdict.current !== current) {
+        } else if (verdict.current !== current) {
           current = verdict.current;
           line = verdict.current;
         }
       }
+      if (dropped) break;
     }
     if (dropped) continue;
     if (nextLine && JOIN_SEPARATORS.some((sep) => leaksIntoNext(current, nextLine, sep, redact))) continue;
@@ -215,12 +237,12 @@ export function redactSecrets(text: string): string {
   result = result.replace(/\b(?:sk-[a-zA-Z0-9_-]+|ghp_[a-zA-Z0-9]+|xoxb-[a-zA-Z0-9_-]+|glpat-[a-zA-Z0-9_-]+)\b/g, "[REDACTED]");
   result = result.replace(/\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g, "[REDACTED]");
   result = result.replace(
-    /(?<![a-zA-Z0-9+.-])([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s:@/]+):([^\s@]{1,2048})@/g,
+    /(?<![a-zA-Z0-9+.-])([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s:@/]+):([^\s]{1,2048})@/g,
     (match, scheme: string, user: string, rest: string) =>
       looksLikeHostAndPort(user, rest) ? match : `${scheme}${user}:[REDACTED]@`,
   );
   result = result.replace(
-    /(?<![a-zA-Z0-9_.~%-])([a-zA-Z0-9_.~%-]+):([^\s@/]{1,512})@/g,
+    /(?<![a-zA-Z0-9_.~%-])([a-zA-Z0-9_.~%-]+):([^\s/]{1,512})@/g,
     "$1:[REDACTED]@",
   );
   result = result.replace(/\b(?=[0-9a-fA-F]{0,128}[0-9])[0-9a-fA-F]{32,}\b/g, "[REDACTED]");

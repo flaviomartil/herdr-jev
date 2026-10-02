@@ -194,7 +194,7 @@ function releaseFixture(): string {
   return bin;
 }
 
-test("round 2 finding 6: a release that succeeded still answers when the record cannot be removed", async () => {
+test("round 2 finding 6: a release that succeeded but whose record cannot be removed is reported as an update failure", async () => {
   if (isRoot) return;
   releaseFixture();
   const runner = async (argv: readonly string[]) => {
@@ -203,7 +203,7 @@ test("round 2 finding 6: a release that succeeded still answers when the record 
   };
   const res = await handleNotifyCommand({ release: true, pane: "w1:r6" }, runner);
   chmodSync(notifyDir(), 0o755);
-  expect(res).toEqual({ sent: true, channels: ["release"] });
+  expect(res).toEqual({ sent: false, skippedReason: "escalation update failed", channels: [] });
   expect(readRecords()).toHaveLength(1);
 });
 
@@ -220,7 +220,7 @@ test("round 2 finding 6: the release command prints its JSON result when the boo
   const res = spawnSync(process.execPath, [CLI, "notify", "--release", "--pane", "w1:r6", "--json"], { env, encoding: "utf-8", timeout: 60_000 });
   chmodSync(notifyDir(), 0o755);
   expect(res.status).toBe(0);
-  expect(JSON.parse(res.stdout)).toEqual({ sent: true, channels: ["release"] });
+  expect(JSON.parse(res.stdout)).toEqual({ sent: false, skippedReason: "escalation update failed", channels: [] });
 });
 
 test("round 2 finding 6: a pane that is gone but whose record cannot be removed is reported, not thrown", async () => {
