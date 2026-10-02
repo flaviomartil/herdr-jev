@@ -62,6 +62,7 @@ const HOOK_TIMEOUT_MS = 5_000;
 const HOOK_KILL_GRACE_MS = 1_000;
 const OUTBOUND_TITLE_LIMIT = 2_048;
 const OUTBOUND_TASK_LIMIT = 1_024;
+const TRANSIENT_GRACE_MS = 6 * 60 * 60 * 1000;
 const TRANSIENT_FAILURE = /(?:connection (?:refused|reset|closed)|econn|socket|transport|timed[ -]?out|timeout|not running|unavailable|temporar|broken pipe|\beof\b|enoent|spawn)/i;
 
 export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string | undefined {
@@ -127,21 +128,60 @@ function sleep(ms: number): Promise<void> {
 
 type TakeOver = "taken" | "missing" | "fresh" | "failed";
 
-export function takeOverStale(file: string, isStale: (path: string) => boolean): TakeOver {
-  const suffix = `${process.pid}.${randomBytes(4).toString("hex")}`;
-  const snapshot = `${file}.${suffix}.stale`;
+function restoreGrave(file: string, grave: string) {
   try {
-    linkSync(file, snapshot);
+    linkSync(grave, file);
+  } catch (e: any) {
+    if (e?.code !== "EEXIST") {
+      try {
+        renameSync(grave, file);
+        return;
+      } catch (err) {}
+    }
+  }
+  try { unlinkSync(grave); } catch (e) {}
+}
+
+function takeOverWithoutSnapshot(file: string, grave: string, isStale: (path: string) => boolean): TakeOver {
+  try {
+    renameSync(file, grave);
   } catch (e: any) {
     return e?.code === "ENOENT" ? "missing" : "failed";
   }
   let stale = false;
+  try { stale = isStale(grave); } catch (e) {}
+  if (stale) {
+    try { unlinkSync(grave); } catch (e) {}
+    return "taken";
+  }
+  restoreGrave(file, grave);
+  return "fresh";
+}
+
+export function takeOverStale(file: string, isStale: (path: string) => boolean): TakeOver {
+  const suffix = `${process.pid}.${randomBytes(4).toString("hex")}`;
+  const snapshot = `${file}.${suffix}.stale`;
+  const grave = `${file}.${suffix}.grave`;
+  try {
+    linkSync(file, snapshot);
+  } catch (e: any) {
+    if (e?.code === "ENOENT") return "missing";
+    return takeOverWithoutSnapshot(file, grave, isStale);
+  }
+  let stale = false;
   try { stale = isStale(snapshot); } catch (e) {}
+  if (stale) {
+    try {
+      if (statSync(file).ino !== statSync(snapshot).ino) stale = false;
+    } catch (e: any) {
+      try { unlinkSync(snapshot); } catch (err) {}
+      return e?.code === "ENOENT" ? "missing" : "failed";
+    }
+  }
   if (!stale) {
     try { unlinkSync(snapshot); } catch (e) {}
     return "fresh";
   }
-  const grave = `${file}.${suffix}.grave`;
   try {
     renameSync(file, grave);
   } catch (e: any) {
@@ -151,11 +191,12 @@ export function takeOverStale(file: string, isStale: (path: string) => boolean):
   let sameFile = false;
   try { sameFile = statSync(grave).ino === statSync(snapshot).ino; } catch (e) {}
   try { unlinkSync(snapshot); } catch (e) {}
-  if (!sameFile) {
-    try { linkSync(grave, file); } catch (e) {}
+  if (sameFile) {
+    try { unlinkSync(grave); } catch (e) {}
+    return "taken";
   }
-  try { unlinkSync(grave); } catch (e) {}
-  return sameFile ? "taken" : "fresh";
+  restoreGrave(file, grave);
+  return "fresh";
 }
 
 function releaseLock(lockFile: string, token: string) {
@@ -198,6 +239,15 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
     writeEscalations(file, mutate(readEscalations(file)));
   } finally {
     releaseLock(lockFile, token);
+  }
+}
+
+async function tryUpdateEscalations(file: string, mutate: (records: EscalationRecord[]) => EscalationRecord[]): Promise<boolean> {
+  try {
+    await updateEscalations(file, mutate);
+    return true;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -295,7 +345,8 @@ function isPaneGone(res: { stdout?: string; stderr?: string }): boolean {
   return false;
 }
 
-function isTransientFailure(res: { stdout?: string; stderr?: string }): boolean {
+function isTransientFailure(res: { stdout?: string; stderr?: string }, record: EscalationRecord, now: number): boolean {
+  if (now - record.time > TRANSIENT_GRACE_MS) return false;
   return TRANSIENT_FAILURE.test(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
 }
 
@@ -328,21 +379,35 @@ function runHook(hook: string, args: string[], timeoutMs: number, killGraceMs: n
     };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(hook, args, { stdio: "ignore" });
+      child = spawn(hook, args, { stdio: "ignore", detached: process.platform !== "win32" });
     } catch (e) {
       finish(false);
       return;
     }
     child.unref();
+    const signal = (name: NodeJS.Signals) => {
+      if (process.platform !== "win32" && child.pid) {
+        try {
+          process.kill(-child.pid, name);
+          return;
+        } catch (e) {}
+      }
+      try { child.kill(name); } catch (e) {}
+    };
+    let timedOut = false;
     timer = setTimeout(() => {
-      try { child.kill("SIGTERM"); } catch (e) {}
+      timedOut = true;
+      signal("SIGTERM");
       killTimer = setTimeout(() => {
-        try { child.kill("SIGKILL"); } catch (e) {}
+        signal("SIGKILL");
         finish(false);
       }, killGraceMs);
     }, timeoutMs);
     child.on("error", () => finish(false));
-    child.on("close", (code, signal) => finish(code === 0 && signal === null));
+    child.on("close", (code, exitSignal) => {
+      if (timedOut) signal("SIGKILL");
+      finish(code === 0 && exitSignal === null);
+    });
   });
 }
 
@@ -427,7 +492,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         writeFileSync(claimFile, JSON.stringify({ time: now, owner: claimToken }), { flag: "wx" });
         claimed = true;
       } catch (e: any) {
-        if (e?.code !== "EEXIST") return { sent: false, skippedReason: "cooldown", channels: [] };
+        if (e?.code !== "EEXIST") return { sent: false, skippedReason: "claim failed", channels: [] };
         let stale: boolean;
         try {
           stale = claimStale(claimFile, now);
@@ -437,9 +502,8 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         if (!stale) return { sent: false, skippedReason: "cooldown", channels: [] };
         await hooks.afterStaleClaimSeen?.();
         const outcome = takeOverStale(claimFile, (grave) => claimStale(grave, now));
-        if (outcome === "fresh" || outcome === "failed") {
-          return { sent: false, skippedReason: "cooldown", channels: [] };
-        }
+        if (outcome === "failed") return { sent: false, skippedReason: "claim failed", channels: [] };
+        if (outcome === "fresh") return { sent: false, skippedReason: "cooldown", channels: [] };
       }
     }
     if (!claimed) return { sent: false, skippedReason: "cooldown", channels: [] };
@@ -585,7 +649,9 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
   const paneRes = await runner([herdrBin, "pane", "get", pane]);
   if (!paneRes.ok && isPaneGone(paneRes)) {
-    await updateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key));
+    if (!(await tryUpdateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key)))) {
+      return { sent: false, skippedReason: "escalation update failed", channels: [] };
+    }
     return { sent: true, channels: ["release"] };
   }
 
@@ -593,13 +659,13 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
     ? await runner([herdrBin, "pane", "release-agent", pane, "--source", "herdr-jev", "--agent", record.agent])
     : paneRes;
   if (!res.ok) {
-    if (!isTransientFailure(res)) {
-      await updateEscalations(escalationsFile, (records) => bumpAttempts(records, new Set([key])));
+    if (!isTransientFailure(res, record, Date.now())) {
+      await tryUpdateEscalations(escalationsFile, (records) => bumpAttempts(records, new Set([key])));
     }
     return { sent: false, skippedReason: "release failed", channels: [] };
   }
 
-  await updateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key));
+  await tryUpdateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key));
   return { sent: true, channels: ["release"] };
 }
 
@@ -608,6 +674,7 @@ async function releaseRecords(
   escalationsFile: string,
   runner: RunCommand,
   shouldRelease: (record: EscalationRecord) => boolean,
+  now: number,
 ): Promise<number> {
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
   const done = new Set<string>();
@@ -625,7 +692,7 @@ async function releaseRecords(
       : paneRes;
     if (res.ok) {
       done.add(recordKey(record));
-    } else if (!isTransientFailure(res)) {
+    } else if (!isTransientFailure(res, record, now)) {
       failed.add(recordKey(record));
       if ((record.attempts || 0) + 1 >= MAX_RELEASE_ATTEMPTS) exhausted++;
     }
@@ -647,6 +714,7 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
       escalationsFile,
       runner,
       (record) => now - record.time > RELEASE_STALE_AGE_MS,
+      now,
     );
     return { sent: released > 0, channels: ["release-stale"] };
   } catch (e) {
@@ -665,7 +733,7 @@ async function handleReleaseAll(runner: RunCommand, owner?: string): Promise<{ s
     );
     if (eligible.length === 0) return { sent: false, channels: [] };
 
-    const released = await releaseRecords(eligible, escalationsFile, runner, () => true);
+    const released = await releaseRecords(eligible, escalationsFile, runner, () => true, Date.now());
     return { sent: released > 0, channels: ["release-all"] };
   } catch (e) {
     return { sent: false, channels: [] };
