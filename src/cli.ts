@@ -943,6 +943,8 @@ program.command("notify")
   .option("--confidence <n>", "Confidence score")
   .option("--native-status <s>", "Native status")
   .option("--agent <label>", "Agent label")
+  .option("--jev-state <s>", "Jev state")
+  .option("--reason-confidence <n>", "Reason confidence score")
   .option("--dry-run", "Dry run")
   .option("--json", "JSON output")
   .option("--release", "Release escalation")
@@ -952,6 +954,7 @@ program.command("notify")
     const { handleNotifyCommand } = await import("./herdr/notify.js");
     const { createProcessCommandAdapter } = await import("./herdr/client.js");
     if (options.confidence !== undefined) options.confidence = parseFloat(options.confidence);
+    if (options.reasonConfidence !== undefined) options.reasonConfidence = parseFloat(options.reasonConfidence);
     const result = await handleNotifyCommand(options, createProcessCommandAdapter());
     if (options.json) {
       console.log(JSON.stringify(result));

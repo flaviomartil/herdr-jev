@@ -70,7 +70,7 @@ echo '{"state":"blocked","stateConfidence":0.92,"attention":"now","attentionScor
   expect(office._testHooks.classifyCountMinute).toBe(1); 
 });
 
-test("office transition calls notify exactly once per revision", () => {
+test("office transition calls notify exactly once per revision", async () => {
   const office = require("../herdr-plugin/office/office.mjs");
   const { notifyPending, roster } = office._testHooks;
   notifyPending.length = 0;
@@ -84,6 +84,7 @@ test("office transition calls notify exactly once per revision", () => {
   office._testHooks.classifyCache.set("hash1", { attention: "now", state: "blocked", confidence: 0.9, blockedReason: "none" });
   
   office._testHooks.applyJevData();
+  await new Promise(r => setTimeout(r, 100));
   
   expect(notifyPending.length).toBe(1);
   expect(notifyPending[0].args).toEqual(['notify', '--pane', 'p_notify', '--project', 'test', '--task', 'Task', '--attention', 'now', '--reason', 'none', '--confidence', '0.9', '--native-status', 'idle', '--jev-state', 'blocked', '--reason-confidence', '0', '--agent', 'codex', '--json']);
@@ -91,6 +92,7 @@ test("office transition calls notify exactly once per revision", () => {
   notifyPending.length = 0;
   
   office._testHooks.applyJevData();
+  await new Promise(r => setTimeout(r, 100));
   expect(notifyPending.length).toBe(0);
   
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
@@ -98,17 +100,21 @@ test("office transition calls notify exactly once per revision", () => {
 
   roster.people[0].revision = 2;
   office._testHooks.applyJevData();
+  await new Promise(r => setTimeout(r, 100));
   expect(notifyPending.length).toBe(1); 
   expect(notifyPending[0].args[1]).toBe('--release');
+  if (notifyPending[0].onResult) notifyPending[0].onResult({ sent: true });
   notifyPending.length = 0;
 
   office._testHooks.classifyCache.set("hash1", { attention: "none", state: "idle", confidence: 0.9 });
   office._testHooks.applyJevData();
+  await new Promise(r => setTimeout(r, 100));
   expect(notifyPending.length).toBe(0); 
   
   roster.people[0].revision = 3;
   office._testHooks.classifyCache.set("hash1", { attention: "now", state: "blocked", confidence: 0.9 });
   office._testHooks.applyJevData();
+  await new Promise(r => setTimeout(r, 100));
   expect(notifyPending.length).toBe(1);
   expect(notifyPending[0].args[1]).toBe('--pane');
 });
