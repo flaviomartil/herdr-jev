@@ -17,7 +17,8 @@ export interface FakeHarness {
 }
 
 const SCRIPT = `#!${process.execPath}
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -105,10 +106,20 @@ function legacyAllowed() {
   return ["delegation-plan", "review-status", "review-verify", "review-judge", "external-run"].includes(command);
 }
 
+if (process.env.FAKE_STDERR_NOISE === "1") process.stderr.write("warning: unrelated noise\\n");
+if (process.env.FAKE_EMPTY_COMMAND === command) process.exit(0);
+if (process.env.FAKE_HANG === command) {
+  const grandchild = spawn("sleep", ["120"], { stdio: "ignore" });
+  writeFileSync(join(dir, "grandchild.pid"), String(grandchild.pid));
+  await new Promise(() => {});
+}
 if (mode === "unknown" && !["delegation-plan", "usage-record"].includes(command)) fail("unknown_command");
 if (mode === "legacy" && !legacyAllowed() && !["usage-record"].includes(command)) fail("unknown_command");
 
-if (command === "model-resolve") resolveModel();
+if (command === "model-resolve") {
+  if (process.env.FAKE_FAIL_MODEL_RESOLVE === "1") fail("model_resolve_down");
+  resolveModel();
+}
 else if (command === "model-catalog") {
   const clients = {};
   for (const [name, entry] of Object.entries(CATALOG)) {
@@ -123,6 +134,7 @@ else if (command === "model-catalog") {
   else if (roots.some((root) => path === root || path.startsWith(root + "/"))) out({ trusted: true, reason: "under_trust_root" });
   else out({ trusted: false, reason: "not_under_trust_root" });
 } else if (command === "delegation-plan") {
+  if (process.env.FAKE_DELEGATION_RAW) { process.stdout.write(process.env.FAKE_DELEGATION_RAW + "\\n"); process.exit(0); }
   if (options["--role"] === "reviewer") out({ mode: "direct", reason: "child_role" });
   else if (process.env.FAKE_PROFILE === "claude-fable") {
     out({ mode: "delegate", profile: { id: "claude-fable-5", client: "claude", advisor: "fable-5",
@@ -154,8 +166,10 @@ else if (command === "model-catalog") {
   const reviewDir = join(dir, "reviews", [options["--client"], options["--session"]].join("_").replace(/[^A-Za-z0-9_.-]/g, "_"));
   mkdirSync(reviewDir, { recursive: true });
   const commandJson = JSON.parse(readFileSync(options["--command-json"], "utf8"));
+  const fileMode = statSync(options["--command-json"]).mode & 0o777;
+  if (command === "review-verify" && process.env.FAKE_VERIFY_ERROR) fail(process.env.FAKE_VERIFY_ERROR);
   const probed = Object.fromEntries((process.env.FAKE_ENV_PROBE || "").split(",").filter(Boolean).map((name) => [name, process.env[name] === undefined ? null : process.env[name]]));
-  appendFileSync(join(dir, "commands.jsonl"), JSON.stringify({ command, scope: options["--scope"] || null, argv: commandJson, env: probed }) + "\\n");
+  appendFileSync(join(dir, "commands.jsonl"), JSON.stringify({ command, scope: options["--scope"] || null, argv: commandJson, env: probed, mode: fileMode }) + "\\n");
   if (command === "review-verify") {
     if (options["--scopes"] !== undefined && mode === "legacy") fail("unknown_option:--scopes");
     const names = options["--scopes"] ? options["--scopes"].split(",") : ["default"];
@@ -193,8 +207,18 @@ else if (command === "model-catalog") {
     out({ snapshot: "snap", status: review.status, ...verification, scopes: review.scopes });
   }
   else out({ key: "k", revision: 1, status: review.status, scopes: review.scopes.map((item) => ({ name: item.name, verdict: item.verdict })) });
+} else if (command === "quota-normalize") {
+  const request = JSON.parse(options["--request-json"]);
+  if (process.env.FAKE_QUOTA_FAIL_PERCENT !== undefined && String(request.remainingPercent) === process.env.FAKE_QUOTA_FAIL_PERCENT) fail("quota_down");
+  out({ provider: request.provider, scope: request.scope, freshness: "fresh", status: request.remainingPercent !== null && request.remainingPercent <= 0 ? "exhausted" : "available", via: "harness" });
 } else if (command === "usage-record") {
-  out({ recorded: true });
+  if (process.env.FAKE_SPLIT_UTF8 === "1") {
+    const bytes = Buffer.from(JSON.stringify({ recorded: true, note: "日本語😀" }) + "\\n");
+    const cut = bytes.indexOf(0xf0) + 2;
+    process.stdout.write(bytes.subarray(0, cut));
+    await new Promise((resolveWait) => setTimeout(resolveWait, 80));
+    process.stdout.write(bytes.subarray(cut));
+  } else out({ recorded: true });
 } else fail("unknown_command");
 `;
 
@@ -232,7 +256,7 @@ export function createFakeHarness(mode: FakeHarnessMode = "contract", extraEnv: 
   };
 }
 
-export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[]; env: Record<string, string | null> }> {
+export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[]; env: Record<string, string | null>; mode: number }> {
   const path = join(harness.dir, "commands.jsonl");
   return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 }

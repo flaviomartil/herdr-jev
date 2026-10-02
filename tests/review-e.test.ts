@@ -214,14 +214,14 @@ test("item 3: a stale lock takeover never removes a lock that another writer jus
   writeFileSync(lock, "dead-owner");
   utimesSync(lock, pastDate(60000), pastDate(60000));
 
-  const started = Date.now();
-  let mutatedAfter = -1;
+  let competitorLockRemoved = false;
+  let removedBeforeMutate = false;
   let lockSeenByMutate = "";
-  setTimeout(() => rmSync(lock, { force: true }), 300);
+  setTimeout(() => { competitorLockRemoved = true; rmSync(lock, { force: true }); }, 300);
   await updateEscalations(
     escalationsFile(),
     (records) => {
-      mutatedAfter = Date.now() - started;
+      removedBeforeMutate = competitorLockRemoved;
       lockSeenByMutate = readFileSync(lock, "utf-8");
       return records;
     },
@@ -232,7 +232,7 @@ test("item 3: a stale lock takeover never removes a lock that another writer jus
       },
     },
   );
-  expect(mutatedAfter).toBeGreaterThanOrEqual(250);
+  expect(removedBeforeMutate).toBe(true);
   expect(lockSeenByMutate).not.toBe("competitor-token");
   expect(existsSync(lock)).toBe(false);
   expect(readdirSync(notifyDir()).filter((name) => name.endsWith(".stale"))).toEqual([]);

@@ -78,7 +78,7 @@ describe("scope handling", () => {
 
   it("assigns changed files to declared paths and keeps declared paths for untouched scopes", () => {
     const scopes = assignScopes(parseScopes("core=src;docs=docs/x.md;none=lib"), ["src/a.ts", "src/b.ts", "docs/x.md", "tests/a.test.ts"]);
-    expect(scopes).toEqual([{ name: "core", files: ["src/a.ts", "src/b.ts"], changed: ["src/a.ts", "src/b.ts"] }, { name: "docs", files: ["docs/x.md"], changed: ["docs/x.md"] }, { name: "none", files: ["lib"], changed: [] }]);
+    expect(scopes).toEqual([{ name: "core", files: ["src/a.ts", "src/b.ts"], changed: ["src/a.ts", "src/b.ts"] }, { name: "docs", files: ["docs/x.md"], changed: ["docs/x.md"] }, { name: "none", files: ["lib"], changed: [] }, { name: "uncovered", files: ["tests/a.test.ts"], changed: ["tests/a.test.ts"] }]);
   });
 
   it("lists the files changed against the default branch, including untracked ones", () => {
@@ -89,7 +89,7 @@ describe("scope handling", () => {
 
   it("builds a judge prompt that lists only the scope files and ends with the verdict rule", () => {
     const prompt = buildJudgePrompt({ name: "src", files: ["src/a.ts", "src/b.ts"] }, "main");
-    expect(prompt).toContain("- src/a.ts\n- src/b.ts");
+    expect(prompt).toContain('- "src/a.ts"\n- "src/b.ts"');
     expect(prompt).not.toContain("docs/x.md");
     expect(prompt.split("\n").at(-1)).toBe("End with exactly one final line: REVIEW_GATE_VERDICT: APPROVE or REVIEW_GATE_VERDICT: CHANGES_REQUIRED");
     expect(buildJudgePrompt({ name: "big", files: Array.from({ length: 250 }, (_, i) => `f${i}.ts`) }, null)).toContain("- ... and 50 more files in this scope");
@@ -125,8 +125,8 @@ describe("review through the harness", () => {
       expect(prompt.split("\n").at(-1)).toContain("REVIEW_GATE_VERDICT: APPROVE or REVIEW_GATE_VERDICT: CHANGES_REQUIRED");
     }
     const src = judged.find((entry) => entry.scope === "src")!.argv[2]!;
-    expect(src).toContain("- src/a.ts");
-    expect(src).toContain("- src/b.ts");
+    expect(src).toContain('- "src/a.ts"');
+    expect(src).toContain('- "src/b.ts"');
     for (const other of ["docs/x.md", "README.md", "tests/a.test.ts", "herdr-plugin/p.mjs"]) expect(src).not.toContain(other);
     expect(harness!.callsFor("review-findings")).toHaveLength(1);
     expect(formatReviewReport(report)).toContain("Status: ready");
@@ -136,10 +136,10 @@ describe("review through the harness", () => {
     install("contract", { FAKE_PROFILE: "1", FAKE_VERDICTS: "docs=CHANGES_REQUIRED" });
     const report = await runReview({ cwd: repo, client: "codex", session: "s-2", scopes: "core=src;docs=docs" });
     expect(report.status).toBe("changes_required");
-    expect(report.judges).toHaveLength(2);
+    expect(report.judges).toHaveLength(3);
     expect(report.judges.find((judge) => judge.scope === "docs")!.status).toBe("changes_required");
     const verdicts = (report.findings as any).scopes.map((scope: any) => [scope.name, scope.verdict]);
-    expect(verdicts).toEqual([["core", "APPROVE"], ["docs", "CHANGES_REQUIRED"]]);
+    expect(verdicts).toEqual([["core", "APPROVE"], ["docs", "CHANGES_REQUIRED"], ["uncovered", "APPROVE"]]);
     expect(formatReviewReport(report)).toContain("findings for docs: CHANGES_REQUIRED");
     expect(formatReviewReport(report)).toContain("Status: changes_required");
   });
@@ -227,7 +227,7 @@ describe("review through the harness", () => {
     expect(judge).not.toContain("--timeout-ms");
     expect(harness!.callsFor("review-findings")[0]![0]).toBe("review-findings");
     const prompt = fakeHarnessCommands(harness!).find((entry) => entry.command === "review-judge")!.argv[2]!;
-    for (const file of ["src/a.ts", "docs/x.md", "herdr-plugin/p.mjs"]) expect(prompt).toContain(`- ${file}`);
+    for (const file of ["src/a.ts", "docs/x.md", "herdr-plugin/p.mjs"]) expect(prompt).toContain(`- "${file}"`);
   });
 
   it("never invents a status when the harness is unavailable", async () => {
@@ -259,7 +259,7 @@ describe("herdr-jev review and models catalog commands", () => {
     const report = JSON.parse(approved.stdout);
     expect(report.status).toBe("ready");
     expect(report.session).toBe("cli-1");
-    expect(report.scopes.map((scope: any) => scope.name)).toEqual(["core", "docs"]);
+    expect(report.scopes.map((scope: any) => scope.name)).toEqual(["core", "docs", "uncovered"]);
 
     process.env.FAKE_VERDICTS = "core=CHANGES_REQUIRED";
     try {

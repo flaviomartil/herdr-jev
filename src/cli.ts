@@ -561,34 +561,39 @@ program.command("peer-message [agent] [text]")
   .option("--lines <n>", "Terminal snapshot line limit", "2000")
   .option("--timeout-ms <ms>", "Peer wait deadline", "900000")
   .action(async (agentOrText: string | undefined, maybeText: string | undefined, options: { all?: boolean; exclude?: string; wait?: boolean; lines: string; timeoutMs: string }) => {
-    if (options.all) {
-      if (maybeText !== undefined) throw new Error("Cannot specify both <agent> and --all");
-      if (!agentOrText?.trim()) throw new Error("A nonempty message is required");
-      const result = await converseWithPeer({
-        all: true,
-        text: agentOrText,
-        exclude: options.exclude,
+    try {
+      if (options.all) {
+        if (maybeText !== undefined) throw new Error("Cannot specify both <agent> and --all");
+        if (!agentOrText?.trim()) throw new Error("A nonempty message is required");
+        const result = await converseWithPeer({
+          all: true,
+          text: agentOrText,
+          exclude: options.exclude,
+          wait: options.wait,
+          lines: Number(options.lines),
+          timeoutMs: Number(options.timeoutMs),
+        });
+        console.log(result);
+        try {
+          const items = JSON.parse(result);
+          if (Array.isArray(items) && items.some((item: any) => !item.acknowledged)) {
+            process.exitCode = 1;
+          }
+        } catch {}
+        return;
+      }
+      if (!agentOrText || !maybeText) throw new Error("Peer agent handle and message text are required");
+      console.log(await converseWithPeer({
+        target: agentOrText,
+        text: maybeText,
         wait: options.wait,
         lines: Number(options.lines),
         timeoutMs: Number(options.timeoutMs),
-      });
-      console.log(result);
-      try {
-        const items = JSON.parse(result);
-        if (Array.isArray(items) && items.some((item: any) => !item.acknowledged)) {
-          process.exitCode = 1;
-        }
-      } catch {}
-      return;
+      }));
+    } catch (error) {
+      console.error(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      process.exitCode = 1;
     }
-    if (!agentOrText || !maybeText) throw new Error("Peer agent handle and message text are required");
-    console.log(await converseWithPeer({
-      target: agentOrText,
-      text: maybeText,
-      wait: options.wait,
-      lines: Number(options.lines),
-      timeoutMs: Number(options.timeoutMs),
-    }));
   });
 
 program.command("peer-read <agent>")

@@ -159,7 +159,7 @@ describe("item 1: environment leak", () => {
 describe("item 2: --base", () => {
   it("lists nothing against the default branch once the work is merged", () => {
     seedMergedRepository();
-    expect(listChangedFiles(repo)).toEqual({ base: "main", files: [], ranges: {} });
+    expect(listChangedFiles(repo)).toMatchObject({ base: "main", files: [], ranges: {}, sensitive: [] });
   });
 
   it("lists the files since the base ref plus the working tree and untracked files, with line ranges", () => {
@@ -215,17 +215,17 @@ describe("item 2: --base", () => {
       { "src/a.ts": ["5", "20-22"], "src/c.ts": ["new file"] });
     expect(prompt).toContain("Review focus: correctness, error handling, security, races and fallbacks.");
     expect(prompt).toContain("changed since v1");
-    expect(prompt).toContain("- src/a.ts: lines 5, lines 20-22");
-    expect(prompt).toContain("- src/c.ts: new file");
+    expect(prompt).toContain('- "src/a.ts": lines 5, lines 20-22');
+    expect(prompt).toContain('- "src/c.ts": new file');
     expect(prompt).toContain("unchanged since v1");
-    expect(prompt.indexOf("- lib/d.ts")).toBeGreaterThan(prompt.indexOf("unchanged since v1"));
+    expect(prompt.indexOf('- "lib/d.ts"')).toBeGreaterThan(prompt.indexOf("unchanged since v1"));
     expect(prompt).not.toContain("No difference");
   });
 
   it("tells the reviewer to read the listed files in full when the scope has no difference", () => {
     const prompt = buildJudgePrompt({ name: "core", files: ["src", "lib"], changed: [] }, "main");
     expect(prompt).toContain("No difference against main was found for this scope. Review the listed files in full as they are:");
-    expect(prompt).toContain("- src\n- lib");
+    expect(prompt).toContain('- "src"\n- "lib"');
     expect(prompt).not.toContain("changed since");
     expect(prompt.split("\n").at(-1)).toContain("REVIEW_GATE_VERDICT");
   });
@@ -239,11 +239,11 @@ describe("item 2: --base", () => {
     const judged = fakeHarnessCommands(harness!).filter((entry) => entry.command === "review-judge");
     const core = judged.find((entry) => entry.scope === "core")!.argv[2]!;
     expect(core).toContain(`changed since ${first}`);
-    expect(core).toContain("- src/a.ts: lines 5, lines 20-22");
-    expect(core).toContain("- src/b.ts: lines 1");
+    expect(core).toContain('- "src/a.ts": lines 5, lines 20-22');
+    expect(core).toContain('- "src/b.ts": lines 1');
     const docs = judged.find((entry) => entry.scope === "docs")!.argv[2]!;
-    expect(docs).toContain(`No difference against ${first} was found for this scope`);
-    expect(docs).toContain("- docs");
+    expect(docs).toContain(`No difference against ${first}`);
+    expect(docs).toContain('- "docs"');
     expect(formatReviewReport(report)).toContain(`Changes against ${first}`);
   });
 
@@ -254,7 +254,7 @@ describe("item 2: --base", () => {
     expect(report.error).toBe("no_changed_files");
     const declared = await runReview({ cwd: repo, client: "codex", session: "base-3", scopes: "core=src" });
     expect(declared.status).toBe("ready");
-    expect(fakeHarnessCommands(harness!).find((entry) => entry.command === "review-judge")!.argv[2]).toContain("No difference against main was found");
+    expect(fakeHarnessCommands(harness!).find((entry) => entry.command === "review-judge")!.argv[2]).toContain("No difference against main");
   });
 
   it("keeps the ranges when a harness without scope support collapses the scopes", async () => {
@@ -263,7 +263,7 @@ describe("item 2: --base", () => {
     const report = await runReview({ cwd: repo, client: "codex", session: "base-4", base: first });
     expect(report.degraded).toBe("scopes_unsupported");
     const prompt = fakeHarnessCommands(harness!).find((entry) => entry.command === "review-judge")!.argv[2]!;
-    expect(prompt).toContain("- src/a.ts: lines 5, lines 20-22");
+    expect(prompt).toContain('- "src/a.ts": lines 5, lines 20-22');
   });
 
   it("rejects an unknown --base before any harness call", async () => {
