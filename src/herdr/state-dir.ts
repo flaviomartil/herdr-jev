@@ -1,4 +1,5 @@
-import { copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, unlinkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { copyFileSync, constants, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
@@ -59,7 +60,31 @@ export function legacyStateDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(env.HOME?.trim() || homedir(), ".local", "state", "herdr-jev");
 }
 
-function moveEntries(source: string, target: string): void {
+function errorCode(error: unknown): string {
+  return (error as NodeJS.ErrnoException).code ?? (error instanceof Error ? error.message : String(error));
+}
+
+function copyEntry(from: string, to: string): "copied" | "exists" {
+  const staging = `${to}.${process.pid}.${randomBytes(4).toString("hex")}.migrating`;
+  copyFileSync(from, staging, constants.COPYFILE_EXCL);
+  try {
+    try {
+      linkSync(staging, to);
+      return "copied";
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") return "exists";
+      if (code !== "EPERM" && code !== "EXDEV") throw error;
+    }
+    if (existsSync(to)) return "exists";
+    renameSync(staging, to);
+    return "copied";
+  } finally {
+    rmSync(staging, { force: true });
+  }
+}
+
+function moveEntries(source: string, target: string, errors: string[]): void {
   mkdirSync(target, { recursive: true, mode: 0o700 });
   for (const name of readdirSync(source)) {
     const from = join(source, name);
@@ -72,10 +97,11 @@ function moveEntries(source: string, target: string): void {
             continue;
           } catch (error) {
             const code = (error as NodeJS.ErrnoException).code;
-            if (code !== "EEXIST" && code !== "ENOTEMPTY") throw error;
+            if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EXDEV") throw error;
           }
         }
-        if (lstatSync(to).isDirectory()) moveEntries(from, to);
+        if (!existsSync(to) || lstatSync(to).isDirectory()) moveEntries(from, to, errors);
+        else errors.push(`${name}: conflict`);
         continue;
       }
       try {
@@ -84,10 +110,11 @@ function moveEntries(source: string, target: string): void {
         const code = (error as NodeJS.ErrnoException).code;
         if (code === "EEXIST" || code === "ENOENT") continue;
         if (code !== "EXDEV" && code !== "EPERM") throw error;
-        copyFileSync(from, to, constants.COPYFILE_EXCL);
+        if (copyEntry(from, to) === "exists") continue;
       }
       unlinkSync(from);
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") errors.push(`${name}: ${errorCode(error)}`);
     }
   }
   try {
@@ -96,23 +123,29 @@ function moveEntries(source: string, target: string): void {
   }
 }
 
-export function migrateLegacyState(legacy: string, configured: string): void {
-  if (legacy === configured || !existsSync(legacy)) return;
+export function migrateLegacyState(legacy: string, configured: string): string[] {
+  const errors: string[] = [];
+  if (legacy === configured || !existsSync(legacy)) return errors;
   try {
     mkdirSync(dirname(configured), { recursive: true, mode: 0o700 });
     if (!existsSync(configured)) {
       try {
         renameSync(legacy, configured);
-        return;
+        return errors;
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        if (code === "ENOENT") return;
-        if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EXDEV") return;
+        if (code === "ENOENT") return errors;
+        if (code !== "EEXIST" && code !== "ENOTEMPTY" && code !== "EXDEV") {
+          errors.push(`${legacy}: ${errorCode(error)}`);
+          return errors;
+        }
       }
     }
-    moveEntries(legacy, configured);
-  } catch {
+    moveEntries(legacy, configured, errors);
+  } catch (error) {
+    errors.push(`${legacy}: ${errorCode(error)}`);
   }
+  return errors;
 }
 
 const resolvedRoots = new Map<string, string>();
@@ -131,7 +164,10 @@ export function resolveStateDir(env: NodeJS.ProcessEnv = process.env): string {
   if (!configured || configured === legacy) return legacy;
   const key = `${legacy}\0${configured}`;
   if (!resolvedRoots.has(key)) {
-    migrateLegacyState(legacy, configured);
+    const errors = migrateLegacyState(legacy, configured);
+    if (errors.length > 0) {
+      console.error(`[herdr-jev] State migration from ${legacy} to ${configured} is incomplete (${errors.slice(0, 5).join(", ")}); entries left in the old directory stay invisible until a later run moves them.`);
+    }
     resolvedRoots.set(key, configured);
   }
   return resolvedRoots.get(key)!;
@@ -144,6 +180,9 @@ export function legacyConfigDir(): string {
 export function resolveConfigDirs(env: NodeJS.ProcessEnv = process.env): string[] {
   const override = absoluteDir(env.HERDR_JEV_CONFIG_DIR);
   if (override) return [override];
+  if (isTestGuardActive(env)) {
+    throw new Error("config_dir_required_in_tests");
+  }
   const configured = readToolEnv(env).configDir;
   return configured ? [configured, legacyConfigDir()] : [legacyConfigDir()];
 }

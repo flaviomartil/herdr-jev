@@ -20,7 +20,7 @@ let harness: FakeHarness | undefined;
 let repo: string;
 
 function git(cwd: string, ...args: string[]) {
-  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { cwd, encoding: "utf8" });
+  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8" });
   expect(result.status).toBe(0);
   return result.stdout.trim();
 }

@@ -49,7 +49,7 @@ function install(mode: FakeHarnessMode = "contract") {
 }
 
 function git(cwd: string, ...args: string[]) {
-  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { cwd, encoding: "utf8" });
+  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args], { cwd, encoding: "utf8" });
   expect(result.status).toBe(0);
   return result.stdout.trim();
 }
@@ -510,12 +510,13 @@ describe("trust is bound to the folder that is confirmed", () => {
       expect(state.keys).toEqual(["enter"]);
       expect(result.ok).toBe(true);
       expect(result.trustRequired).toBeUndefined();
-      expect(result.trustConfirmed).toBeUndefined();
+      expect(result.trustConfirmed).toBe(true);
+      expect(result.trustPolicyReason).toBe("under_trust_root");
       expect(state.prompts).toHaveLength(1);
     } finally { rmSync(workdir, { recursive: true, force: true }); }
   });
 
-  it("does not claim a confirmation when the dialog comes back after one", async () => {
+  it("does not claim a confirmation or ask for trust again when the dialog comes back after enter", async () => {
     const workdir = realpathSync(mkdtempSync(join(tmpdir(), "bound-")));
     try {
       trusting(workdir);
@@ -523,7 +524,7 @@ describe("trust is bound to the folder that is confirmed", () => {
       const result = await start(client, workdir);
       expect(state.keys).toEqual(["enter"]);
       expect(result.ok).toBe(false);
-      expect(result.trustRequired).toBe(true);
+      expect(result.trustRequired).toBeUndefined();
       expect(result.trustConfirmed).toBeUndefined();
       expect(result.trustPolicyReason).toBe("trust_dialog_reappeared");
       expect(state.prompts).toEqual([]);
@@ -654,7 +655,7 @@ console.log(JSON.stringify([state.resolveStateDir({ HERDR_JEV_STATE_DIR: "/abs/s
 describe("configuration commands", () => {
   function cliEnv(extra: Record<string, string> = {}) {
     const env: Record<string, string | undefined> = { ...process.env };
-    for (const key of ["HERDR_JEV_STATE_DIR", "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_ID", "AI_HARNESS_ROOT", "AI_HARNESS_CORE_PATH", "HERDR_JEV_TEST_GUARD", "AI_HARNESS_TEST_GUARD", "HERDR_ENV"]) delete env[key];
+    for (const key of ["HERDR_JEV_STATE_DIR", "HERDR_PLUGIN_STATE_DIR", "HERDR_PLUGIN_ID", "AI_HARNESS_ROOT", "AI_HARNESS_CORE_PATH", "HERDR_JEV_TEST_GUARD", "AI_HARNESS_TEST_GUARD", "HERDR_ENV", "HERDR_JEV_CONFIG_DIR"]) delete env[key];
     return { ...env, HOME: sandbox, PATH: "/usr/bin:/bin", TYPESAFE_API_KEY: "", ...extra } as NodeJS.ProcessEnv;
   }
   const cli = resolve(import.meta.dir, "../src/cli.ts");
