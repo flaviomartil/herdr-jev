@@ -1,4 +1,4 @@
-const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\].*?(?:\x07|\x1b\\)/g;
+export const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\].*?(?:\x07|\x1b\\)/g;
 
 const CHROME_LINE_PATTERNS: readonly RegExp[] = [
   /^[\s─━│┃╭╮╯╰┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬▀▄█░▒▓▪▫•·◦∙◐◑◒◓✳✶✻*_=~+\-./\\]+$/,
@@ -56,12 +56,10 @@ export function lastMeaningfulLine(text: string): string {
     if (!line) continue;
     if (CHROME_LINE_PATTERNS.some((pattern) => pattern.test(line))) continue;
 
-    if (i > 0) {
-      const prevLine = lines[i - 1].trim();
-      if (prevLine && redactSecrets(prevLine) !== prevLine) {
-        continue;
-      }
-    }
+    const prevLine = i > 0 ? lines[i - 1].trim() : "";
+    const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : "";
+    if (prevLine && redactSecrets(prevLine + line) !== prevLine + line) continue;
+    if (nextLine && redactSecrets(line) === line && redactSecrets(line + nextLine) !== line + nextLine) continue;
 
     const isAction = /^[•●]/.test(line);
     const stripped = line.replace(/^[•●·│┃|>»⏵]\s*/, "").replace(/\s*[│┃|]$/, "").trim();
@@ -94,17 +92,18 @@ export function redactSecrets(text: string): string {
     "$1[REDACTED]",
   );
   result = result.replace(
-    /(["']?\b(?:--)?(?:password|token|secret|api[_-]?key)\b["']?\s+)(["'])(?:\\.|(?!\2)[^\\])*\2/gi,
+    /(--[a-z0-9_-]*(?:password|token|secret|api[_-]?key)\b["']?\s+)(["'])(?:\\.|(?!\2)[^\\])*\2/gi,
     "$1$2[REDACTED]$2",
   );
   result = result.replace(
-    /(["']?\b(?:--)?(?:password|token|secret|api[_-]?key)\b["']?\s+)([^\s"';&,}]+)/gi,
+    /(--[a-z0-9_-]*(?:password|token|secret|api[_-]?key)\b["']?\s+)([^\s"';&,}]+)/gi,
     "$1[REDACTED]",
   );
   result = result.replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [REDACTED]");
-  result = result.replace(/\bBasic\s+[^\s"';&,}]+/gi, "Basic [REDACTED]");
+  result = result.replace(/\bBasic\s+[A-Za-z0-9+/]{8,}={0,2}/g, "Basic [REDACTED]");
   result = result.replace(/\b(?:sk-[a-zA-Z0-9_-]+|ghp_[a-zA-Z0-9]+|xoxb-[a-zA-Z0-9_-]+)\b/g, "[REDACTED]");
   result = result.replace(/\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g, "[REDACTED]");
+  result = result.replace(/([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s:@/]+):([^\s@]+)@/g, "$1$2:[REDACTED]@");
   result = result.replace(/([a-zA-Z0-9+.-]+:\/\/)?([a-zA-Z0-9_.~%-]+):([^\s@/]+)@/g, "$1$2:[REDACTED]@");
   result = result.replace(/\b(?=[0-9a-fA-F]*[0-9])[0-9a-fA-F]{32,}\b/g, "[REDACTED]");
   result = result.replace(
