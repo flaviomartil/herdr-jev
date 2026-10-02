@@ -48,7 +48,7 @@ import {
 import type { ClientKind, RoleKind } from "./types/index.js";
 import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
-import { classifyPaneText, MAX_CLASSIFY_INPUT_CHARS, parseClassifyInput } from "./triage/pane-classifier.js";
+import { classifyPaneText, parseClassifyInput, readClassifyInput } from "./triage/pane-classifier.js";
 import { TurnRouter } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
@@ -922,11 +922,7 @@ program.command("classify-pane")
   .description("Classify pane text using Jev")
   .option("--json", "Output raw JSON")
   .action(async (options: { json?: boolean }) => {
-    let input = "";
-    for await (const chunk of process.stdin) {
-      input += chunk;
-      if (input.length > MAX_CLASSIFY_INPUT_CHARS) break;
-    }
+    const input = await readClassifyInput(process.stdin);
     let data;
     try {
       data = parseClassifyInput(input);

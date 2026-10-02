@@ -1,4 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync, linkSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { spawn } from "node:child_process";
@@ -28,6 +29,11 @@ export interface NotifyOptions {
 
 export interface NotifyHooks {
   afterCooldownCheck?: () => void | Promise<void>;
+  afterStaleClaimSeen?: () => void | Promise<void>;
+}
+
+export interface EscalationLockHooks {
+  afterStaleLockSeen?: () => void | Promise<void>;
 }
 
 interface EscalationRecord {
@@ -41,7 +47,9 @@ interface EscalationRecord {
 const PANE_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9_]+$/;
 const AGENT_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
 const OWNER_PATTERN = /^[0-9]+-[A-Za-z0-9]{1,48}$/;
+const REASONS: ReadonlySet<string> = new Set(["approval", "question", "error", "none"]);
 const CLAIM_STALE_MS = 30_000;
+const CLOCK_SKEW_MS = 5_000;
 const LOCK_STALE_MS = 2_000;
 const LOCK_WAIT_MS = 3_000;
 const RELEASE_STALE_AGE_MS = 15 * 60 * 1000;
@@ -77,8 +85,15 @@ function readEscalations(file: string): EscalationRecord[] {
       if (!entry || typeof entry !== "object") continue;
       if (typeof entry.pane !== "string" || !PANE_PATTERN.test(entry.pane)) continue;
       if (typeof entry.agent !== "string" || !AGENT_PATTERN.test(entry.agent)) continue;
-      const record: EscalationRecord = { ...entry };
-      if (typeof record.owner !== "string" || !OWNER_PATTERN.test(record.owner)) delete record.owner;
+      if (typeof entry.time !== "number" || !Number.isFinite(entry.time)) continue;
+      const attempts = Number(entry.attempts);
+      const record: EscalationRecord = {
+        pane: entry.pane,
+        agent: entry.agent,
+        time: entry.time,
+        attempts: Number.isFinite(attempts) && attempts > 0 ? Math.trunc(attempts) : 0,
+      };
+      if (typeof entry.owner === "string" && OWNER_PATTERN.test(entry.owner)) record.owner = entry.owner;
       records.push(record);
     }
     return records;
@@ -101,24 +116,51 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function updateEscalations(file: string, mutate: (records: EscalationRecord[]) => EscalationRecord[]): Promise<void> {
+type TakeOver = "taken" | "missing" | "fresh";
+
+function takeOverStale(file: string, isStale: (path: string) => boolean): TakeOver {
+  const grave = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.stale`;
+  try {
+    renameSync(file, grave);
+  } catch (e) {
+    return "missing";
+  }
+  let stale = false;
+  try { stale = isStale(grave); } catch (e) {}
+  if (!stale) {
+    try { linkSync(grave, file); } catch (e) {}
+  }
+  try { unlinkSync(grave); } catch (e) {}
+  return stale ? "taken" : "fresh";
+}
+
+function releaseLock(lockFile: string, token: string) {
+  try {
+    if (readFileSync(lockFile, "utf-8") === token) unlinkSync(lockFile);
+  } catch (e) {}
+}
+
+export async function updateEscalations(file: string, mutate: (records: EscalationRecord[]) => EscalationRecord[], hooks: EscalationLockHooks = {}): Promise<void> {
   mkdirSync(dirname(file), { recursive: true });
   const lockFile = `${file}.lock`;
+  const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
-      writeFileSync(lockFile, String(process.pid), { flag: "wx" });
+      writeFileSync(lockFile, token, { flag: "wx" });
       break;
     } catch (e: any) {
       if (e?.code !== "EEXIST") throw e;
-      let stale = Date.now() > deadline;
+      const expired = Date.now() > deadline;
+      let stale = expired;
       try {
         stale = stale || Date.now() - statSync(lockFile).mtimeMs > LOCK_STALE_MS;
       } catch (err) {
         continue;
       }
       if (stale) {
-        try { unlinkSync(lockFile); } catch (err) {}
+        await hooks.afterStaleLockSeen?.();
+        takeOverStale(lockFile, (grave) => expired || Date.now() - statSync(grave).mtimeMs > LOCK_STALE_MS);
         continue;
       }
       await sleep(15);
@@ -127,7 +169,7 @@ async function updateEscalations(file: string, mutate: (records: EscalationRecor
   try {
     writeEscalations(file, mutate(readEscalations(file)));
   } finally {
-    try { unlinkSync(lockFile); } catch (e) {}
+    releaseLock(lockFile, token);
   }
 }
 
@@ -168,7 +210,9 @@ function cooldownActive(stateFile: string, now: number, cooldownS: number): bool
   if (!existsSync(stateFile)) return false;
   try {
     const data = JSON.parse(readFileSync(stateFile, "utf-8"));
-    return typeof data?.time === "number" && now - data.time < cooldownS * 1000;
+    if (typeof data?.time !== "number" || !Number.isFinite(data.time)) return false;
+    const age = now - data.time;
+    return age >= -CLOCK_SKEW_MS && age < cooldownS * 1000;
   } catch (e) {
     return false;
   }
@@ -180,6 +224,22 @@ function claimTime(claimFile: string): number {
     if (typeof data?.time === "number" && Number.isFinite(data.time)) return data.time;
   } catch (e) {}
   return statSync(claimFile).mtimeMs;
+}
+
+function claimStale(claimFile: string, now: number): boolean {
+  const age = now - claimTime(claimFile);
+  return age > CLAIM_STALE_MS || age < -CLOCK_SKEW_MS;
+}
+
+function isPaneGone(res: { stdout?: string; stderr?: string }): boolean {
+  for (const text of [res.stdout, res.stderr]) {
+    try {
+      const error = JSON.parse(text as string)?.error;
+      const code = typeof error === "string" ? error : error?.code;
+      if (code === "pane_not_found" || code === "not_found") return true;
+    } catch (e) {}
+  }
+  return false;
 }
 
 function getReasonText(reason: string) {
@@ -207,6 +267,9 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   }
   if (opts.owner !== undefined && !OWNER_PATTERN.test(opts.owner)) {
     return { sent: false, skippedReason: "invalid owner", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
+  }
+  if (opts.reason && !REASONS.has(opts.reason)) {
+    return { sent: false, skippedReason: "invalid reason", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
   if (opts.releaseAll) {
     return handleReleaseAll(runner, opts.owner);
@@ -260,14 +323,17 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         claimed = true;
       } catch (e: any) {
         if (e?.code !== "EEXIST") return { sent: false, skippedReason: "cooldown", channels: [] };
-        let age: number;
+        let stale: boolean;
         try {
-          age = now - claimTime(claimFile);
+          stale = claimStale(claimFile, now);
         } catch (err) {
           continue;
         }
-        if (age <= CLAIM_STALE_MS) return { sent: false, skippedReason: "cooldown", channels: [] };
-        try { unlinkSync(claimFile); } catch (err) {}
+        if (!stale) return { sent: false, skippedReason: "cooldown", channels: [] };
+        await hooks.afterStaleClaimSeen?.();
+        if (takeOverStale(claimFile, (grave) => claimStale(grave, now)) === "fresh") {
+          return { sent: false, skippedReason: "cooldown", channels: [] };
+        }
       }
     }
     if (!claimed) return { sent: false, skippedReason: "cooldown", channels: [] };
@@ -299,7 +365,11 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
       if (!res.ok) {
         return { sent: false, skippedReason: "notification failed", channels: [] };
       }
-      renameSync(claimFile, stateFile);
+      try {
+        renameSync(claimFile, stateFile);
+      } catch (e) {
+        try { writeFileSync(stateFile, JSON.stringify({ time: now })); } catch (err) {}
+      }
     } finally {
       try { if (existsSync(claimFile)) unlinkSync(claimFile); } catch (e) {}
     }
@@ -409,12 +479,14 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
   const paneRes = await runner([herdrBin, "pane", "get", pane]);
-  if (!paneRes.ok) {
+  if (!paneRes.ok && isPaneGone(paneRes)) {
     await updateEscalations(escalationsFile, (records) => records.filter((e) => e.pane !== pane));
     return { sent: true, channels: ["release"] };
   }
 
-  const res = await runner([herdrBin, "pane", "release-agent", pane, "--source", "herdr-jev", "--agent", record.agent]);
+  const res = paneRes.ok
+    ? await runner([herdrBin, "pane", "release-agent", pane, "--source", "herdr-jev", "--agent", record.agent])
+    : paneRes;
   if (!res.ok) {
     const key = recordKey(record);
     await updateEscalations(escalationsFile, (records) => bumpAttempts(records, new Set([key])));
@@ -437,12 +509,14 @@ async function releaseRecords(
   let exhausted = 0;
   for (const record of records) {
     const paneRes = await runner([herdrBin, "pane", "get", record.pane]);
-    if (!paneRes.ok) {
+    if (!paneRes.ok && isPaneGone(paneRes)) {
       done.add(recordKey(record));
       continue;
     }
     if (!shouldRelease(record)) continue;
-    const res = await runner([herdrBin, "pane", "release-agent", record.pane, "--source", "herdr-jev", "--agent", record.agent]);
+    const res = paneRes.ok
+      ? await runner([herdrBin, "pane", "release-agent", record.pane, "--source", "herdr-jev", "--agent", record.agent])
+      : paneRes;
     if (res.ok) {
       done.add(recordKey(record));
     } else {
