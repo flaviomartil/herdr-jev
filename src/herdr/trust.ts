@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { harnessPolicyCheck, type TrustPolicy } from "../harness/bridge.js";
 import { classifyPaneBlock, normalizePaneText, type HerdrClient } from "./client.js";
 
@@ -21,6 +23,7 @@ const CURSOR_LINE = /^([ \t│┃|]*)([❯›>])([ \t]+)(\S.*)$/;
 const FOOTER_LINE = /\b(?:enter|return)\b.*\b(?:confirm|select|choose|continue)\b|\besc\b.*\bcancel\b|[↑↓]/i;
 const TRUST_OPTION = /^(?:Yes,\s*I\s+trust\b|Trust\s+and\s+continue\b)/i;
 const NUMBER_MARKER = /^\d+[.)]\s+/;
+const DIRECTORY_FLAG = /^(?:--cd|-C|--add-dir|--cwd|--workdir|--directory)(?:=|$)/;
 const MAX_MOVES = 6;
 const MAX_READS = 8;
 const DISMISS_POLLS = 20;
@@ -63,17 +66,28 @@ export interface TrustConfirmation {
   herdr: HerdrClient;
   target: string;
   cwd: string;
+  flags?: readonly string[];
   clock: { now: () => number; sleep: (ms: number) => Promise<void> };
   env?: NodeJS.ProcessEnv;
   lookup?: (path: string) => TrustPolicy | null;
   ready?: (screenText: string) => boolean;
 }
 
+function trustedPath(cwd: string): string {
+  const absolute = resolve(cwd);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
 export async function confirmWorkspaceTrust(input: TrustConfirmation): Promise<TrustOutcome> {
   if (!autoTrustEnabled(input.env)) return { confirmed: false, reason: "auto_trust_disabled" };
   const { herdr, target } = input;
   if (!herdr.readAgent || !herdr.sendKeys) return { confirmed: false, reason: "pane_keys_unavailable" };
-  const policy = (input.lookup ?? ((path) => harnessPolicyCheck("trust", path)))(input.cwd);
+  if ((input.flags ?? []).some((flag) => DIRECTORY_FLAG.test(flag))) return { confirmed: false, reason: "directory_flags_present" };
+  const policy = (input.lookup ?? ((path) => harnessPolicyCheck("trust", path)))(trustedPath(input.cwd));
   if (!policy) return { confirmed: false, reason: "policy_unavailable" };
   if (!policy.trusted) return { confirmed: false, reason: policy.reason };
 

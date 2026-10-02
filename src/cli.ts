@@ -49,7 +49,7 @@ import {
   writeAutoConfigEnv,
 } from "./discovery/harness-detector.js";
 import type { ClientKind, RoleKind } from "./types/index.js";
-import { resolveBaseClientKind } from "./config/aliases.js";
+import { BASE_CLIENTS, loadClientAliases, resolveBaseClientKind } from "./config/aliases.js";
 import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
 import { classifyPaneText, parseClassifyInput, readClassifyInput } from "./triage/pane-classifier.js";
@@ -490,16 +490,21 @@ program
         return;
       }
 
-      if (worktreePath && worktreeBranch && result.paneId) {
-        const { updateGridWorkers } = await import("./herdr/launcher.js");
-        updateGridWorkers(context.sourcePaneId || "", (records) => records.some(r => r.paneId === result.paneId)
-          ? records.map(r => r.paneId === result.paneId ? { ...r, cwd: worktreePath, branch: worktreeBranch } : r) : null);
+      const callerPane = context.sourcePaneId ?? process.env.HERDR_PANE_ID;
+      let runId: string | null = null;
+      try {
+        if (worktreePath && worktreeBranch && result.paneId && callerPane) {
+          const { updateGridWorkers } = await import("./herdr/launcher.js");
+          updateGridWorkers(callerPane, (records) => records.some(r => r.paneId === result.paneId)
+            ? records.map(r => r.paneId === result.paneId ? { ...r, cwd: worktreePath, branch: worktreeBranch } : r) : null);
+        }
+        runId = result.paneId && result.agentName
+          ? registerWorkerRun({ client: effectiveClient, model: stage.model, role, cwd: finalCwd, pane: result.paneId, handle: result.agentName,
+            prompt: promptText, callerPaneId: callerPane })
+          : null;
+      } catch (error) {
+        console.error(`[herdr-jev] Worker bookkeeping failed: ${error instanceof Error ? error.message : String(error)}`);
       }
-
-      const runId = result.paneId && result.agentName
-        ? registerWorkerRun({ client: effectiveClient, model: stage.model, role, cwd: finalCwd, pane: result.paneId, handle: result.agentName,
-          prompt: promptText, callerPaneId: context.sourcePaneId })
-        : null;
       console.log(`[herdr-jev] Subagent active in pane ${result.paneId} (${result.agentName})`);
       console.log(JSON.stringify({ ...result, ...(runId ? { runId } : {}), client: effectiveClient, model: stage.model, effort: nativeStageEffort(effectiveClient, stage.effort) ?? null,
         recommendedEffort: stage.effort, effortApplied: nativeStageEffort(effectiveClient, stage.effort) !== undefined }));
@@ -620,6 +625,12 @@ program.command("standup")
     await executeStandupCommand(options);
   });
 
+function recognisedClient(name: string): boolean {
+  const lower = name.trim().toLowerCase();
+  return (BASE_CLIENTS as string[]).includes(lower) || lower in loadClientAliases()
+    || lower.includes("claude") || resolveBaseClientKind(lower) !== "claude";
+}
+
 // Models Subcommand
 const modelsCommand = program.command("models").description("Manage client models and fallback cascades");
 
@@ -683,6 +694,11 @@ modelsCommand
   .command("catalog [client]")
   .description("Print the model catalog answered by the AI Harness: CLI ids, efforts, bypass and read-only arguments")
   .action((client?: string) => {
+    if (client && !recognisedClient(client)) {
+      console.error(JSON.stringify({ error: "unknown_client", client, known: [...BASE_CLIENTS] }));
+      process.exitCode = 1;
+      return;
+    }
     const probe = harnessModelCatalog(client ? resolveBaseClientKind(client) : undefined);
     if (probe.ok) {
       console.log(JSON.stringify(probe.value, null, 2));
@@ -944,6 +960,10 @@ workers
     }
 
     const outcome = await closeWorkerPanes(client, plan);
+    for (const failure of outcome.pruneFailures) {
+      console.error(`Could not update worker tracking in ${failure.file}: ${failure.error}`);
+      process.exitCode = 1;
+    }
     for (const item of plan) {
       const failure = outcome.failed.find((candidate) => candidate.paneId === item.paneId);
       if (failure) {
