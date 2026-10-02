@@ -193,14 +193,27 @@ test("item 2: a claim that vanishes before the state rename does not fail a sent
   expect(again.skippedReason).toBe("cooldown");
 });
 
-test("item 3: a writer whose lock was taken over leaves the new owner's lock in place", async () => {
+test("item 3: a writer whose lock was taken over leaves the new owner's lock in place and writes only after it is gone", async () => {
   const lock = `${escalationsFile()}.lock`;
+  let calls = 0;
+  let lockWhileForeign = "";
+  let writtenWhileForeign = true;
   await updateEscalations(escalationsFile(), (records) => {
-    writeFileSync(lock, "another-owner-token");
+    calls++;
+    if (calls === 1) {
+      writeFileSync(lock, "another-owner-token");
+      setTimeout(() => {
+        lockWhileForeign = readFileSync(lock, "utf-8");
+        writtenWhileForeign = existsSync(escalationsFile());
+        rmSync(lock, { force: true });
+      }, 150);
+    }
     return records;
   });
-  expect(existsSync(lock)).toBe(true);
-  expect(readFileSync(lock, "utf-8")).toBe("another-owner-token");
+  expect(calls).toBe(2);
+  expect(lockWhileForeign).toBe("another-owner-token");
+  expect(writtenWhileForeign).toBe(false);
+  expect(existsSync(lock)).toBe(false);
 });
 
 test("item 3: a writer releases its own lock", async () => {
