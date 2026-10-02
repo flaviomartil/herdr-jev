@@ -1,4 +1,4 @@
-import { existsSync, realpathSync, readFileSync } from "node:fs";
+import { existsSync, realpathSync, readFileSync, statSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, resolve, dirname } from "node:path";
@@ -36,11 +36,11 @@ export function resolveHarnessRoot(): string {
   // 2. Search standard workspace and home directories
   const home = process.env.HOME || homedir();
   const candidates = [
-    join(process.cwd(), "../ai-harness-core"),
     join(home, "projects/personal/ai-harness-core"),
     join(home, "projects/ai-harness-core"),
     join(home, ".ai-harness"),
     join(home, ".local/share/ai-harness"),
+    join(process.cwd(), "../ai-harness-core"),
   ];
 
   for (const cand of candidates) {
@@ -102,9 +102,17 @@ export function harnessCommand<T = any>(args: string[], timeout = 15_000): T {
   const binary = resolveHarnessBinary();
   if (!binary || !root) throw new Error("harness_unavailable");
   const result = spawnSync(binary, [...args, "--root", root], { encoding: "utf8", timeout, maxBuffer: 1024 * 1024, env: process.env });
-  if (result.error) throw new Error("harness_command_failed");
-  const parsed = JSON.parse(result.stdout);
-  if (result.status !== 0 && !(args[0]?.startsWith("review-") && parsed.status === "changes_required")) throw new Error("harness_command_failed");
+  if (result.error) throw new Error((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? "harness_command_timeout" : "harness_command_failed");
+  const stdout = result.stdout ?? "";
+  let parsed: any;
+  let parseable = false;
+  try { parsed = JSON.parse(stdout); parseable = true; } catch {}
+  if (result.status !== 0) {
+    if (parseable && args[0]?.startsWith("review-") && parsed?.status === "changes_required") return parsed;
+    throw new Error(errorCode(stdout, result.stderr ?? ""));
+  }
+  if (!parseable) throw new Error("invalid_harness_output");
+  if (parsed && typeof parsed === "object" && typeof parsed.error === "string") throw new Error(errorCode(stdout, ""));
   return parsed;
 }
 
@@ -121,31 +129,72 @@ export type HarnessDecision = { mode: "direct"; reason: string } | {
     reviewer: { model: string; cliModel?: string; effort?: "high" | "xhigh" } };
 };
 
+function validStage(value: any): boolean {
+  return Boolean(value) && typeof value === "object" && typeof value.model === "string" && value.model.length > 0
+    && (value.cliModel === undefined || typeof value.cliModel === "string") && (value.effort === undefined || typeof value.effort === "string");
+}
+
+function parseDecision(value: any): HarnessDecision | null {
+  if (!value || typeof value !== "object") return null;
+  if (value.mode === "direct") return { mode: "direct", reason: typeof value.reason === "string" ? value.reason : "unspecified" };
+  const profile = value.profile;
+  if (value.mode === "delegate" && profile && typeof profile === "object" && typeof profile.id === "string" && typeof profile.client === "string"
+    && typeof profile.advisor === "string" && validStage(profile.executor) && validStage(profile.reviewer)) return value as HarnessDecision;
+  return null;
+}
+
 export function resolveHarnessDelegation(client: string, substantive: boolean, input: DelegationInput = {}): HarnessDecision {
   try {
-    return harnessCommand<HarnessDecision>(["delegation-plan", "--client", client,
+    const decision = parseDecision(harnessCommand<unknown>(["delegation-plan", "--client", client,
       "--work", substantive ? "substantive" : "simple", "--role", input.role ?? "advisor",
       ...(input.model ? ["--model", input.model] : []),
-      ...(input.availableModels?.length ? ["--available-models", input.availableModels.join(",")] : [])]);
-  } catch { return { mode: "direct", reason: "harness_unavailable" }; }
+      ...(input.availableModels?.length ? ["--available-models", input.availableModels.join(",")] : [])]));
+    return decision ?? { mode: "direct", reason: "invalid_delegation_plan" };
+  } catch (error) {
+    const reason = error instanceof Error && /^[a-z][a-z0-9_]*$/.test(error.message) ? error.message : "harness_unavailable";
+    return { mode: "direct", reason };
+  }
 }
 
 export function externalRun<T = any>(action: string, request: Record<string, unknown>): T {
   return harnessCommand<T>(["external-run", "--action", action, "--request-json", JSON.stringify(request)]);
 }
 
+const QUOTA_MAX_BYTES = 1024 * 1024;
+const QUOTA_MAX_WINDOWS = 8;
+const QUOTA_CALL_TIMEOUT_MS = 5_000;
+const QUOTA_CACHE_MS = 30_000;
+const QUOTA_FRESH_MS = 15 * 60_000;
+let quotaCache: { key: string; at: number; value: unknown[] } | undefined;
+
+function localQuotaObservation(request: { provider: string; scope: string; observedAt: number | null; remainingPercent: number | null; resetsAt: number | null }): unknown {
+  const now = Date.now();
+  const exhausted = typeof request.remainingPercent === "number" && request.remainingPercent <= 0 && (request.resetsAt === null || request.resetsAt > now);
+  const fresh = request.observedAt !== null && now - request.observedAt <= QUOTA_FRESH_MS && request.observedAt <= now + 60_000;
+  return { provider: request.provider, scope: request.scope, freshness: fresh ? "fresh" : "stale", status: exhausted ? "exhausted" : "unknown", source: "local_fallback" };
+}
+
 export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugins/herdr-agent-usage/codex-app-server.json")): unknown[] {
   try {
-    const raw = readFileSync(path, "utf8");
-    if (Buffer.byteLength(raw) > 1024 * 1024) return [];
-    const data = JSON.parse(raw);
+    const info = statSync(path);
+    if (!info.isFile() || info.size > QUOTA_MAX_BYTES) return [];
+    const key = `${path}\0${info.mtimeMs}\0${info.size}`;
+    if (quotaCache && quotaCache.key === key && Date.now() - quotaCache.at < QUOTA_CACHE_MS) return quotaCache.value;
+    const data = JSON.parse(readFileSync(path, "utf8"));
     if (!Array.isArray(data.windows)) return [];
-    return data.windows.slice(0, 32).map((window: any) => harnessCommand(["quota-normalize", "--request-json", JSON.stringify({
-      provider: "codex", scope: data.session_quota_only ? "unknown" : data.account_id ? "account" : "unknown",
-      observedAt: typeof data.fetched_at_unix === "number" ? data.fetched_at_unix * 1000 : null,
-      remainingPercent: window.remaining_percent ?? null,
-      resetsAt: typeof window.resets_at === "number" ? window.resets_at * 1000 : null,
-    })]));
+    let degraded = false;
+    const value = data.windows.slice(0, QUOTA_MAX_WINDOWS).map((window: any) => {
+      const request = {
+        provider: "codex", scope: data.session_quota_only ? "unknown" : data.account_id ? "account" : "unknown",
+        observedAt: typeof data.fetched_at_unix === "number" ? data.fetched_at_unix * 1000 : null,
+        remainingPercent: typeof window?.remaining_percent === "number" ? window.remaining_percent : null,
+        resetsAt: typeof window?.resets_at === "number" ? window.resets_at * 1000 : null,
+      };
+      try { return harnessCommand(["quota-normalize", "--request-json", JSON.stringify(request)], QUOTA_CALL_TIMEOUT_MS); }
+      catch { degraded = true; return localQuotaObservation(request); }
+    });
+    if (!degraded) quotaCache = { key, at: Date.now(), value };
+    return value;
   } catch { return []; }
 }
 
@@ -169,18 +218,32 @@ export interface ProbeOptions {
 
 const UNSUPPORTED_ERROR = /^(?:unknown_command|invalid_external_action|unknown_option)/;
 
+function jsonErrorCode(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const fromValue = (value: any): string | undefined => {
+    const error = value?.error;
+    return typeof error === "string" ? error : typeof error?.code === "string" ? error.code : undefined;
+  };
+  try { const code = fromValue(JSON.parse(trimmed)); if (code) return code; } catch {}
+  const lines = trimmed.split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index--) {
+    if (!lines[index]!.trimStart().startsWith("{")) continue;
+    for (const candidate of [lines.slice(index).join("\n"), lines[index]!]) {
+      try { const code = fromValue(JSON.parse(candidate)); if (code) return code; } catch {}
+    }
+  }
+  return undefined;
+}
+
 function errorCode(stdout: string, stderr: string): string {
   for (const text of [stderr, stdout]) {
-    const trimmed = text.trim();
-    if (!trimmed) continue;
-    try {
-      const parsed = JSON.parse(trimmed);
-      const error = parsed?.error;
-      const code = typeof error === "string" ? error : typeof error?.code === "string" ? error.code : undefined;
-      if (code) return code;
-    } catch {
-      return trimmed.split(/\r?\n/)[0]!.slice(0, 200);
-    }
+    const code = jsonErrorCode(text);
+    if (code) return code;
+  }
+  for (const text of [stderr, stdout]) {
+    const first = text.trim().split(/\r?\n/)[0];
+    if (first) return first.slice(0, 200);
   }
   return "harness_command_failed";
 }
@@ -217,21 +280,26 @@ export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions
   const argv = probeInvocation(args);
   if (!argv) return Promise.resolve({ ok: false, error: "harness_unavailable", unsupported: true });
   return new Promise((resolvePromise) => {
-    const child = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
-    let stdout = "";
-    let stderr = "";
+    const child = spawn(argv[0]!, argv.slice(1), { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env, detached: true });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
     let settled = false;
+    const killGroup = () => {
+      try { process.kill(-child.pid!, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+    };
     const finish = (value: HarnessProbe<T>) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       resolvePromise(value);
     };
-    const timer = setTimeout(() => { child.kill("SIGKILL"); finish({ ok: false, error: "harness_command_timeout" }); }, options.timeout ?? 10_000);
-    child.stdout?.on("data", (chunk: Buffer) => { if (stdout.length < 4 * 1024 * 1024) stdout += chunk.toString("utf8"); });
-    child.stderr?.on("data", (chunk: Buffer) => { if (stderr.length < 1024 * 1024) stderr += chunk.toString("utf8"); });
+    const timer = setTimeout(() => { killGroup(); finish({ ok: false, error: "harness_command_timeout" }); }, options.timeout ?? 10_000);
+    child.stdout?.on("data", (chunk: Buffer) => { if (stdoutBytes < 4 * 1024 * 1024) { stdout.push(chunk); stdoutBytes += chunk.length; } });
+    child.stderr?.on("data", (chunk: Buffer) => { if (stderrBytes < 1024 * 1024) { stderr.push(chunk); stderrBytes += chunk.length; } });
     child.on("error", () => finish({ ok: false, error: "harness_command_failed" }));
-    child.on("close", (code) => finish(interpretProbe<T>(code, stdout, stderr, options)));
+    child.on("close", (code) => finish(interpretProbe<T>(code, Buffer.concat(stdout).toString("utf8"), Buffer.concat(stderr).toString("utf8"), options)));
   });
 }
 
@@ -248,10 +316,21 @@ export interface ModelResolution {
   readonlyArgs: string[];
 }
 
-const probeCache = new Map<string, unknown>();
+const PROBE_SUCCESS_TTL_MS = 5 * 60_000;
+const PROBE_FAILURE_TTL_MS = 15_000;
+const probeCache = new Map<string, { value: unknown; expires: number }>();
 
 export function resetHarnessCaches(): void {
   probeCache.clear();
+  quotaCache = undefined;
+}
+
+function remembered<T>(key: string, build: () => { value: T; ok: boolean }): T {
+  const hit = probeCache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value as T;
+  const { value, ok } = build();
+  probeCache.set(key, { value, expires: Date.now() + (ok ? PROBE_SUCCESS_TTL_MS : PROBE_FAILURE_TTL_MS) });
+  return value;
 }
 
 function cacheKey(...parts: string[]): string {
@@ -274,22 +353,22 @@ export function parseModelResolution(value: any): ModelResolution | null {
 
 export function harnessModelResolve(input: { client: string; model: string; effort?: string; role?: HarnessRole }): ModelResolution | null {
   const key = cacheKey("model-resolve", input.client, input.model, input.effort ?? "", input.role ?? "");
-  if (probeCache.has(key)) return probeCache.get(key) as ModelResolution | null;
-  const probe = harnessProbe(["model-resolve", "--client", input.client, "--model", input.model,
-    ...(input.effort ? ["--effort", input.effort] : []), ...(input.role ? ["--role", input.role] : [])]);
-  const resolution = probe.ok ? parseModelResolution(probe.value) : null;
-  probeCache.set(key, resolution);
-  return resolution;
+  return remembered(key, () => {
+    const probe = harnessProbe(["model-resolve", "--client", input.client, "--model", input.model,
+      ...(input.effort ? ["--effort", input.effort] : []), ...(input.role ? ["--role", input.role] : [])]);
+    const resolution = probe.ok ? parseModelResolution(probe.value) : null;
+    return { value: resolution, ok: resolution !== null };
+  });
 }
 
 export function harnessModelCatalog(client?: string): HarnessProbe<any> {
   const key = cacheKey("model-catalog", client ?? "");
-  if (probeCache.has(key)) return probeCache.get(key) as HarnessProbe<any>;
-  const probe = harnessProbe(["model-catalog", ...(client ? ["--client", client] : [])]);
-  const result: HarnessProbe<any> = probe.ok && probe.value && typeof probe.value === "object" && probe.value.clients && typeof probe.value.clients === "object"
-    ? probe : { ok: false, error: probe.ok ? "invalid_model_catalog" : probe.error, unsupported: probe.ok ? true : probe.unsupported };
-  probeCache.set(key, result);
-  return result;
+  return remembered(key, () => {
+    const probe = harnessProbe(["model-catalog", ...(client ? ["--client", client] : [])]);
+    const result: HarnessProbe<any> = probe.ok && probe.value && typeof probe.value === "object" && probe.value.clients && typeof probe.value.clients === "object"
+      ? probe : { ok: false, error: probe.ok ? "invalid_model_catalog" : probe.error, unsupported: probe.ok ? true : probe.unsupported };
+    return { value: result, ok: result.ok };
+  });
 }
 
 export interface TrustPolicy {
