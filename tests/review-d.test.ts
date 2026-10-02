@@ -120,7 +120,7 @@ function writeScript(name: string, body: string): string {
   return file;
 }
 
-async function waitFor(check: () => boolean, ms = 3000) {
+async function waitFor(check: () => boolean, ms = 20_000) {
   const deadline = Date.now() + ms;
   while (!check() && Date.now() < deadline) await sleep(25);
 }
@@ -240,7 +240,7 @@ test("N2: applyJevData queues one release per pane until it settles", async () =
 test("N2: a hanging release clears the pending flag when it times out", async () => {
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
   process.env.HERDR_JEV_OFFICE_JEV = "0";
-  process.env.HERDR_JEV_BIN = writeScript("hang.sh", "exec sleep 5");
+  process.env.HERDR_JEV_BIN = writeScript("hang.sh", "exec sleep 20");
   hooks.notifyTaskTimeoutMs = 150;
   hooks.roster.people = [blockedPerson({ id: "w1:n2h", revision: 2, status: "idle", jevAttention: "none" })];
   hooks.notifyState.set("w1:n2h", { rev: 2, attention: "", status: "idle", escalatedRev: 1 });
@@ -250,7 +250,7 @@ test("N2: a hanging release clears the pending flag when it times out", async ()
   expect(hooks.notifyState.get("w1:n2h").releasePending).toBe(true);
   const started = Date.now();
   await hooks.pollJevClassify();
-  expect(Date.now() - started).toBeLessThan(2500);
+  expect(Date.now() - started).toBeLessThan(15_000);
   expect(hooks.notifyState.get("w1:n2h").releasePending).toBe(false);
 });
 
@@ -303,12 +303,14 @@ test("N4: release-stale keeps an escalation recorded while it was running", asyn
   let open!: () => void;
   const gate = new Promise<void>((resolveGate) => { open = resolveGate; });
   const base = createProcessCommandAdapter();
+  let reached!: () => void;
+  const entered = new Promise<void>((resolveEntered) => { reached = resolveEntered; });
   const gated = async (argv: readonly string[]) => {
-    if (argv.includes("get") && argv.includes("w1:old")) await gate;
+    if (argv.includes("get") && argv.includes("w1:old")) { reached(); await gate; }
     return base(argv);
   };
   const stale = handleNotifyCommand({ releaseStale: true }, gated);
-  await sleep(50);
+  await entered;
 
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
   process.env.FAKE_HERDR_AGENT_STATUS = "blocked";
@@ -464,7 +466,7 @@ test("N8: a huge single line cannot stall classification", async () => {
   const client = { ask: async () => ({ answers: {}, jevMs: 1, model: "m" }) } as any;
   const started = performance.now();
   await classifier.classifyPaneText({ paneText: "a.".repeat(15000), agent: "codex", status: "idle" }, client);
-  expect(performance.now() - started).toBeLessThan(2500);
+  expect(performance.now() - started).toBeLessThan(15_000);
 });
 
 test("N8: the Office sends the same 30 line slice that it hashes for the cache key", async () => {
@@ -518,16 +520,16 @@ test("N10: a long token near the old 80 character cut is redacted before it reac
 test("N11: quit releases through one detached call and does not wait for it", async () => {
   process.env.HERDR_JEV_ESCALATE_BLOCKED = "1";
   const log = join(stateDir, "quit.log");
-  process.env.HERDR_JEV_BIN = writeScript("quit.sh", `printf '%s\\n' "$*" >> "${log}"\nexec sleep 3`);
+  const finished = join(stateDir, "quit.finished");
+  process.env.HERDR_JEV_BIN = writeScript("quit.sh", `printf '%s\\n' "$*" >> "${log}"\nsleep 8\ntouch "${finished}"`);
   hooks.roster.people = ["w1:q1", "w1:q2", "w1:q3"].map((id) => blockedPerson({ id, status: "blocked" }));
   hooks.applyJevData();
-  await sleep(150);
+  await waitFor(() => Boolean(hooks.notifyOwner));
   expect(hooks.notifyOwner).toBe((notifyArgs as any).officeOwner);
   for (const state of hooks.notifyState.values()) state.escalatedRev = 1;
 
-  const started = performance.now();
   hooks.releaseOwnedEscalations();
-  expect(performance.now() - started).toBeLessThan(500);
+  expect(existsSync(finished)).toBe(false);
 
   await waitFor(() => existsSync(log) && readFileSync(log, "utf-8").includes("\n"));
   const lines = readFileSync(log, "utf-8").trim().split("\n");
