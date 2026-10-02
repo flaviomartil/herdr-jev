@@ -24,11 +24,16 @@ The Jev classification derives an explicit `activity` string from the pane conte
 ## Notification Channels
 The `herdr-jev notify` command deduplicates notifications (default 600s cooldown via `HERDR_JEV_NOTIFY_COOLDOWN_S`) and supports two channels:
 1. **Herdr native**: Spawns `herdr notification show` natively with a sound.
-2. **Hook**: If `HERDR_JEV_NOTIFY_HOOK` points to an executable, it spawns it with `[title, body, paneId, reason]`.
+2. **Hook**: If configured or present at default location, spawns the executable with `[title, body, paneId, reason]`.
+
+Hook resolution:
+- When `HERDR_JEV_NOTIFY_HOOK` is unset, `herdr-jev` checks for `<herdr-jev config dir>/notify-hook`. If the file exists and is executable, it runs as the default hook. The config dir is `HERDR_PLUGIN_CONFIG_DIR` only when `HERDR_PLUGIN_ID` is `herdr-jev`, otherwise `~/.config/herdr/plugins/config/herdr-jev`.
+- When `HERDR_JEV_NOTIFY_HOOK` is set to an explicit path, that path is used.
+- When `HERDR_JEV_NOTIFY_HOOK` is set to `""` or `off`, the hook is completely disabled.
 
 Environment:
 - `HERDR_JEV_NOTIFY`: Set to 1, true, or on to enable.
-- `HERDR_JEV_NOTIFY_HOOK`: Path to executable.
+- `HERDR_JEV_NOTIFY_HOOK`: Path to executable, or empty / `off` to disable.
 - `HERDR_JEV_NOTIFY_COOLDOWN_S`: Cooldown in seconds (default 600).
 - `HERDR_JEV_STATE_DIR`: State directory for cooldowns and escalations.
 

@@ -1,8 +1,9 @@
 let runnerImpl: any;
 import { expect, test } from "bun:test";
-import { handleNotifyCommand } from "../src/herdr/notify.ts";
+import { handleNotifyCommand, resolveNotifyHook } from "../src/herdr/notify.ts";
+import { resolveStateDir } from "../src/herdr/state-dir.ts";
 import { join } from "node:path";
-import { writeFileSync, existsSync, rmSync, mkdirSync, readFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, existsSync, rmSync, mkdirSync, readFileSync, mkdtempSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { beforeAll, afterAll } from "bun:test";
 import { createFakeHerdr } from "./helpers.ts";
@@ -353,4 +354,132 @@ test("notify dry run lists escalation only as unverified", async () => {
   expect(res.wouldSend).not.toContain("escalation");
   expect(res.escalation).toBeUndefined();
   expect(res.channels).toEqual([]);
+});
+
+test("default notify hook used when present and executable", async () => {
+  const tempConfigDir = mkdtempSync(join(tmpdir(), "herdr-jev-cfg-"));
+  const hookFile = join(tempConfigDir, "notify-hook");
+  writeFileSync(hookFile, "#!/bin/sh\nexit 0\n");
+  chmodSync(hookFile, 0o755);
+
+  const env = {
+    HERDR_PLUGIN_ID: "herdr-jev",
+    HERDR_PLUGIN_CONFIG_DIR: tempConfigDir,
+  };
+  expect(resolveNotifyHook(env)).toBe(hookFile);
+
+  const savedHook = process.env.HERDR_JEV_NOTIFY_HOOK;
+  const savedPluginId = process.env.HERDR_PLUGIN_ID;
+  const savedPluginConfig = process.env.HERDR_PLUGIN_CONFIG_DIR;
+  try {
+    delete process.env.HERDR_JEV_NOTIFY_HOOK;
+    process.env.HERDR_PLUGIN_ID = "herdr-jev";
+    process.env.HERDR_PLUGIN_CONFIG_DIR = tempConfigDir;
+    const runner = async () => ({ ok: true, stdout: "" });
+    const res = await handleNotifyCommand({
+      pane: "w1:hook1", name: "Ada", project: "StixLab",
+      attention: "now", reason: "approval", dryRun: true
+    }, runner);
+    expect(res.wouldSend).toContain("hook");
+  } finally {
+    if (savedHook !== undefined) process.env.HERDR_JEV_NOTIFY_HOOK = savedHook;
+    else delete process.env.HERDR_JEV_NOTIFY_HOOK;
+    if (savedPluginId !== undefined) process.env.HERDR_PLUGIN_ID = savedPluginId;
+    else delete process.env.HERDR_PLUGIN_ID;
+    if (savedPluginConfig !== undefined) process.env.HERDR_PLUGIN_CONFIG_DIR = savedPluginConfig;
+    else delete process.env.HERDR_PLUGIN_CONFIG_DIR;
+    rmSync(tempConfigDir, { recursive: true, force: true });
+  }
+});
+
+test("default notify hook ignored when not executable", () => {
+  const tempConfigDir = mkdtempSync(join(tmpdir(), "herdr-jev-cfg-"));
+  const hookFile = join(tempConfigDir, "notify-hook");
+  writeFileSync(hookFile, "#!/bin/sh\nexit 0\n");
+  chmodSync(hookFile, 0o644);
+
+  const env = {
+    HERDR_PLUGIN_ID: "herdr-jev",
+    HERDR_PLUGIN_CONFIG_DIR: tempConfigDir,
+  };
+  try {
+    expect(resolveNotifyHook(env)).toBeUndefined();
+  } finally {
+    rmSync(tempConfigDir, { recursive: true, force: true });
+  }
+});
+
+test("notify hook disabled with off or empty string", () => {
+  const tempConfigDir = mkdtempSync(join(tmpdir(), "herdr-jev-cfg-"));
+  const hookFile = join(tempConfigDir, "notify-hook");
+  writeFileSync(hookFile, "#!/bin/sh\nexit 0\n");
+  chmodSync(hookFile, 0o755);
+
+  const envOff = {
+    HERDR_JEV_NOTIFY_HOOK: "off",
+    HERDR_PLUGIN_ID: "herdr-jev",
+    HERDR_PLUGIN_CONFIG_DIR: tempConfigDir,
+  };
+  const envEmpty = {
+    HERDR_JEV_NOTIFY_HOOK: "",
+    HERDR_PLUGIN_ID: "herdr-jev",
+    HERDR_PLUGIN_CONFIG_DIR: tempConfigDir,
+  };
+  try {
+    expect(resolveNotifyHook(envOff)).toBeUndefined();
+    expect(resolveNotifyHook(envEmpty)).toBeUndefined();
+  } finally {
+    rmSync(tempConfigDir, { recursive: true, force: true });
+  }
+});
+
+test("explicit notify hook variable wins over default file", () => {
+  const tempConfigDir = mkdtempSync(join(tmpdir(), "herdr-jev-cfg-"));
+  const defaultHook = join(tempConfigDir, "notify-hook");
+  writeFileSync(defaultHook, "#!/bin/sh\nexit 0\n");
+  chmodSync(defaultHook, 0o755);
+
+  const explicitHook = join(tmpdir(), "custom-hook");
+  const env = {
+    HERDR_JEV_NOTIFY_HOOK: explicitHook,
+    HERDR_PLUGIN_ID: "herdr-jev",
+    HERDR_PLUGIN_CONFIG_DIR: tempConfigDir,
+  };
+  try {
+    expect(resolveNotifyHook(env)).toBe(explicitHook);
+  } finally {
+    rmSync(tempConfigDir, { recursive: true, force: true });
+  }
+});
+
+test("state dir resolver throws state_dir_required_in_tests under test guard", () => {
+  expect(() => resolveStateDir({ HERDR_JEV_TEST_GUARD: "1" })).toThrow("state_dir_required_in_tests");
+  expect(() => resolveStateDir({ HERDR_JEV_TEST_GUARD: "1", HERDR_PLUGIN_ID: "other-plugin", HERDR_PLUGIN_STATE_DIR: "/tmp/other" })).toThrow("state_dir_required_in_tests");
+  expect(resolveStateDir({ HERDR_JEV_TEST_GUARD: "1", HERDR_JEV_STATE_DIR: "/tmp/custom-state" })).toBe("/tmp/custom-state");
+  expect(resolveStateDir({ HERDR_JEV_TEST_GUARD: "1", HERDR_PLUGIN_ID: "herdr-jev", HERDR_PLUGIN_STATE_DIR: "/tmp/herdr-plugin-state" })).toBe("/tmp/herdr-plugin-state");
+});
+
+test("notify command fails when state dir is missing under test guard", async () => {
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  const savedPluginStateDir = process.env.HERDR_PLUGIN_STATE_DIR;
+  delete process.env.HERDR_JEV_STATE_DIR;
+  delete process.env.HERDR_PLUGIN_STATE_DIR;
+  process.env.HERDR_JEV_NOTIFY = "1";
+  const runner = async () => ({ ok: true, stdout: "" });
+  try {
+    let threw = false;
+    try {
+      await handleNotifyCommand({
+        pane: "w1:p1", name: "Ada", project: "StixLab",
+        attention: "now", reason: "approval", dryRun: false
+      }, runner);
+    } catch (e: any) {
+      threw = true;
+      expect(e.message).toBe("state_dir_required_in_tests");
+    }
+    expect(threw).toBe(true);
+  } finally {
+    if (savedStateDir !== undefined) process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+    if (savedPluginStateDir !== undefined) process.env.HERDR_PLUGIN_STATE_DIR = savedPluginStateDir;
+  }
 });
