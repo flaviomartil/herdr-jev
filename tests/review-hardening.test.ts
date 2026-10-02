@@ -348,7 +348,7 @@ describe("finding 5: harnessCommand and the delegation plan", () => {
 });
 
 describe("finding 7: probe caches expire", () => {
-  it("retries a failed model resolution after a short pause and a good one after a longer one", () => {
+  it("retries a failed model resolution only after the failure window and keeps a good one", () => {
     install("contract", { FAKE_FAIL_MODEL_RESOLVE: "1" });
     const now = spyOn(Date, "now");
     try {
@@ -360,15 +360,15 @@ describe("finding 7: probe caches expire", () => {
       now.mockReturnValue(start + 5_000);
       expect(harnessModelResolve(input)).toBeNull();
       expect(harness!.callsFor("model-resolve")).toHaveLength(1);
-      now.mockReturnValue(start + 16_000);
+      now.mockReturnValue(start + 31_000);
       expect(harnessModelResolve(input)?.cliModel).toBe("claude-opus-5-5");
       expect(harness!.callsFor("model-resolve")).toHaveLength(2);
-      now.mockReturnValue(start + 16_000 + 60_000);
+      now.mockReturnValue(start + 31_000 + 60_000);
       expect(harnessModelResolve(input)?.cliModel).toBe("claude-opus-5-5");
       expect(harness!.callsFor("model-resolve")).toHaveLength(2);
-      now.mockReturnValue(start + 16_000 + 6 * 60_000);
+      now.mockReturnValue(start + 31_000 + 6 * 3_600_000);
       harnessModelResolve(input);
-      expect(harness!.callsFor("model-resolve")).toHaveLength(3);
+      expect(harness!.callsFor("model-resolve")).toHaveLength(2);
     } finally { now.mockRestore(); }
   });
 });
