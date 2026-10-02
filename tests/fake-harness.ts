@@ -17,9 +17,9 @@ export interface FakeHarness {
 }
 
 const SCRIPT = `#!${process.execPath}
-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
 const dir = process.env.FAKE_HARNESS_DIR;
@@ -171,7 +171,7 @@ else if (command === "model-catalog") {
   const fileMode = statSync(options["--command-json"]).mode & 0o777;
   if (command === "review-verify" && process.env.FAKE_VERIFY_ERROR) fail(process.env.FAKE_VERIFY_ERROR);
   const probed = Object.fromEntries((process.env.FAKE_ENV_PROBE || "").split(",").filter(Boolean).map((name) => [name, process.env[name] === undefined ? null : process.env[name]]));
-  appendFileSync(join(dir, "commands.jsonl"), JSON.stringify({ command, scope: options["--scope"] || null, argv: commandJson, env: probed, mode: fileMode }) + "\\n");
+  appendFileSync(join(dir, "commands.jsonl"), JSON.stringify({ command, scope: options["--scope"] || null, argv: commandJson, env: probed, mode: fileMode, file: options["--command-json"] }) + "\\n");
   if (command === "review-verify") {
     if (options["--scopes"] !== undefined && mode === "legacy") fail("unknown_option:--scopes");
     const names = options["--scopes"] ? options["--scopes"].split(",") : ["default"];
@@ -183,8 +183,10 @@ else if (command === "model-catalog") {
   } else {
     const logEvent = (event) => appendFileSync(join(dir, "judge-events.jsonl"), JSON.stringify({ event, scope: options["--scope"] || null, at: Date.now() }) + "\\n");
     logEvent("start");
+    appendFileSync(join(dir, "judge-pids.jsonl"), JSON.stringify({ scope: options["--scope"] || null, pid: process.pid }) + "\\n");
     while (process.env.FAKE_JUDGE_GATE && !existsSync(process.env.FAKE_JUDGE_GATE)) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
-    if (process.env.FAKE_JUDGE_SLEEP_MS) await new Promise((resolveWait) => setTimeout(resolveWait, Number(process.env.FAKE_JUDGE_SLEEP_MS)));
+    const sleepScopes = (process.env.FAKE_SLEEP_SCOPES || "").split(",").filter(Boolean);
+    if (process.env.FAKE_JUDGE_SLEEP_MS && (sleepScopes.length === 0 || sleepScopes.includes(options["--scope"] || ""))) await new Promise((resolveWait) => setTimeout(resolveWait, Number(process.env.FAKE_JUDGE_SLEEP_MS)));
     if (options["--scope"] !== undefined && mode === "legacy") fail("unknown_option:--scope");
     if (options["--timeout-ms"] !== undefined && mode === "legacy") fail("unknown_option:--timeout-ms");
     const name = options["--scope"] || "default";
@@ -200,6 +202,11 @@ else if (command === "model-catalog") {
     if (flaky && attempts < Number(flaky.split(":")[1] || 1)) { verdict = "pending"; reason = "timeout"; }
     writeFileSync(join(reviewDir, "verdict-" + name + ".json"), JSON.stringify({ name, verdict, reason, findings: "findings for " + name + ": " + verdict + "\\nREVIEW_GATE_VERDICT: " + verdict }));
     const status = reviewStatus(reviewDir).status;
+    if (process.env.FAKE_LOCK_DIR_AFTER === name) {
+      const expected = Number(process.env.FAKE_LOCK_AFTER_STARTED || 1);
+      while (readFileSync(join(dir, "judge-pids.jsonl"), "utf8").split("\\n").filter(Boolean).length < expected) await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      chmodSync(dirname(options["--command-json"]), 0o555);
+    }
     logEvent("end");
     out({ key: "k", revision: 1, status });
     process.exit(status === "changes_required" ? 1 : 0);
@@ -208,7 +215,9 @@ else if (command === "model-catalog") {
   const reviewDir = join(dir, "reviews", [options["--client"], options["--session"]].join("_").replace(/[^A-Za-z0-9_.-]/g, "_"));
   if (!existsSync(join(reviewDir, "scopes.json"))) fail("review_not_found");
   const review = reviewStatus(reviewDir);
-  if (command === "review-findings") {
+  if (command === "review-findings" && process.env.FAKE_FINDINGS_RAW) {
+    process.stdout.write(process.env.FAKE_FINDINGS_RAW + "\\n");
+  } else if (command === "review-findings") {
     const verification = process.env.FAKE_VERIFICATION_OUTPUT !== undefined && JSON.parse(readFileSync(join(reviewDir, "verify.json"), "utf8")).status === "changes_required"
       ? { verification: { status: "failed", output: process.env.FAKE_VERIFICATION_OUTPUT } } : {};
     out({ snapshot: "snap", status: review.status, ...verification, scopes: review.scopes });
@@ -268,7 +277,12 @@ export function fakeJudgeEvents(harness: FakeHarness): Array<{ event: "start" | 
   return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 }
 
-export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[]; env: Record<string, string | null>; mode: number }> {
+export function fakeJudgePids(harness: FakeHarness): Array<{ scope: string | null; pid: number }> {
+  const path = join(harness.dir, "judge-pids.jsonl");
+  return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
+}
+
+export function fakeHarnessCommands(harness: FakeHarness): Array<{ command: string; scope: string | null; argv: string[]; env: Record<string, string | null>; mode: number; file: string }> {
   const path = join(harness.dir, "commands.jsonl");
   return existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
 }
