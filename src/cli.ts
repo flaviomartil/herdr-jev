@@ -533,8 +533,9 @@ program
   .option("--json", "Output the full report as JSON")
   .action(async (options: { scopes?: string; timeoutMs: string; verifyCommandJson?: string; base?: string; client?: string; cwd?: string; session?: string; model?: string; availableModels?: string; json?: boolean }) => {
     try {
-      const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: options.cwd ?? process.cwd(), encoding: "utf8" });
-      const cwd = options.cwd ?? (top.status === 0 && top.stdout.trim() ? top.stdout.trim() : process.cwd());
+      const start = options.cwd ?? process.cwd();
+      const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8" });
+      const cwd = top.status === 0 && top.stdout.trim() ? top.stdout.trim() : start;
       const context = await resolveHerdrContext({ client: options.client, model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) });
       const report = await runReview({ cwd, client: context.client, session: options.session, scopes: options.scopes, timeoutMs: Number(options.timeoutMs),
         verifyCommandJson: options.verifyCommandJson, base: options.base, excludeEnv: envFileKeys(), model: options.model ?? context.delegation.model,

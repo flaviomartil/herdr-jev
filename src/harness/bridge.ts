@@ -40,7 +40,6 @@ export function resolveHarnessRoot(): string {
     join(home, "projects/ai-harness-core"),
     join(home, ".ai-harness"),
     join(home, ".local/share/ai-harness"),
-    join(process.cwd(), "../ai-harness-core"),
   ];
 
   for (const cand of candidates) {
@@ -116,6 +115,9 @@ export function harnessCommand<T = any>(args: string[], timeout = 15_000): T {
   return parsed;
 }
 
+const STAGE_EFFORTS = ["standard", "high", "xhigh"] as const;
+type StageEffort = typeof STAGE_EFFORTS[number];
+
 export interface DelegationInput {
   model?: string;
   availableModels?: string[];
@@ -125,13 +127,13 @@ export interface DelegationInput {
 export type HarnessDecision = { mode: "direct"; reason: string } | {
   mode: "delegate";
   profile: { id: string; client: string; advisor: string;
-    executor: { model: string; cliModel?: string; effort?: "high" | "xhigh" };
-    reviewer: { model: string; cliModel?: string; effort?: "high" | "xhigh" } };
+    executor: { model: string; cliModel?: string; effort?: StageEffort };
+    reviewer: { model: string; cliModel?: string; effort?: StageEffort } };
 };
 
 function validStage(value: any): boolean {
   return Boolean(value) && typeof value === "object" && typeof value.model === "string" && value.model.length > 0
-    && (value.cliModel === undefined || typeof value.cliModel === "string") && (value.effort === undefined || typeof value.effort === "string");
+    && (value.cliModel === undefined || typeof value.cliModel === "string") && (value.effort === undefined || STAGE_EFFORTS.includes(value.effort));
 }
 
 function parseDecision(value: any): HarnessDecision | null {
@@ -164,8 +166,10 @@ const QUOTA_MAX_BYTES = 1024 * 1024;
 const QUOTA_MAX_WINDOWS = 8;
 const QUOTA_CALL_TIMEOUT_MS = 5_000;
 const QUOTA_CACHE_MS = 30_000;
+const QUOTA_DEGRADED_CACHE_MS = 60_000;
 const QUOTA_FRESH_MS = 15 * 60_000;
-let quotaCache: { key: string; at: number; value: unknown[] } | undefined;
+const QUOTA_STOP_ERROR = /^(?:harness_command_timeout|harness_command_failed|harness_unavailable|unknown_command|invalid_external_action|unknown_option)/;
+let quotaCache: { key: string; at: number; ttl: number; value: unknown[] } | undefined;
 
 function localQuotaObservation(request: { provider: string; scope: string; observedAt: number | null; remainingPercent: number | null; resetsAt: number | null }): unknown {
   const now = Date.now();
@@ -174,15 +178,16 @@ function localQuotaObservation(request: { provider: string; scope: string; obser
   return { provider: request.provider, scope: request.scope, freshness: fresh ? "fresh" : "stale", status: exhausted ? "exhausted" : "unknown", source: "local_fallback" };
 }
 
-export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugins/herdr-agent-usage/codex-app-server.json")): unknown[] {
+export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugins/herdr-agent-usage/codex-app-server.json"), callTimeoutMs = QUOTA_CALL_TIMEOUT_MS): unknown[] {
   try {
     const info = statSync(path);
     if (!info.isFile() || info.size > QUOTA_MAX_BYTES) return [];
     const key = `${path}\0${info.mtimeMs}\0${info.size}`;
-    if (quotaCache && quotaCache.key === key && Date.now() - quotaCache.at < QUOTA_CACHE_MS) return quotaCache.value;
+    if (quotaCache && quotaCache.key === key && Date.now() - quotaCache.at < quotaCache.ttl) return quotaCache.value;
     const data = JSON.parse(readFileSync(path, "utf8"));
     if (!Array.isArray(data.windows)) return [];
     let degraded = false;
+    let harnessDown = false;
     const value = data.windows.slice(0, QUOTA_MAX_WINDOWS).map((window: any) => {
       const request = {
         provider: "codex", scope: data.session_quota_only ? "unknown" : data.account_id ? "account" : "unknown",
@@ -190,10 +195,15 @@ export function readUsageQuota(path = join(homedir(), ".local/state/herdr/plugin
         remainingPercent: typeof window?.remaining_percent === "number" ? window.remaining_percent : null,
         resetsAt: typeof window?.resets_at === "number" ? window.resets_at * 1000 : null,
       };
-      try { return harnessCommand(["quota-normalize", "--request-json", JSON.stringify(request)], QUOTA_CALL_TIMEOUT_MS); }
-      catch { degraded = true; return localQuotaObservation(request); }
+      if (harnessDown) return localQuotaObservation(request);
+      try { return harnessCommand(["quota-normalize", "--request-json", JSON.stringify(request)], callTimeoutMs); }
+      catch (error) {
+        degraded = true;
+        harnessDown = QUOTA_STOP_ERROR.test(error instanceof Error ? error.message : "");
+        return localQuotaObservation(request);
+      }
     });
-    if (!degraded) quotaCache = { key, at: Date.now(), value };
+    quotaCache = { key, at: Date.now(), ttl: degraded ? QUOTA_DEGRADED_CACHE_MS : QUOTA_CACHE_MS, value };
     return value;
   } catch { return []; }
 }
@@ -218,6 +228,8 @@ export interface ProbeOptions {
 
 const UNSUPPORTED_ERROR = /^(?:unknown_command|invalid_external_action|unknown_option)/;
 
+const ERROR_MULTILINE_ATTEMPTS = 8;
+
 function jsonErrorCode(text: string): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) return undefined;
@@ -227,9 +239,12 @@ function jsonErrorCode(text: string): string | undefined {
   };
   try { const code = fromValue(JSON.parse(trimmed)); if (code) return code; } catch {}
   const lines = trimmed.split(/\r?\n/);
+  let multiline = 0;
   for (let index = lines.length - 1; index >= 0; index--) {
-    if (!lines[index]!.trimStart().startsWith("{")) continue;
-    for (const candidate of [lines.slice(index).join("\n"), lines[index]!]) {
+    const line = lines[index]!.trim();
+    if (!line.startsWith("{")) continue;
+    const candidates = line === "{" && multiline++ < ERROR_MULTILINE_ATTEMPTS ? [lines.slice(index).join("\n"), line] : [line];
+    for (const candidate of candidates) {
       try { const code = fromValue(JSON.parse(candidate)); if (code) return code; } catch {}
     }
   }
@@ -272,8 +287,17 @@ export function harnessProbe<T = any>(args: string[], options: ProbeOptions = {}
   const argv = probeInvocation(args);
   if (!argv) return { ok: false, error: "harness_unavailable", unsupported: true };
   const result = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8", timeout: options.timeout ?? 10_000, maxBuffer: 4 * 1024 * 1024, env: options.env ?? process.env });
-  if (result.error) return { ok: false, error: "harness_command_failed" };
+  if (result.error) return { ok: false, error: (result.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? "harness_command_timeout" : "harness_command_failed" };
   return interpretProbe<T>(result.status, result.stdout ?? "", result.stderr ?? "", options);
+}
+
+const activeGroups = new Set<number>();
+
+export function terminateHarnessProcesses(): void {
+  for (const pid of activeGroups) {
+    try { process.kill(-pid, "SIGKILL"); } catch {}
+  }
+  activeGroups.clear();
 }
 
 export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions = {}): Promise<HarnessProbe<T>> {
@@ -286,12 +310,18 @@ export function harnessProbeAsync<T = any>(args: string[], options: ProbeOptions
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
+    const pid = child.pid;
+    if (pid !== undefined) activeGroups.add(pid);
     const killGroup = () => {
-      try { process.kill(-child.pid!, "SIGKILL"); } catch { try { child.kill("SIGKILL"); } catch {} }
+      try {
+        if (pid === undefined) throw new Error("no_pid");
+        process.kill(-pid, "SIGKILL");
+      } catch { try { child.kill("SIGKILL"); } catch {} }
     };
     const finish = (value: HarnessProbe<T>) => {
       if (settled) return;
       settled = true;
+      if (pid !== undefined) activeGroups.delete(pid);
       clearTimeout(timer);
       resolvePromise(value);
     };
@@ -317,6 +347,7 @@ export interface ModelResolution {
 }
 
 const PROBE_FAILURE_TTL_MS = 30_000;
+const PROBE_SUCCESS_TTL_MS = 5 * 60_000;
 const probeCache = new Map<string, { value: unknown; expires: number }>();
 
 export function resetHarnessCaches(): void {
@@ -328,7 +359,7 @@ function remembered<T>(key: string, build: () => { value: T; ok: boolean }): T {
   const hit = probeCache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value as T;
   const { value, ok } = build();
-  probeCache.set(key, { value, expires: ok ? Infinity : Date.now() + PROBE_FAILURE_TTL_MS });
+  probeCache.set(key, { value, expires: Date.now() + (ok ? PROBE_SUCCESS_TTL_MS : PROBE_FAILURE_TTL_MS) });
   return value;
 }
 

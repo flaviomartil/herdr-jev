@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { harnessCommand, harnessModelResolve, harnessProbeAsync, hasExhaustedUsageQuota, readUsageQuota, resetHarnessCaches, resolveHarnessDelegation } from "../src/harness/bridge.js";
 import { assignScopes, buildJudgePrompt, deriveScopes, detectVerifyCommand, formatReviewReport, judgeProbeTimeoutMs, listChangedFiles, parseScopes, printable, runReview, splitOversizedScopes } from "../src/harness/review.js";
 import { createFakeHarness, fakeHarnessCommands, type FakeHarness, type FakeHarnessMode } from "./fake-harness.js";
-import { assertNoRealHomeStateLeaks, createTestStateDir } from "./helpers.js";
+import { assertNoRealHomeStateLeaks, createTempHome, createTestStateDir } from "./helpers.js";
 
 let testEnv: { stateDir: string; cleanup: () => void };
 let harness: FakeHarness | undefined;
@@ -62,7 +62,7 @@ describe("finding 1: declared scopes cannot leave changed files unjudged", () =>
     const scopes = assignScopes(parseScopes("docs=README.md"), ["README.md", "src/a.ts", "src/b.ts"]);
     expect(scopes).toEqual([{ name: "docs", files: ["README.md"], changed: ["README.md"] }, { name: "uncovered", files: ["src/a.ts", "src/b.ts"], changed: ["src/a.ts", "src/b.ts"] }]);
     expect(assignScopes(parseScopes("docs=README.md;uncovered=lib"), ["README.md", "src/a.ts"]).map((scope) => scope.name)).toEqual(["docs", "uncovered", "uncovered-2"]);
-    expect(assignScopes(parseScopes("all=."), ["a.ts"]).map((scope) => scope.name)).toEqual(["all", "uncovered"]);
+    expect(assignScopes(parseScopes("all=."), ["a.ts", "src/b.ts"])).toEqual([{ name: "all", files: ["a.ts", "src/b.ts"], changed: ["a.ts", "src/b.ts"] }]);
     expect(assignScopes(parseScopes("src=src"), ["src/a.ts"]).map((scope) => scope.name)).toEqual(["src"]);
   });
 
@@ -88,7 +88,7 @@ describe("finding 1: declared scopes cannot leave changed files unjudged", () =>
     install("contract", { FAKE_PROFILE: "1", FAKE_VERDICTS: "uncovered=CHANGES_REQUIRED" });
     const cli = resolve(import.meta.dir, "../src/cli.ts");
     const result = spawnSync(process.execPath, [cli, "review", "--client", "codex", "--json", "--scopes", "docs=README.md", "--session", "gate-cli"],
-      { encoding: "utf8", cwd: repo, timeout: 120_000, env: { ...process.env, HERDR_ENV: "0", TYPESAFE_API_KEY: "" } });
+      { encoding: "utf8", cwd: repo, timeout: 120_000, env: { ...process.env, HOME: createTempHome(), HERDR_ENV: "0", TYPESAFE_API_KEY: "" } });
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout).status).toBe("changes_required");
   });
@@ -184,7 +184,7 @@ describe("findings 3 and 4: what the judge is told", () => {
     seed();
     write(".env", "TOKEN=1\n");
     install("contract", { FAKE_PROFILE: "1" });
-    await expect(runReview({ cwd: repo, client: "codex", session: "sec-1" })).rejects.toThrow('sensitive_untracked_files: ".env"');
+    await expect(runReview({ cwd: repo, client: "codex", session: "sec-1" })).rejects.toThrow('sensitive_uncommitted_files: ".env"');
     expect(harness!.callsFor("review-verify")).toHaveLength(0);
     rmSync(join(repo, ".env"));
     write(".env.example", "TOKEN=\n");
@@ -280,12 +280,11 @@ describe("finding 9 and minor: probes and old-harness detection", () => {
     seed();
     write("src/a.ts", "export const a = 2;\n");
     install("contract", { FAKE_PROFILE: "1" });
-    const dir = join(testEnv.stateDir, "review", "files-1");
-    mkdirSync(dir, { recursive: true, mode: 0o755 });
-    writeFileSync(join(dir, "verify-command.json"), "[]", { mode: 0o644 });
+    const parent = join(testEnv.stateDir, "review");
+    mkdirSync(parent, { recursive: true, mode: 0o755 });
     await runReview({ cwd: repo, client: "codex", session: "files-1", scopes: "core=src" });
     expect(fakeHarnessCommands(harness!).map((entry) => entry.mode)).toEqual([0o600, 0o600]);
-    expect(existsSync(dir)).toBe(false);
+    expect(readdirSync(parent).filter((name) => name.startsWith("files-1"))).toEqual([]);
   });
 
   it("detects the repository test command from the script and the lock file", () => {
@@ -296,7 +295,7 @@ describe("finding 9 and minor: probes and old-harness detection", () => {
     };
     const manifest = (script: string) => JSON.stringify({ scripts: { test: script } });
     expect(at({ "package.json": manifest("bun test") })).toEqual(["bun", "test"]);
-    expect(at({ "package.json": manifest("bun test --coverage") })).toEqual(["bun", "test"]);
+    expect(at({ "package.json": manifest("bun test --coverage") })).toEqual(["bun", "test", "--coverage"]);
     expect(at({ "package.json": manifest("vitest run"), "bun.lock": "" })).toEqual(["bun", "run", "test"]);
     expect(at({ "package.json": manifest("jest"), "package-lock.json": "{}" })).toEqual(["npm", "test"]);
     expect(at({ "package.json": manifest("jest"), "pnpm-lock.yaml": "" })).toEqual(["pnpm", "test"]);
@@ -348,7 +347,7 @@ describe("finding 5: harnessCommand and the delegation plan", () => {
 });
 
 describe("finding 7: probe caches expire", () => {
-  it("retries a failed model resolution only after the failure window and keeps a good one", () => {
+  it("retries a failed model resolution only after the failure window and keeps a good one for a few minutes", () => {
     install("contract", { FAKE_FAIL_MODEL_RESOLVE: "1" });
     const now = spyOn(Date, "now");
     try {
@@ -366,9 +365,12 @@ describe("finding 7: probe caches expire", () => {
       now.mockReturnValue(start + 31_000 + 60_000);
       expect(harnessModelResolve(input)?.cliModel).toBe("claude-opus-5-5");
       expect(harness!.callsFor("model-resolve")).toHaveLength(2);
-      now.mockReturnValue(start + 31_000 + 6 * 3_600_000);
+      now.mockReturnValue(start + 31_000 + 4 * 60_000);
       harnessModelResolve(input);
       expect(harness!.callsFor("model-resolve")).toHaveLength(2);
+      now.mockReturnValue(start + 31_000 + 6 * 60_000);
+      harnessModelResolve(input);
+      expect(harness!.callsFor("model-resolve")).toHaveLength(3);
     } finally { now.mockRestore(); }
   });
 });
@@ -428,7 +430,7 @@ describe("finding 2: harness root", () => {
   const probe = (cwd: string, home: string) => spawnSync(process.execPath, ["-e", `import { resolveHarnessRoot } from ${JSON.stringify(resolve(import.meta.dir, "../src/harness/bridge.ts"))}; console.log(resolveHarnessRoot());`],
     { encoding: "utf8", cwd, env: { PATH: dirname(process.execPath), HOME: home } });
 
-  it("prefers the installed locations over a sibling of the working directory", () => {
+  it("resolves the installed locations and ignores a sibling of the working directory", () => {
     const parent = join(scratch, "checkout");
     const work = join(parent, "work");
     mkdirSync(work, { recursive: true });
@@ -438,14 +440,14 @@ describe("finding 2: harness root", () => {
     expect(probe(work, home).stdout.trim()).toBe(join(home, "projects/personal/ai-harness-core"));
   });
 
-  it("uses the sibling of the working directory only when nothing is installed", () => {
+  it("never takes a sibling of the working directory as the harness root", () => {
     const parent = join(scratch, "checkout2");
     const work = join(parent, "work");
     mkdirSync(work, { recursive: true });
     write("ai-harness-core/package.json", "{}", parent);
     const home = join(scratch, "empty-home");
     mkdirSync(home);
-    expect(probe(work, home).stdout.trim()).toBe(join(parent, "ai-harness-core"));
+    expect(probe(work, home).stdout.trim()).toBe("");
   });
 });
 
@@ -465,7 +467,7 @@ if (args[0] === "agent" && args[1] === "read") { console.log("busy"); process.ex
 process.exit(1);
 `, { mode: 0o755 });
     const cli = resolve(import.meta.dir, "../src/cli.ts");
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HERDR_BIN_PATH: herdr, HERDR_JEV_STATE_DIR: join(dir, "state"), HERDR_PANE_ID: "caller" };
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, HERDR_BIN_PATH: herdr, HERDR_JEV_STATE_DIR: join(dir, "state"), HERDR_PANE_ID: "caller", HOME: createTempHome() };
     const result = spawnSync(process.execPath, [cli, "peer-message", "w2", "hello"], { encoding: "utf8", env, timeout: 60_000 });
     expect(result.status).toBe(1);
     const lines = result.stderr.trim().split("\n");
@@ -477,7 +479,7 @@ process.exit(1);
 
   it("reports missing arguments the same way", () => {
     const cli = resolve(import.meta.dir, "../src/cli.ts");
-    const result = spawnSync(process.execPath, [cli, "peer-message"], { encoding: "utf8", timeout: 60_000, env: { ...process.env, HERDR_ENV: "0" } });
+    const result = spawnSync(process.execPath, [cli, "peer-message"], { encoding: "utf8", timeout: 60_000, env: { ...process.env, HOME: createTempHome(), HERDR_ENV: "0" } });
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stderr.trim()).error).toContain("required");
   });
