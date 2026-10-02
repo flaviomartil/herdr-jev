@@ -30,8 +30,24 @@ function getStateDir() {
   return resolveStandupEnvironment().stateDir;
 }
 
+function readEscalations(file: string): any[] {
+  if (existsSync(file)) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf-8"));
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {}
+  }
+  return [];
+}
+
+function writeEscalations(file: string, escalations: any[]) {
+  const tempFile = file + ".tmp";
+  writeFileSync(tempFile, JSON.stringify(escalations));
+  renameSync(tempFile, file);
+}
+
 function sanitizePaneId(pane: string) {
-  return pane.replace(/[^a-zA-Z0-9_-]/g, "");
+  return encodeURIComponent(pane).replace(/%/g, "_");
 }
 
 function getReasonText(reason: string) {
@@ -100,15 +116,32 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         unlinkSync(stateFile);
       } catch (e) {}
     }
-    try {
-      writeFileSync(claimFile, JSON.stringify({ time: now }), { flag: "wx" });
-    } catch (e) {
-      return { sent: false, skippedReason: "cooldown", channels: [] };
+    let claimed = false;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        writeFileSync(claimFile, JSON.stringify({ time: now }), { flag: "wx" });
+        claimed = true;
+        break;
+      } catch (e: any) {
+        if (e.code === 'EEXIST') {
+          try {
+            const data = JSON.parse(readFileSync(claimFile, "utf-8"));
+            if (now - data.time > 30000) {
+              unlinkSync(claimFile);
+              continue;
+            }
+          } catch (err) {}
+        }
+        return { sent: false, skippedReason: "cooldown", channels: [] };
+      }
     }
+    if (!claimed) return { sent: false, skippedReason: "cooldown", channels: [] };
   }
 
   const reasonText = getReasonText(opts.reason);
-  const title = `${opts.agent || 'agent'} em ${opts.project} precisa de você`;
+  let title = `${opts.agent || 'agent'} em ${opts.project} precisa de você`;
+  title = title.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
+  title = redactSecrets(title);
   let safeTask = opts.task;
   if (safeTask) {
     safeTask = safeTask.replace(/[\x00-\x1F\x7F-\x9F]/g, "");
@@ -122,12 +155,15 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
 
   if (!opts.dryRun) {
-    const res = await runner([herdrBin, "notification", "show", safeTitle, "--body", body, "--sound", "request"]);
-    if (!res.ok) {
-      try { unlinkSync(claimFile); } catch (e) {}
-      return { sent: false, skippedReason: "notification failed", channels: [] };
+    try {
+      const res = await runner([herdrBin, "notification", "show", safeTitle, "--body", body, "--sound", "request"]);
+      if (!res.ok) {
+        return { sent: false, skippedReason: "notification failed", channels: [] };
+      }
+      renameSync(claimFile, stateFile);
+    } finally {
+      try { if (existsSync(claimFile)) unlinkSync(claimFile); } catch (e) {}
     }
-    renameSync(claimFile, stateFile);
     channels.push("herdr");
 
     const hook = process.env.HERDR_JEV_NOTIFY_HOOK;
@@ -171,23 +207,15 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
       if (!opts.dryRun) {
         const escalationsFile = join(notifyDir, "escalations.json");
         const tempFile = join(notifyDir, "escalations.json.tmp");
-        let escalations: any[] = [];
-        if (existsSync(escalationsFile)) {
-          try { 
-            const parsed = JSON.parse(readFileSync(escalationsFile, "utf-8")); 
-            if (Array.isArray(parsed)) escalations = parsed;
-          } catch (e) {}
-        }
+        let escalations = readEscalations(escalationsFile);
         escalations = escalations.filter((e: any) => e.pane !== opts.pane);
         escalations.push({ pane: opts.pane, agent: opts.agent, time: now });
-        writeFileSync(tempFile, JSON.stringify(escalations));
-        renameSync(tempFile, escalationsFile);
+        writeEscalations(escalationsFile, escalations);
 
         const repRes = await runner([herdrBin, "pane", "report-agent", "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText, opts.pane!]);
         if (!repRes.ok) {
           escalations = escalations.filter((e: any) => e.pane !== opts.pane);
-          writeFileSync(tempFile, JSON.stringify(escalations));
-          renameSync(tempFile, escalationsFile);
+          writeEscalations(escalationsFile, escalations);
         } else {
           channels.push("escalation");
         }
@@ -210,12 +238,7 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
     return { sent: false, skippedReason: "no escalation", channels: [] };
   }
 
-  let escalations: any[] = [];
-  try {
-    escalations = JSON.parse(readFileSync(escalationsFile, "utf-8"));
-  } catch (e) {
-    return { sent: false, skippedReason: "no escalation", channels: [] };
-  }
+  let escalations = readEscalations(escalationsFile);
 
   const record = escalations.find((e: any) => e.pane === pane);
   if (!record) {
@@ -229,7 +252,7 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
   }
   
   escalations = escalations.filter((e: any) => e.pane !== pane);
-  writeFileSync(escalationsFile, JSON.stringify(escalations));
+  writeEscalations(escalationsFile, escalations);
 
   return { sent: true, channels: ["release"] };
 }
@@ -241,7 +264,7 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
   try {
-    const escalations = JSON.parse(readFileSync(escalationsFile, "utf-8"));
+    const escalations = readEscalations(escalationsFile);
     const active = [];
     let released = 0;
     for (const esc of escalations) {
@@ -251,7 +274,9 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
       if (!shouldRelease) {
         const res = await runner([herdrBin, "pane", "get", esc.pane]);
         if (!res.ok) {
-          shouldRelease = true;
+          // Pane is gone, drop the record entirely
+          released++;
+          continue;
         }
       }
 
@@ -266,7 +291,7 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
         active.push(esc);
       }
     }
-    writeFileSync(escalationsFile, JSON.stringify(active));
+    writeEscalations(escalationsFile, active);
     return { sent: released > 0, channels: ["release-stale"] };
   } catch (e) {
     return { sent: false, channels: [] };
@@ -280,7 +305,7 @@ async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; ch
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
   try {
-    const escalations = JSON.parse(readFileSync(escalationsFile, "utf-8"));
+    const escalations = readEscalations(escalationsFile);
     if (escalations.length === 0) return { sent: false, channels: [] };
 
     const active = [];
@@ -290,7 +315,7 @@ async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; ch
         active.push(esc);
       }
     }
-    writeFileSync(escalationsFile, JSON.stringify(active));
+    writeEscalations(escalationsFile, active);
     return { sent: active.length < escalations.length, channels: ["release-all"] };
   } catch (e) {
     return { sent: false, channels: [] };
