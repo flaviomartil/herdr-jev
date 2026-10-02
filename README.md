@@ -39,7 +39,7 @@ Herdr-Jev consumes these `ai-harness` commands through `src/harness/bridge.ts`. 
 
 | Harness command | Used for | Fallback |
 | :--- | :--- | :--- |
-| `model-resolve --client --model [--effort] [--role]` | CLI model id, effort arguments, bypass arguments and read-only reviewer arguments. Answers are cached in memory per process for five minutes; a failed answer for 15 seconds only. | `resolveClaudeModel`, `resolveAntigravityModel`, the built-in effort flags and the built-in argument tables. A model the Harness reports with `known: false` also uses the built-in mapping. |
+| `model-resolve --client --model [--effort] [--role]` | CLI model id, effort arguments, bypass arguments and read-only reviewer arguments. Answers are cached in memory per process; a failed answer is cached for 30 seconds only. | `resolveClaudeModel`, `resolveAntigravityModel`, the built-in effort flags and the built-in argument tables. A model the Harness reports with `known: false` also uses the built-in mapping. |
 | `model-catalog [--client]` | `herdr-jev models catalog [client]` prints the answer unchanged. | Prints `{available: false, reason, fallback}` with the built-in bypass and read-only arguments and exits with code 1. |
 | `external-run --action worker-create`, `worker-settle`, `list` | Worker runs, `workers close`, `runs list` and the Office swarm data. | No run is recorded; `runs list` shows local projections only. |
 | `review-verify --scopes`, `review-judge --scope`, `review-findings` | `herdr-jev review`. | One `default` scope, with `review-status` for the status. |

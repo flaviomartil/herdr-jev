@@ -316,8 +316,7 @@ export interface ModelResolution {
   readonlyArgs: string[];
 }
 
-const PROBE_SUCCESS_TTL_MS = 5 * 60_000;
-const PROBE_FAILURE_TTL_MS = 15_000;
+const PROBE_FAILURE_TTL_MS = 30_000;
 const probeCache = new Map<string, { value: unknown; expires: number }>();
 
 export function resetHarnessCaches(): void {
@@ -329,7 +328,7 @@ function remembered<T>(key: string, build: () => { value: T; ok: boolean }): T {
   const hit = probeCache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value as T;
   const { value, ok } = build();
-  probeCache.set(key, { value, expires: Date.now() + (ok ? PROBE_SUCCESS_TTL_MS : PROBE_FAILURE_TTL_MS) });
+  probeCache.set(key, { value, expires: ok ? Infinity : Date.now() + PROBE_FAILURE_TTL_MS });
   return value;
 }
 
