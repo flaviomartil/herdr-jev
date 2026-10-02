@@ -244,6 +244,22 @@ export function readGridWorkerRecords(callerPaneId: string, stateDir?: string): 
   return parseGridFile(gridStatePath(callerPaneId, stateDir)).records;
 }
 
+export function readAllGridWorkerRecords(stateDir?: string): GridWorkerRecord[] {
+  const dir = gridStateDir(stateDir);
+  const seen = new Set<string>();
+  const records: GridWorkerRecord[] = [];
+  for (const file of gridFiles(dir)) {
+    const parsed = parseGridFile(join(dir, file));
+    const fileCaller = parsed.callerPaneId ?? file.slice(0, -5);
+    for (const record of parsed.records) {
+      if (seen.has(record.paneId)) continue;
+      seen.add(record.paneId);
+      records.push({ ...record, callerPaneId: record.callerPaneId ?? fileCaller });
+    }
+  }
+  return records;
+}
+
 export function readGridWorkers(callerPaneId: string, stateDir?: string): string[] {
   return readGridWorkerRecords(callerPaneId, stateDir).map((r) => r.paneId);
 }
