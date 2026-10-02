@@ -14,23 +14,23 @@ The `herdr-jev classify-pane --json` command returns a flat JSON object:
   "activity": "testing|editing|reading|running|planning|waiting_approval|waiting_answer|error|idle|done|unknown",
   "activityConfidence": 0.8,
   "jevMs": 1200,
-  "model": "gpt-6.1-sol"
+  "model": "jev-1.13.0"
 }
 ```
 
 ## Activity Labels
-The Jev classification derives an explicit `activity` string from the pane context. When confident (`>= 0.6`), this activity replaces the native heuristic label on the office desk. The desk will render as `<agent kind> · <activity>`.
+The Jev classification derives an explicit `activity` string from the pane context. When `activityConfidence` is at least `0.45`, the Office shows it on the monitor of a working desk and in the detail card instead of the native heuristic label. The Jev `state` replaces the native state only when `stateConfidence` is at least `0.7` and the state is not `unknown`.
 
 ## Notification Channels
 The `herdr-jev notify` command deduplicates notifications (default 600s cooldown via `HERDR_JEV_NOTIFY_COOLDOWN_S`) and supports two channels:
 1. **Herdr native**: Spawns `herdr notification show` natively with a sound.
-2. **Hook**: If `HERDR_JEV_NOTIFY_HOOK` points to an executable, it spawns it with `[title, body, paneId, reason]`.
+2. **Hook**: If `HERDR_JEV_NOTIFY_HOOK` points to an executable, it spawns it with `[title, body, paneId, reason]` and a 5 second limit. There is no default hook file; without the variable only the native channel runs.
 
 Environment:
-- `HERDR_JEV_NOTIFY`: Set to 1, true, or on to enable.
+- `HERDR_JEV_NOTIFY`: Enabled unless set to `0`, `false` or `off`.
 - `HERDR_JEV_NOTIFY_HOOK`: Path to executable.
 - `HERDR_JEV_NOTIFY_COOLDOWN_S`: Cooldown in seconds (default 600).
-- `HERDR_JEV_STATE_DIR`: State directory for cooldowns and escalations.
+- `HERDR_JEV_STATE_DIR`: State directory for cooldowns and escalations (`<stateDir>/notify/`). `HERDR_PLUGIN_STATE_DIR` is used when it is unset, with `~/.local/state/herdr-jev` as the fallback.
 
 ## Escalation
 With Herdr 0.9.0, escalation has no effect on natively detected agents (`claude`, `codex`, `agy`, and the like) because Herdr's native detection retains authority over their status. The feature stays off by default (`HERDR_JEV_ESCALATE_BLOCKED=0`).

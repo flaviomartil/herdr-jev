@@ -1,5 +1,7 @@
 # Herdr-Jev
 
+Jev-driven multi-model triage, calibrated turn routing, and Triad orchestration plugin for Herdr and AI-Harness.
+
 Session search, origin-linked pending work, native Codex effort and the Bercail-inspired Studio layout are documented in [companion features](docs/companions.md). They reuse Harness history, existing file/review panes and Telegram integration.
 
 Latency calibration clears cached answers before every sample while retaining the warmed connection. Peer routing reuses the installed usage collector through AI Harness: fresh Codex account exhaustion excludes Codex from automatic selection and explicit peer startup. Stale, unknown and model-scoped observations do not prove provider availability; native account/model preflight remains necessary. Other providers retain their existing quota checks.
@@ -11,8 +13,6 @@ Inside Herdr, `plan` and `route` read the source pane's exact model and fresh Co
 `herdr-jev route "task" --tab` creates a tab; the default tiles delegated workers as a balanced grid in the caller's central region without changing focus. Use `--direction right|down` for the existing explicit split behavior, or `HERDR_JEV_LAYOUT=role` to restore role-based auto layout. `--source-pane <id>` preserves the advisor pane when routing from an overlay, and `--cwd <repository>` selects the worker repository. Stage effort is passed to both interactive and captured Codex/Claude commands.
 
 For implementation followed by independent review, use `--wait --verify-command-json <checks.json>`, where the file contains a JSON command array such as `["bun", "test"]`. `run-resume <id> --cwd <repository> --verify-command-json <checks.json>` reconciles the existing attempt without launching uncertain work again. Resume renews observation of the same bound agent; a task withheld by a trust dialog is submitted once after the dialog is resolved. A prompt with uncertain acknowledgement is never submitted again automatically.
-
-Jev-driven multi-model triage, calibrated turn routing, and Triad orchestration plugin for Herdr and AI-Harness.
 
 ## Canonical execution through AI Harness
 
@@ -64,16 +64,15 @@ Run the automated installer to install dependencies, build the global CLI binary
 ./scripts/install.sh
 ```
 
-Keybindings registered in Herdr:
+The installer appends keybindings to `~/.config/herdr/config.toml` only when the file exists and does not yet mention `herdr-jev`:
 - `prefix+j`: `herdr-jev.route` (Jev: Route Task)
 - `prefix+J`: `herdr-jev.triad` (Jev: Full Triad Pipeline)
 - `prefix+m`: `herdr-jev.models` (Jev: Models and Cascades)
 - `prefix+s`: `herdr-jev.status` (Jev: Status)
-- `prefix+o`: `herdr-jev.office` (Jev: Office)
 
-The Jev classification layer in Jev Office is enabled by default (`HERDR_JEV_OFFICE_JEV=0` disables).
+The other plugin actions (Lantern assistant, Radar overview, Office view, Studio layout, Routines) are available from the Herdr Command Palette. They are declared in [`herdr-plugin.toml`](herdr-plugin.toml).
 
-**Jev Office Hotkeys:** Use `arrows/tab` to move between desks, `enter` to interact or inspect an agent's task, and `+` to hire a new subagent. Use `y`/`n`/`s` to approve, deny, or answer blocked agents.
+The Jev classification layer in Jev Office is enabled by default (`HERDR_JEV_OFFICE_JEV=0` disables). See [Jev Office](#jev-office) for hotkeys and panels.
 
 ---
 
@@ -115,31 +114,63 @@ Once linked, any AI coding assistant can autonomously invoke `herdr-jev` to tria
 ## Standalone Operation (Without AI-Harness)
 
 Herdr-Jev is completely self-contained and operates seamlessly without external harnesses:
-* **No AI-Harness Required**: If `ai-harness-core` is not present, Herdr-Jev operates in standalone mode. Auto-improvement reflections are written to `./auto-improvements.jsonl` in the active project directory.
-* **No Herdr Required**: When executed in regular terminal sessions, `herdr-jev plan` prints the exact CLI command strings ready to run.
+* **No AI-Harness Required**: If `ai-harness-core` is not present, Herdr-Jev operates in standalone mode. Structural usage metadata is sent through `ai-harness usage-record` only when the Harness is found; otherwise nothing is recorded and no learning file is written.
+* **No Herdr Required**: Outside Herdr, `plan` still prints the execution plan, and `subagent` runs the target harness inline in the current terminal. Pane features (`route`, `subagent --tab`, `peer-message`, `workers`) need Herdr.
 * **Zero-Cost Fallback**: If `TYPESAFE_API_KEY` is omitted, tasks are triaged through a local heuristic analyzer with 0ms latency.
 
 ---
 
 ## Environment Configuration Matrix
 
-Herdr-Jev supports fine-grained configuration via environment variables (or a `.env` file based on [`.env.example`](.env.example)):
+Herdr-Jev reads configuration from the process environment. At startup the CLI also loads `~/.config/herdr/.env` and the repository `.env` (see [`.env.example`](.env.example)); a variable that is already set in the environment is never overwritten by these files.
 
-| Variable | Allowed Values | Default | Description & Behavioral Mode |
-| :--- | :--- | :--- | :--- |
-| `TYPESAFE_API_KEY` | String | Vault / Local heuristic | TypeSafe Jev System One semantic triage key (~260ms response). |
-| `TYPESAFE_DEFAULT_MODEL` | String | `jev-1.13.0` | Pinned TypeSafe Jev model version (avoids moving `jev-latest` alias). |
-| `HERDR_JEV_DEADLINE_MS` | Number (ms) | `1000` (or calibrated) | Strict deadline for Jev queries (calibrated via `herdr-jev calibrate -w`). Deadline fallbacks use `deadline-exception`; network failures use `network-exception`. |
-| `HERDR_JEV_ALLOW_ALIASES` | `0`, `1`, `false`, `true` | `0` (Strict Base) | Security gate: allows custom alias binaries (`claude-px`, `fcc-claude`). |
-| `HERDR_JEV_CROSS_HARNESS` | `0`, `auto`, peer list, JSON | `0` (Self-Only) | Delegation scope: `0` (self), `auto` (Jev assigns), or priority array. |
-| `HERDR_JEV_SPLIT_SUBAGENTS` | `1` (split), `0` (inline) | `1` in Herdr, `0` outside | Subagent UX: side-by-side split pane vs native inline CLI progress. |
-| `HERDR_JEV_SPLIT_DIRECTION` | `auto`, `right`, `down` | `auto` | Split layout: Jev role heuristics (`right` for research, `down` for review). |
-| `HERDR_JEV_LAYOUT` | `grid`, `role` | `grid` | Auto layout mode for delegated workers; `grid` balances panes, `role` restores role-based directions. |
-| `AI_HARNESS_ROOT` | Filesystem path | Auto-discover | Path to `ai-harness-core` repository for auto-improvements. |
-| `HERDR_BIN_PATH` | Binary name / path | `herdr` | Path to Herdr multiplexer executable in system PATH. |
-| `HERDR_PLUGIN_ID` | String | `herdr-jev` | Registered plugin ID inside Herdr runtime. |
-| `HERDR_JEV_OFFICE_JEV` | `0`, `1`, `false`, `true`, `off` | `1` (Enabled) | Jev classification layer for Jev Office (enabled by default; `HERDR_JEV_OFFICE_JEV=0` disables). |
-| `HERDR_JEV_<CLIENT>_<ROLE>` | Model name string | `config/models.json` | Dynamic model override (e.g. `HERDR_JEV_CLAUDE_ADVISOR=fable-6`). |
+### HERDR_JEV_* variables
+
+Every `HERDR_JEV_*` variable read by the CLI, the Herdr plugin scripts, the Jev Office or `scripts/smoke.sh`. Placeholders such as `<CLIENT>` are upper-cased client names; non-alphanumeric characters become `_`.
+
+| Variable | Default | Meaning |
+| :--- | :--- | :--- |
+| `HERDR_JEV_DEADLINE_MS` | `1000` | Strict deadline in ms for Jev queries. Falls back to `HARNESS_ROUTER_DEADLINE_MS` when unset. `herdr-jev calibrate -w` writes a calibrated value. Deadline fallbacks use `deadline-exception`; network failures use `network-exception`. |
+| `HERDR_JEV_ALLOW_ALIASES` | off | Enables custom client aliases and binary overrides. Truthy values: `1`, `true`, `yes`, `on`. |
+| `HERDR_JEV_ENABLE_ALIASES` | off | Same gate; read only when `HERDR_JEV_ALLOW_ALIASES` is unset. |
+| `HERDR_JEV_ALIASES` | unset | JSON object mapping alias to base client, for example `{"claude-px":"claude"}`. Honored only when aliases are enabled. |
+| `HERDR_JEV_ALIAS_<NAME>` | unset | Maps one alias to a base client. `<NAME>` is lower-cased and `_` becomes `-` (`HERDR_JEV_ALIAS_CLAUDE_PX=claude` maps `claude-px`). Honored only when aliases are enabled. |
+| `HERDR_JEV_BIN_<CLIENT>` / `HERDR_JEV_<CLIENT>_BIN` | harness default binary | Executable used for that client or alias. Honored only when aliases are enabled. |
+| `HERDR_JEV_<CLIENT>_<ROLE>` | `config/models.json` | Model override for a role (`ADVISOR`, `IMPLEMENTER`, `REVIEWER`, `RESEARCHER`), for example `HERDR_JEV_CLAUDE_ADVISOR=fable-6`. An alias key wins over its base client key. |
+| `HERDR_JEV_<CLIENT>_EXHAUSTED` | unset | `1` marks a non-Codex client as quota exhausted during `detect`. |
+| `HERDR_JEV_CROSS_HARNESS` | unset | Delegation scope: `0`/`false`/`off`/`none`/`disabled` (self only), `1`/`true`/`on`/`auto` (Jev decides), a peer list, a pair mapping or JSON. Unset or empty means self only for `plan` and `route`; `subagent` treats an unset variable as `auto`. |
+| `HERDR_JEV_RECOMMENDED_<ROLE>` | unset | Forces the client Jev recommends for a role in cross-harness delegation. |
+| `HERDR_JEV_SPLIT_SUBAGENTS` | `1` inside Herdr, `0` outside | `1`/`true`/`on`/`yes` split pane, `0`/`false`/`off`/`no` inline native harness. The CLI flags `--split` and `--no-split` win. |
+| `HERDR_JEV_SPLIT_DIRECTION` | `auto` | `right` or `down` forces that direction unless `HERDR_JEV_LAYOUT=grid`. Any other value keeps `auto`. |
+| `HERDR_JEV_LAYOUT` | `grid` | `grid` tiles workers as a balanced grid in the caller's central region; `role` uses role-based directions (`down` for reviewers, `right` otherwise). |
+| `HERDR_JEV_READY_TIMEOUT_MS` | `45000` | How long `subagent` and `route` wait for the new agent to show its prompt before the task is sent. |
+| `HERDR_JEV_SOURCE_PANE_ID` | unset | Source pane override, set by the plugin pane launcher. Used by `studio`, `context`, `standup`, peer messaging and the Office. |
+| `HERDR_JEV_STATE_DIR` | `~/.local/state/herdr-jev` | State root for runs, grid workers, `daily/`, `standup/` and `notify/`. `standup`, `daily` and `notify` also honor `HERDR_PLUGIN_STATE_DIR`. |
+| `HERDR_JEV_NOTIFY` | enabled | `0`, `false` or `off` disables `notify`. Any other value, or unset, leaves it enabled. |
+| `HERDR_JEV_NOTIFY_COOLDOWN_S` | `600` | Per-pane cooldown in seconds between notifications. |
+| `HERDR_JEV_NOTIFY_HOOK` | unset | Executable called with `title`, `body`, `pane`, `reason` after the native notification. No hook runs when it is unset. |
+| `HERDR_JEV_ESCALATE_BLOCKED` | off | `1` lets `notify` and the Office try to report high-confidence blocked agents to Herdr. See the limitation under `notify`. |
+| `HERDR_JEV_OFFICE_JEV` | enabled | `0`, `false` or `off` turns the Jev classification layer in the Office off. It is always off with `--demo`. |
+| `HERDR_JEV_TIMEOUT_MS` | `5000` | Timeout of the `overview --json` poll the Office runs. |
+| `HERDR_JEV_BIN` | `herdr-jev` | Executable used by the plugin scripts and the Office to call the CLI. |
+| `HERDR_JEV_PLACEMENT` | `overlay` | Placement used by `herdr-plugin/open-pane.sh`; the manifest actions set `tab`. |
+| `HERDR_JEV_RESUME_CLIENT`, `HERDR_JEV_RESUME_SESSION` | unset | Set by the session picker for the resume pane. `HERDR_JEV_RESUME_CLIENT` must be `claude`, `codex`, `kimi` or `opencode`. |
+| `HERDR_JEV_ENABLE_OPENCODE` | off | `1` lets `detect` treat OpenCode as configured. |
+| `HERDR_JEV_EXCLUDE_CLIENTS` | unset | Comma-separated clients that `detect` leaves out of its recommendation. |
+| `HERDR_JEV_TEST_GUARD` | unset | `1` blocks anything that would change Herdr state or launch a real agent. Set by `tests/preload.ts`. |
+| `HERDR_JEV_CLI` | `bun src/cli.ts` | Command `scripts/smoke.sh` runs instead of the checkout CLI. |
+
+### Related variables
+
+| Variable | Default | Meaning |
+| :--- | :--- | :--- |
+| `TYPESAFE_API_KEY` | Vault / local heuristic | TypeSafe Jev System One key (~260ms response). When unset the CLI tries `vault get AI-Providers/TypeSafe`, then falls back to the deterministic local heuristic. |
+| `TYPESAFE_DEFAULT_MODEL` | `jev-1.13.0` | Pinned TypeSafe Jev model version (avoids the moving `jev-latest` alias). |
+| `AI_HARNESS_ROOT`, `AI_HARNESS_CORE_PATH` | auto-discover | Path to the `ai-harness-core` repository. |
+| `HERDR_BIN_PATH` | `herdr` | Herdr executable. |
+| `HERDR_PLUGIN_ID` | `herdr-jev` | Plugin ID. A different ID makes `standup`, `daily` and `notify` ignore `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR` and `HERDR_PANE_ID`. |
+| `HERDR_PLUGIN_CONFIG_DIR` | `~/.config/herdr/plugins/config/herdr-jev` | Directory holding `standup.md`. |
+| `HERDR_PLUGIN_STATE_DIR` | unset | State directory supplied by Herdr to plugin processes. |
 
 ---
 
@@ -230,6 +261,175 @@ herdr-jev calibrate -s 15 -w
 
 ---
 
+## Command Reference
+
+`herdr-jev --help` lists every command and `herdr-jev <command> --help` lists its options. Commands that classify with Jev (`triage`, `plan`, `route`, `subagent`, `route-turn`, `classify-pane`, `models classify`, `prewarm`, `calibrate` and the MCP tools) use the TypeSafe API when a key is available and the deterministic local heuristic otherwise.
+
+### Triage and planning
+
+| Command | Purpose |
+| :--- | :--- |
+| `triage <task> [-j, --json]` | Classifies complexity (`trivial`, `routine`, `moderate`, `architectural`), research need, effort (`standard`, `high`, `xhigh`) and recommended pipeline (`direct` or `triad`). `--json` prints the raw decision. |
+| `plan <task>` | Prints the execution plan: advisory `stages` and the canonical `executionStages` that `route` may launch. Options: `-c, --client`, `--source-pane`, `-t, --triad`, `--model`, `--available-models`, `--cross-harness`, `-j, --json`. |
+| `route <task>` | Triages, plans and launches the canonical stages in Herdr panes, then prints the result as JSON. Exits with code 1 when the plan resolves to direct execution, on error, or when a stage ends `failed`, `unknown` or `blocked`. Options: `-c, --client`, `--source-pane`, `--tab`, `--split`, `--cwd`, `-t, --triad`, `--model`, `--available-models`, `--timeout-ms` (default `900000`), `--verify-command-json`, `--wait`, `-d, --direction`, `--cross-harness`. `--no-split` is rejected; use `--tab` or `--split`, not both. |
+| `context [--json]` | Resolves the source pane, workspace and repository and prints them as JSON without launching anything. |
+| `route-turn <turn>` | Pre-flight turn routing, described in [its own section](#pre-flight-turn-routing--resilient-engine-route-turn). Options: `-j, --json`, `--prompt`, `--cold`, `--deadline <ms>`. |
+| `prewarm` | Opens the TypeSafe connection pool ahead of real turns. |
+| `calibrate` | Measures latency to `api.typesafe.ai`. Options: `-s, --samples` (25), `--spacing` (150 ms), `--margin` (1.25 on p98), `--ceiling` (1500 ms), `-w, --write-env [path]`. |
+| `status` | Shows the TypeSafe key source, Herdr environment, Harness connection, subagent mode, split direction, cross-harness mode and recorded quota breakers. |
+| `detect` | Detects installed harnesses and quotas. Options: `-j, --json`, `-w, --write-env [path]`, `-a, --auto-config` (writes `./.env` by default). |
+
+### Runs
+
+Runs live in the existing Harness ledger; Herdr-Jev projects them to `~/.local/state/herdr-jev/<run-id>/run.json`.
+
+| Command | Purpose |
+| :--- | :--- |
+| `run-status <id>` and `runs get <id>` | Reconcile deadlines, refresh the sanitized projection and print `{run, projection}` as JSON. Nothing is redispatched. |
+| `run-resume <id>` | Observes the existing attempt and continues verified dependencies. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`. |
+| `runs list` | Lists recorded runs, newest first. Options: `--limit <n>` (default 20), `--json`. |
+| `runs retry <id> --from-failed` | Retries only `failed`, `unknown` and `blocked` stages. `--from-failed` is required. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`. |
+
+`run-resume` and `runs retry` exit with code 1 when a stage is still `failed`, `unknown` or `blocked`.
+
+### subagent
+
+```sh
+herdr-jev subagent "<prompt>" [-c <source>] [-t <target>] [-r <role>] [--tab | --split | --no-split]
+  [--name <handle>] [--model <id>] [--effort standard|high|xhigh] [--source-pane <id>]
+  [--cwd <path>] [-d auto|grid|right|down] [--cross-harness <mode>] [-p] [--worktree [name]]
+```
+
+- Roles are `researcher` (default), `implementer`, `reviewer` and `advisor`.
+- `--tab` opens a persistent peer in a new tab and requires Herdr; it cannot be combined with `--split` or `--no-split`. `--name` requires a tab or split inside Herdr and makes retries reuse the existing peer.
+- Without `--tab`, the mode follows `--split`, `--no-split`, then `HERDR_JEV_SPLIT_SUBAGENTS`, then whether the command runs inside Herdr. Outside Herdr a split request falls back to the native harness running inline; `-p, --print` makes that inline run non-interactive.
+- `--effort` defaults to the Jev triage of the prompt. `--model` and `--target` are preserved as given.
+- Output on success is a JSON object with `ok`, `paneId`, `agentName`, `client`, `model`, `effort` (native value or `null`), `recommendedEffort` and `effortApplied`.
+
+**Worktree (`--worktree [name]`).** Creates an isolated sibling worktree and starts the peer there.
+
+- The slug is `name`, else `--name`, else a random six-character string. It must match `^[A-Za-z0-9][A-Za-z0-9._/-]*$` and must not start with `codex/`.
+- The branch is `wt/<slug>` created from `HEAD`; the directory is `<repository>-wt-<slug>` next to the repository.
+- An existing worktree of the same repository already on `wt/<slug>` is reused. A directory that is not such a worktree, an existing `wt/<slug>` branch, or a directory outside a Git repository stops the command with an error on stderr and exit code 1, before any pane is created.
+- The worktree path and branch are stored in the worker's tracking record. Herdr-Jev never removes the worktree.
+
+**Readiness wait.** After the agent starts and its spawn metadata is reported, a non-empty prompt is not sent immediately. Herdr-Jev polls every 500 ms, for up to `HERDR_JEV_READY_TIMEOUT_MS` (default 45000), until the agent is `idle` and its pane shows the harness prompt: `›` for Codex, `❯` or `>` for Claude, a lone `>` for AntiGravity; other clients only need `idle`. On timeout the command exits with code 1 and prints a result with `ok: false`, `ackStatus: "unknown"`, `promptPending: true`, `error: "Agent prompt readiness timed out"` and `hint: "prompt not observed; use peer-message"`. The pane stays open and the task was not sent.
+
+**Trust dialog.** The pane is inspected right after start and on every readiness poll for a repository trust prompt (for example `Trust and continue`, `Do you trust this folder?`, `Yes, proceed`, or a numbered choice menu). When one is found, the task is not sent. The command exits with code 1 and prints a result with `ok: false`, `ackStatus: "blocked"`, `completionState: "blocked"`, `trustRequired: true`, `promptPending: true` and `hint: "confirm trust in the pane, then send the task with peer-message"`. Confirm the dialog in the pane, then deliver the task with `peer-message`; Herdr-Jev does not answer trust dialogs itself.
+
+### peer-message and peer-read
+
+```sh
+herdr-jev peer-message <agent> "<text>" [--wait] [--lines <n>] [--timeout-ms <ms>]
+herdr-jev peer-message --all "<text>" [--exclude <handle,handle>] [--wait] [--lines <n>] [--timeout-ms <ms>]
+herdr-jev peer-read <agent> [--wait] [--lines <n>] [--timeout-ms <ms>]
+```
+
+- `--lines` is the terminal snapshot limit (default 2000, from 1 to 100000). `--timeout-ms` is the wait deadline (default 900000, from 1 to 3600000).
+- A peer accepts a message only while `idle` or `done`; a `working` or `blocked` peer is rejected, and a pending repository trust dialog must be resolved first.
+- Without `--wait`, `peer-message` returns `{target, paneId, acknowledged, state}` once the working turn is observed. With `--wait`, and for `peer-read`, the result is `{target, paneId, state, observedStateOnly, output, lineLimit, source}`: a bounded terminal snapshot, not a transcript or a verified result.
+- `--all` takes the message as the only positional argument (adding `<agent>` is an error) and sends it to every tracked grid worker of the caller pane that is still in the pane layout, skipping the caller. `--exclude` matches the worker's handle or pane ID. The output is a JSON array of `{agent, paneId, acknowledged, state}`; the exit code is 1 if any worker did not acknowledge. `--timeout-ms` bounds the whole broadcast, and workers reached after it expires report `state: "timeout"`.
+
+### Workers
+
+| Command | Purpose |
+| :--- | :--- |
+| `workers list [-j, --json]` | Lists tracked grid workers per caller pane with their live agent status (`[{callerPaneId, workerPaneId, status}]` with `--json`). |
+| `workers close [--pane <id>] [--all-idle] [--yes]` | Plans the closing of tracked worker panes whose status is `idle` or `done`. Without `--yes` it only prints the plan; nothing is closed. A caller pane is never closed. One of `--pane` or `--all-idle` is required to select anything. |
+
+### Overview, agents and daily
+
+| Command | Purpose |
+| :--- | :--- |
+| `overview [--json] [--attention] [--watch]` | Project, pane, branch, observed state, model, weekly quota and run summary, grouped by project, with no model calls. `--attention` keeps only blocked agents, `--watch` refreshes every two seconds, and `--watch` cannot be combined with `--json`. State marks: `●` working, `?` blocked, `✓` done, `○` idle, `·` unknown. |
+| `agents [--caller <pane>] [--all] [--json]` | Tracked swarm agents grouped by project: slot, state, commits ahead and uncommitted files (`C/U`), handle, client, model, branch and run. Defaults to the caller pane (`HERDR_PANE_ID`); `--all` shows every caller. |
+| `daily` | Deterministic end-of-day summary per agent, with zero model calls. Formats: default aligned text, `--json`, `--md` (Markdown in Brazilian Portuguese) and `--plain` (Markdown without the title line). `--project <name>` filters by repository or workspace label and is repeatable. `--since <ISO date-time>` replaces the default of local midnight. `--write` saves the Markdown to `<stateDir>/daily/YYYY-MM-DD.md` (mode 0600) and prints that path; with `--write` alone the report itself is not printed. Details in [docs/daily.md](docs/daily.md). |
+
+### standup
+
+`herdr-jev standup` sends the instruction of the day from a Markdown file to eligible agents through the safe peer path.
+
+```markdown
+---
+states: idle,done
+max: 12
+---
+Good morning. Today is {{date}}. Keep the harness clean.
+
+## herdr-jev
+Review the open work on {{branch}}.
+```
+
+- **File**: `--file <path>`, otherwise `standup.md` in `HERDR_PLUGIN_CONFIG_DIR`, falling back to `~/.config/herdr/plugins/config/herdr-jev/standup.md`.
+- **Front matter** (optional): `states` (default `idle,done`; `working` and `blocked` agents are never targeted) and `max` (default 12, capped at 100).
+- **Text**: the part before the first `## ` heading goes to every eligible agent; a `## <project>` section is added for agents whose project or workspace label matches, case-insensitively. Variables: `{{date}}` (DD/MM/YYYY), `{{project}}`, `{{branch}}`, `{{agent}}`. Each message is capped at 8192 bytes.
+- **`--dry-run`**: prints the plan (`targets` and `skipped`, each skipped pane with a reason: `filtered`, `caller`, `no_agent`, `plugin_pane`, `no_text`, `beyond_max`) and sends nothing. Running without `--yes` and without `--auto` behaves the same way.
+- **`--yes`**: sends the messages and records `<stateDir>/standup/YYYY-MM-DD.manual-<timestamp>.json`.
+- **`--auto`**: unattended mode for schedulers. A missing or blank file prints `{"skipped":"no_file"}` and exits 0. A previous automatic run today prints `{"skipped":"already_ran_today"}` and exits 0 unless `--force` is given. Otherwise it sends and records `<stateDir>/standup/YYYY-MM-DD.auto.json`. It needs no caller pane.
+- **`--pane <id>`** (repeatable) restricts targets to those panes. **`--json`** prints structured results. **`--force`** ignores the daily guard.
+
+The state directory is `HERDR_JEV_STATE_DIR` (or `HERDR_PLUGIN_STATE_DIR`), defaulting to `~/.local/state/herdr-jev`. See [docs/standup.md](docs/standup.md) for the full reference.
+
+### notify
+
+`herdr-jev notify` raises one deduplicated notification for an agent that needs a human. It is normally called by the Jev Office.
+
+```sh
+herdr-jev notify --pane w1:p2 --project herdr-jev --attention now --reason approval --agent codex --task "Run the tests" --dry-run --json
+```
+
+- **Required to send**: `--attention now`, `--pane` (`<workspace>:<pane>` identifier), `--project` and `--reason` (`approval`, `question`, `error` or `none`). Anything else returns `sent: false` with a `skippedReason` (`attention not now`, `missing required arguments`, `invalid pane id`, `invalid agent`, `disabled by env`).
+- **Channels**: `herdr` is the native `herdr notification show` with a sound; `hook` runs the executable in `HERDR_JEV_NOTIFY_HOOK` with the arguments `title`, `body`, `pane`, `reason` (5 second limit, output discarded). There is no default hook file: without `HERDR_JEV_NOTIFY_HOOK` only the native channel runs. The title and body are redacted for secrets and written in Brazilian Portuguese.
+- **Cooldown**: one notification per pane every `HERDR_JEV_NOTIFY_COOLDOWN_S` seconds (default 600), recorded in `<stateDir>/notify/`. `HERDR_JEV_NOTIFY=0`, `false` or `off` disables the command.
+- **`--dry-run`**: returns `{sent: false, dryRun: true, wouldSend: [...]}` without notifying, running the hook or writing state.
+- **`--json`** prints the result object: `sent`, `channels`, plus `skippedReason`, `dryRun`, `wouldSend` or `escalation` when applicable.
+- **Escalation flag**: with `HERDR_JEV_ESCALATE_BLOCKED=1`, a call with `--jev-state blocked`, `--reason-confidence` of at least 0.85, `--native-status` of `idle`, `done` or `unknown` and a known `--agent` runs `herdr pane report-agent` and then checks `herdr agent get`. Only a pane that really reads `blocked` is recorded and reported as `escalation: "applied"`; otherwise the result says `escalation: "ineffective"` and nothing is recorded. **Limitation**: with Herdr 0.9.0, escalation has no effect on natively detected agents such as `claude`, `codex` and `agy`, because Herdr's own detection keeps authority over their status. The supported way to be alerted outside the machine is `HERDR_JEV_NOTIFY_HOOK`.
+- **Releasing**: `--release --pane <id>` releases one recorded escalation (`skippedReason: "no escalation"` when none exists), `--release-stale` releases those older than 15 minutes and `--release-all` releases all of them. A release that fails three times drops the record.
+
+### classify-pane
+
+`herdr-jev classify-pane --json` reads one JSON object from stdin and classifies the terminal text with Jev. The pane text is redacted before it is sent. Without `--json` nothing is printed.
+
+```sh
+echo '{"paneText":"Allow this command? (y/n)","agent":"codex","status":"working"}' | herdr-jev classify-pane --json
+```
+
+The output is one flat JSON object, with no nesting:
+
+```json
+{
+  "state": "blocked|working|idle|done|unknown",
+  "stateConfidence": 0.95,
+  "attention": "none|soon|now",
+  "attentionScore": 1.8,
+  "attentionConfidence": 0.88,
+  "blockedReason": "approval|question|error|none",
+  "blockedReasonConfidence": 0.92,
+  "activity": "testing|editing|reading|running|planning|waiting_approval|waiting_answer|error|idle|done|unknown",
+  "activityConfidence": 0.8,
+  "jevMs": 1200,
+  "model": "jev-1.13.0"
+}
+```
+
+`attention` is derived from `attentionScore`: below 0.5 is `none`, below 1.5 is `soon`, otherwise `now`. See [docs/jev-office.md](docs/jev-office.md) for how the Office uses it.
+
+### Models, quota and companions
+
+| Command | Purpose |
+| :--- | :--- |
+| `models list` | Configured models, active overrides and fallback cascades per client. |
+| `models set <client>.<role> <model>` | Saves an override in `~/.config/herdr/herdr-jev-models.json`. |
+| `models classify <client> <model>` | Classifies a new model with Jev: role, tier, effort and whether it becomes primary or a fallback. |
+| `models scan [client]` | Lists the registered models per client. |
+| `quota status` | Prints the Herdr Agent Usage snapshot as JSON, then the manual circuit breakers with their time remaining. |
+| `quota exhaust <client> <model> [-m, --minutes <n>]` | Marks a model as exhausted (default 120 minutes) so work cascades to the next model. |
+| `quota reset [client]` | Clears the breakers of one client, or of all clients. |
+| `studio`, `effort`, `sessions`, `pending` | Studio layout, live Codex effort, session picker and pending work. See [docs/companions.md](docs/companions.md). |
+| `mcp` | Starts the MCP stdio server. Tools: `herdr_triage`, `herdr_plan`, `herdr_spawn_subagent`, `herdr_peer_message`, `herdr_peer_read`, `herdr_clink`, `herdr_consensus`, `herdr_decide`, `herdr_gate`, `herdr_execution_guard`, `herdr_verify_contract` and `herdr_fit_check`. |
+
+---
+
 ## Pre-flight Turn Routing & Resilient Engine (`route-turn`)
 
 Herdr-Jev incorporates an ultra-fast turn router inspired by empirical benchmarks from `jev-harness-router`. In **~330ms**, a single call evaluates 4 decisions before the agent turn begins:
@@ -274,7 +474,7 @@ Herdr-Jev provides complete flexibility for delegating tasks and running subagen
 
 ### 1. Split Pane vs Native Harness Mode
 * **Split Pane Mode (`--split`, `HERDR_JEV_SPLIT_SUBAGENTS=1`)**:
-  Spawns the subagent in a dedicated Herdr pane. By default, Jev automatically decides the split orientation (`auto`):
+  Spawns the subagent in a dedicated Herdr pane. The default `--direction auto` tiles workers as a balanced grid in the caller's central region. With `HERDR_JEV_LAYOUT=role` the orientation follows the role:
   * `researcher` and `implementer`: Vertical split to the `right` for side-by-side editing and parallel research.
   * `reviewer`: Horizontal split `down` for reviewing diffs, test logs, and linting output.
   * Manual override is supported via `--direction right` or `--direction down`.
@@ -288,15 +488,15 @@ Herdr-Jev provides complete flexibility for delegating tasks and running subagen
 | **Execution Context** | Current active terminal session | Dedicated Herdr multiplexer split pane |
 | **Live Progress Visibility** | Live tool calls and outputs in terminal | Full dedicated terminal UI with isolated scrollback |
 | **Session Control** | Foreground CLI execution | Independent pane with background lifecycle |
-| **Layout Orientation** | Inline current window buffer | Automatic: `right` for research, `down` for review |
+| **Layout Orientation** | Inline current window buffer | Balanced grid by default; `right` or `down` on request or with `HERDR_JEV_LAYOUT=role` |
 | **Resource Footprint** | Zero additional terminal allocation | Lightweight multiplexer pane allocation |
 | **Recommended Scope** | Quick searches, direct tasks, standalone CLIs | Deep research, long refactors, multi-pane Triad |
 
 ### 2. Cross-Harness Delegation & Quota Cascade
 Herdr-Jev allows one client or harness to delegate work to another peer client, configured via `HERDR_JEV_CROSS_HARNESS`:
-* **Inactive / Disabled (`0` / `false` / `disabled`)**:
-  Clients only delegate to themselves (e.g. Claude only spawns Claude, Codex only spawns Codex).
-* **Auto / Jev Decides (`1` / `true` / `auto` / `""`)**:
+* **Inactive / Disabled (unset, empty, `0` / `false` / `off` / `none` / `disabled`)**:
+  Clients only delegate to themselves (e.g. Claude only spawns Claude, Codex only spawns Codex). `subagent` is the exception: with the variable unset it behaves as `auto`.
+* **Auto / Jev Decides (`1` / `true` / `on` / `auto`)**:
   Jev System One evaluates each role's cognitive requirements and delegates across harnesses dynamically:
   * `advisor`: Claude (`fable-5` or `opus-5`)
   * `implementer`: Codex (`gpt-5.6-luna` XHIGH)
@@ -418,6 +618,107 @@ Jev analyzes naming patterns and provider conventions to determine:
 
 ---
 
+## Jev Office
+
+The Jev Office draws every agent as a person at a desk, grouped by workspace and tab, with state, branch, uncommitted changes, model, weekly quota and run summary. Open it from the Command Palette (**Jev: Office view**) or run it standalone:
+
+```sh
+node herdr-plugin/office/office.mjs
+node herdr-plugin/office/office.mjs --demo
+node herdr-plugin/office/office.mjs --once --demo
+```
+
+| Flag | Effect |
+| :--- | :--- |
+| `--demo` | Fake roster and fake swarm data; no Herdr server and no Jev calls. |
+| `--once` | Renders one frame and exits. |
+| `--quiet` | No toast when an agent starts waiting for you. |
+| `--no-title` | Leaves the window title alone. |
+| `--no-graphics` | Text only, no pixel charts. |
+| `--no-git` | Never runs `git` in the agents' checkouts. |
+| `--no-context` | Does not read how full each agent's context window is. |
+| `--follow` | Starts in follow mode (see `F` below). |
+| `--zoom=cubicle\|auto\|list` | Opens at that zoom level; an unknown value falls back to `auto`. |
+
+### Hotkeys
+
+| Key | Action |
+| :--- | :--- |
+| `arrows`, `hjkl`, `tab` | Move between desks. |
+| `enter`, `space` | Inspect the selected agent's task. On the empty desk it hires; on a desk with subagents it opens the swarm panel. |
+| `y`, `n` | Approve or deny the request of a blocked agent. |
+| `Y` | Arm a standing "always allow" grant when the screen offers one. `enter` confirms and `esc` cancels. |
+| `s` | Answer a blocked agent in words. |
+| `a` | Give the selected agent a job. |
+| `A` | Standup: send one job to every agent that is free, after a review of who gets it. |
+| `+` | Open the hire menu. There `hjkl` picks an agent, `enter` hires, `w` hires into a new worktree, `e` names the branch, `t` drops the worktree and `esc` cancels. |
+| `w` | Open the swarm panel when the desk has subagents; otherwise cycle the scope between tab, workspace and all workspaces. |
+| `W` | Cycle the scope even when the desk has subagents. |
+| `b` | Jump to the next raised hand (blocked agent). |
+| `F` | Follow raised hands, or stop following. |
+| `z` | Cycle zoom: floor plan, list view, one desk. |
+| `/` | Filter the floor; `esc` shows everyone again. |
+| `f` | Jump to the selected agent's pane. |
+| `r` | Refresh. |
+| `q` | Leave. |
+| `esc` | Close the open panel, field or filter. |
+
+The mouse selects desks, and dragging a desk onto another swaps their panes.
+
+### Swarm panel
+
+Subagents launched by Herdr-Jev are tracked per caller pane. A desk with subagents shows a badge next to its name: `<n>s` for the count, followed by `<k>!` when `k` of them are blocked. The swarm panel lists each subagent with its slot, state, handle, `client/model`, branch, `+commits ~uncommitted` and run summary.
+
+| Key | Action |
+| :--- | :--- |
+| `1` to `9` | Focus the subagent in that slot. |
+| `c` | Ask for the plan to close idle and done subagents (the same plan as `herdr-jev workers close --all-idle`), then `y` confirms and `n` or `esc` cancels. |
+| `esc`, `w` | Close the panel. |
+
+### Jev classification markers
+
+With Jev classification on (the default; `HERDR_JEV_OFFICE_JEV=0` turns it off, and `--demo` never uses it), the Office sends the recent pane text of each desk to `herdr-jev classify-pane --json` and overlays the answer on the desk:
+
+- The Jev state replaces the native state color and label when its confidence is at least 0.7 and it is not `unknown`.
+- A bold amber `!` after the name means attention `now`. A dim `·` means attention `soon` on an idle or done agent.
+- The monitor of a working desk shows the classified activity (`testing`, `editing`, `reading`, `running`, `planning`, `error`, `approval?` for `waiting_approval`, `answer?` for `waiting_answer`) when its confidence is at least 0.45. The detail card spells it out.
+- Model, weekly quota, role and run summary come from `herdr-jev overview --json`, polled every three seconds with a `HERDR_JEV_TIMEOUT_MS` timeout.
+
+A classification that fails or takes longer than three seconds falls back to the native heuristics. Cost is bounded: answers are cached by the last 30 cleaned lines plus the native status (200 entries), a working desk is classified at most once a minute, a non-working desk only after its text is stable for two ticks, and the whole Office makes at most 20 calls a minute, which is at most 1,200 an hour.
+
+### Empty and disconnected states
+
+- **Disconnected**: if the Herdr socket cannot be reached when the Office starts, it prints `herdr-office: cannot reach the Herdr socket at <path>` with the error and the hint `Is the server running? Try: herdr status`, then exits with code 1. `--demo` needs no socket.
+- **No agents**: the floor shows an empty desk labeled `nobody here yet`; pressing `enter` or `+` there hires. A pane too small for a desk shows `An empty office. Eerie.` and `Press + to hire, or start an agent in a Herdr pane.`
+- **Filter with no match**: `Nobody here matches "<filter>".` and `esc shows everyone again.`
+
+---
+
+## Testing
+
+```sh
+bun test
+bun run typecheck
+bun run smoke
+```
+
+- **`bun test`** runs `tests/*.test.ts`. `bunfig.toml` preloads `tests/preload.ts`, which sets `HERDR_JEV_TEST_GUARD=1` and, when `HERDR_JEV_STATE_DIR` is unset, points it at a fresh directory in the OS temp dir so no test writes to the real state.
+- **The test guard** keeps the suite from touching a real Herdr or launching a real agent:
+  - `herdr` commands are refused with `blocked_by_test_guard` (exit code 126) unless they are read-only (`agent` or `pane` with `get`, `list`, `read`, `layout` or `current`) or the executable lives under the OS temp dir, which is where tests place their fake `herdr`.
+  - Inline and captured agent runs are refused the same way unless the binary is under the temp dir.
+  - `runStandup` throws `standup_requires_injected_deps_in_tests` unless the test injects its own sender, and `notify` does not run a hook that lives outside the temp dir.
+  - Tests use fakes from `tests/helpers.ts` and the files in `tests/fixtures/`. They never call the TypeSafe API or start a real model.
+- **`bun run typecheck`** runs `tsc --noEmit`.
+- **`bun run smoke`** runs `scripts/smoke.sh`: a read-only suite against the checkout CLI and the running Herdr, with a temporary `HERDR_JEV_STATE_DIR`. Each check prints `ok`, `skip` or `FAIL`; the script exits with code 1 if any check fails. Checks that need Herdr are skipped when it is unreachable. `SMOKE_LIVE_JEV=1` adds a live `classify-pane` check and `SMOKE_LIVE_NOTIFY=1` adds a live notification, which sends a real one. See [docs/smoke.md](docs/smoke.md). Run it before merging anything that touches CLI contracts.
+
+---
+
+## Scheduling
+
+`standup --auto` and `daily --write` are meant to run unattended. The `herdr-routines` plugin entry and the idempotency rules for the standup are in [docs/standup.md](docs/standup.md); the report formats and the `daily/` output path are in [docs/daily.md](docs/daily.md).
+
+---
+
 ## Contingency & Reversal Plan (If TypeSafe Jev Becomes Paid or Costly)
 
 If the TypeSafe Jev API becomes expensive or unavailable:
@@ -431,7 +732,9 @@ If the TypeSafe Jev API becomes expensive or unavailable:
    ```bash
    herdr plugin unlink herdr-jev
    ```
-# Persistent agent-to-agent conversations
+---
+
+## Persistent agent-to-agent conversations
 
 `herdr-jev subagent "Review this design" --target claude --model sonnet --effort high --tab` opens another harness in a new tab and returns its `agentName`. Continue with `herdr-jev peer-message <agentName> "Compare the alternatives" --wait`, then `herdr-jev peer-read <agentName>`. Both turns use the same native agent session. Use `--split` for a sibling pane. Effort defaults to Jev task triage; explicit target/model/effort are preserved.
 
