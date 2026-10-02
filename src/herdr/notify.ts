@@ -242,7 +242,11 @@ export async function updateEscalations(file: string, mutate: (records: Escalati
       try {
         age = Date.now() - statSync(lockFile).mtimeMs;
       } catch (err: any) {
-        if (err?.code === "ENOENT") continue;
+        if (err?.code === "ENOENT") {
+          if (expired) throw new Error("escalation_lock_timeout");
+          await sleep(15);
+          continue;
+        }
       }
       const stale = age > LOCK_STALE_MS;
       const future = age < -CLOCK_SKEW_MS;
@@ -306,6 +310,11 @@ function ownerAlive(owner: string | undefined): boolean {
 }
 
 type Verification = "blocked" | "not_blocked" | "unavailable";
+type ReportOutcome = Verification | "report_rejected" | "report_ambiguous";
+
+function isAmbiguousFailure(res: HerdrCommandResult): boolean {
+  return TRANSIENT_FAILURE.test(`${res.stdout}\n${res.stderr}`) && !isPaneGone(res);
+}
 
 function verifyBlocked(res: HerdrCommandResult): Verification {
   if (!res.ok) return "unavailable";
@@ -628,7 +637,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
         if (!recorded) {
           escalationResult = "ineffective";
         } else {
-          let verification: Verification | "report_failed" = "report_failed";
+          let verification: ReportOutcome = "report_ambiguous";
           try {
             const repRes = await runner([herdrBin, "pane", "report-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText]);
             if (repRes.ok) {
@@ -636,6 +645,8 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
               try {
                 verification = verifyBlocked(await runner([herdrBin, "agent", "get", opts.pane!]));
               } catch (e) {}
+            } else {
+              verification = isAmbiguousFailure(repRes) ? "report_ambiguous" : "report_rejected";
             }
           } catch (e) {}
           if (verification === "blocked") {
@@ -644,8 +655,8 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
           } else {
             escalationResult = "ineffective";
             const key = recordKey(record);
-            let dropRecord = verification === "report_failed";
-            const restoreDisplaced = verification === "report_failed";
+            let dropRecord = verification === "report_rejected";
+            const restoreDisplaced = verification === "report_rejected";
             if (verification === "not_blocked") {
               try {
                 const relRes = await runner([herdrBin, "pane", "release-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent]);
@@ -718,7 +729,9 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
     return { sent: false, skippedReason: "release failed", channels: [] };
   }
 
-  await tryUpdateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key));
+  if (!(await tryUpdateEscalations(escalationsFile, (records) => records.filter((e) => recordKey(e) !== key)))) {
+    return { sent: false, skippedReason: "escalation update failed", channels: [] };
+  }
   return { sent: true, channels: ["release"] };
 }
 
