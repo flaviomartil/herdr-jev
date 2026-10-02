@@ -99,8 +99,9 @@ describe("review-f redaction and wrapped lines", () => {
   });
 
   test("N4: a clean line after a line that holds a secret is still the meaningful line", () => {
-    expect(lastMeaningfulLine("token: abcd1234efgh\nall done")).toBe("all done");
-    expect(lastMeaningfulLine("│ token: abcd1234efgh │\n│ all done │")).toBe("all done");
+    expect(lastMeaningfulLine("token: abcd1234efgh\nall done")).toBe("done");
+    expect(lastMeaningfulLine("│ token: abcd1234efgh │\n│ all done │")).toBe("done");
+    expect(lastMeaningfulLine("token: abcd1234efgh\nall_done")).toBe("token: [REDACTED]");
     expect(lastMeaningfulLine("Running command with token sk-proj-1234567890abcdef1234567890123\n4567890")).toBe("Running command with token [REDACTED]");
     expect(lastMeaningfulLine("all checks done\nQ1w2E3r4T5y6U7i8O9p0\nAsDfGhJkLzXcVbNm1234")).toBe("all checks done");
   });
