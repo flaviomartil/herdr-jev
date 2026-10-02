@@ -28,8 +28,17 @@ To include the live TypeSafe Jev API classification check:
 SMOKE_LIVE_JEV=1 bun run smoke
 ```
 
+To include a live native notification, which really sends one:
+
+```bash
+SMOKE_LIVE_NOTIFY=1 bun run smoke
+```
+
+To run another executable instead of `bun src/cli.ts`, set `HERDR_JEV_CLI` to its command. The script must run from the repository root, because one check reads `src/herdr/notify.ts`.
+
 ## Checks Performed
 
+0. **`no double dash before herdr positionals`**: Fails when `src/herdr/notify.ts` passes a `--` separator before `herdr` positional arguments.
 1. **`herdr reachable`**: Confirms `herdr agent list` exits with 0 and returns valid JSON.
 2. **`contract of herdr pane get`**: Verifies that `herdr pane get` exits with 0 for an existing pane ID from `herdr pane list`, and exits with a non-zero status for a non-existent pane ID.
 3. **`overview --json`**: Confirms that `herdr-jev overview --json` outputs a JSON array whose items contain `pane`, `agent`, `state`, and `cwd`.
@@ -46,6 +55,7 @@ SMOKE_LIVE_JEV=1 bun run smoke
 
 ## Safety & Isolation
 
-- **Strictly read-only**: The smoke suite never sends real prompts to agents, never triggers notifications, never reports agents as blocked, and never issues agent releases.
+- **Strictly read-only by default**: The smoke suite never sends real prompts to agents, never triggers notifications, never reports agents as blocked, and never issues agent releases. The only exception is the opt-in `SMOKE_LIVE_NOTIFY=1` check, which sends one real notification.
 - **Isolated state directory**: All checks run inside an isolated temporary directory (`HERDR_JEV_STATE_DIR`) created in OS temp and cleaned up on exit.
 - **Graceful skip when Herdr is unreachable**: When Herdr is not running or unreachable, Herdr-dependent checks emit `skip <name>` and do not fail the suite.
+- **Exit code**: Each check prints `ok`, `skip` or `FAIL`. The script exits with code 1 when any check printed `FAIL`.

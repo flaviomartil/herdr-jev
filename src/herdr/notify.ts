@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync, unlinkSync, accessSync, constants, statSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { spawn } from "node:child_process";
-import type { RunCommand } from "./client.js";
+import { readHerdrObservedState, type RunCommand } from "./client.js";
 import { redactSecrets } from "./pane-text.js";
+import { resolveStateDir } from "./state-dir.js";
 
 export interface NotifyOptions {
   pane?: string;
@@ -24,10 +25,24 @@ export interface NotifyOptions {
   now?: number;
 }
 
-import { resolveStandupEnvironment } from "./standup.js";
-
-function getStateDir() {
-  return resolveStandupEnvironment().stateDir;
+export function resolveNotifyHook(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (env.HERDR_JEV_NOTIFY_HOOK !== undefined) {
+    if (env.HERDR_JEV_NOTIFY_HOOK === "" || env.HERDR_JEV_NOTIFY_HOOK === "off") {
+      return undefined;
+    }
+    return env.HERDR_JEV_NOTIFY_HOOK;
+  }
+  const configDir = (env.HERDR_PLUGIN_ID === "herdr-jev" && env.HERDR_PLUGIN_CONFIG_DIR)
+    ? env.HERDR_PLUGIN_CONFIG_DIR
+    : join(homedir(), ".config", "herdr", "plugins", "config", "herdr-jev");
+  const defaultHook = join(configDir, "notify-hook");
+  try {
+    if (existsSync(defaultHook) && statSync(defaultHook).isFile()) {
+      accessSync(defaultHook, constants.X_OK);
+      return defaultHook;
+    }
+  } catch {}
+  return undefined;
 }
 
 function readEscalations(file: string): any[] {
@@ -59,7 +74,14 @@ function getReasonText(reason: string) {
   }
 }
 
-export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[]; dryRun?: boolean; wouldSend?: string[] }> {
+export async function handleNotifyCommand(opts: NotifyOptions, runner: RunCommand): Promise<{
+  sent: boolean;
+  skippedReason?: string;
+  channels: string[];
+  dryRun?: boolean;
+  wouldSend?: string[];
+  escalation?: "applied" | "ineffective";
+}> {
   if (opts.pane && !/^[A-Za-z0-9_]+:[A-Za-z0-9_]+$/.test(opts.pane)) {
     return { sent: false, skippedReason: "invalid pane id", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
@@ -92,7 +114,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     return { sent: false, skippedReason: "missing required arguments", channels: [], ...(opts.dryRun ? { dryRun: true } : {}) };
   }
 
-  const stateDir = getStateDir();
+  const stateDir = resolveStateDir();
   const notifyDir = join(stateDir, "notify");
   if (!opts.dryRun) {
     mkdirSync(notifyDir, { recursive: true });
@@ -166,7 +188,7 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     }
     channels.push("herdr");
 
-    const hook = process.env.HERDR_JEV_NOTIFY_HOOK;
+    const hook = resolveNotifyHook();
     if (hook) {
       if (process.env.HERDR_JEV_TEST_GUARD === '1' && !hook.startsWith(tmpdir())) {
         channels.push("hook");
@@ -192,11 +214,12 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
     }
   } else {
     channels.push("herdr");
-    if (process.env.HERDR_JEV_NOTIFY_HOOK) {
+    if (resolveNotifyHook()) {
       channels.push("hook");
     }
   }
 
+  let escalationResult: "applied" | "ineffective" | undefined;
   if (process.env.HERDR_JEV_ESCALATE_BLOCKED === "1") {
     if (
       opts.jevState === "blocked" &&
@@ -205,22 +228,36 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
       opts.agent && opts.agent !== "unknown"
     ) {
       if (!opts.dryRun) {
-        const escalationsFile = join(notifyDir, "escalations.json");
-        const tempFile = join(notifyDir, "escalations.json.tmp");
-        let escalations = readEscalations(escalationsFile);
-        escalations = escalations.filter((e: any) => e.pane !== opts.pane);
-        escalations.push({ pane: opts.pane, agent: opts.agent, time: now });
-        writeEscalations(escalationsFile, escalations);
-
-        const repRes = await runner([herdrBin, "pane", "report-agent", "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText, opts.pane!]);
-        if (!repRes.ok) {
-          escalations = escalations.filter((e: any) => e.pane !== opts.pane);
-          writeEscalations(escalationsFile, escalations);
+        const repRes = await runner([herdrBin, "pane", "report-agent", opts.pane!, "--source", "herdr-jev", "--agent", opts.agent, "--state", "blocked", "--message", reasonText]);
+        if (repRes.ok) {
+          const getRes = await runner([herdrBin, "agent", "get", opts.pane!]);
+          let isBlocked = false;
+          if (getRes.ok) {
+            try {
+              const data = JSON.parse(getRes.stdout);
+              const status = data.result?.agent?.agent_status ?? data.agent?.agent_status ?? data.agent_status ?? data.result?.status ?? data.status;
+              if (status === "blocked") isBlocked = true;
+            } catch {}
+            if (!isBlocked && readHerdrObservedState(getRes) === "blocked") {
+              isBlocked = true;
+            }
+          }
+          if (isBlocked) {
+            const escalationsFile = join(notifyDir, "escalations.json");
+            let escalations = readEscalations(escalationsFile);
+            escalations = escalations.filter((e: any) => e.pane !== opts.pane);
+            escalations.push({ pane: opts.pane, agent: opts.agent, time: now, attempts: 0 });
+            writeEscalations(escalationsFile, escalations);
+            channels.push("escalation");
+            escalationResult = "applied";
+          } else {
+            escalationResult = "ineffective";
+          }
         } else {
-          channels.push("escalation");
+          escalationResult = "ineffective";
         }
       } else {
-        channels.push("escalation");
+        channels.push("escalation (unverified)");
       }
     }
   }
@@ -228,11 +265,22 @@ export async function handleNotifyCommand(opts: NotifyOptions, runner: RunComman
   if (opts.dryRun) {
     return { sent: false, dryRun: true, wouldSend: channels, channels: [] };
   }
-  return { sent: true, channels };
+  const result: {
+    sent: boolean;
+    skippedReason?: string;
+    channels: string[];
+    dryRun?: boolean;
+    wouldSend?: string[];
+    escalation?: "applied" | "ineffective";
+  } = { sent: true, channels };
+  if (escalationResult) {
+    result.escalation = escalationResult;
+  }
+  return result;
 }
 
 async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: boolean; skippedReason?: string; channels: string[] }> {
-  const notifyDir = join(getStateDir(), "notify");
+  const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) {
     return { sent: false, skippedReason: "no escalation", channels: [] };
@@ -246,8 +294,22 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
   }
 
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", record.agent, pane]);
+  const paneRes = await runner([herdrBin, "pane", "get", pane]);
+  if (!paneRes.ok) {
+    escalations = escalations.filter((e: any) => e.pane !== pane);
+    writeEscalations(escalationsFile, escalations);
+    return { sent: true, channels: ["release"] };
+  }
+
+  const res = await runner([herdrBin, "pane", "release-agent", pane, "--source", "herdr-jev", "--agent", record.agent]);
   if (!res.ok) {
+    const attempts = (record.attempts || 0) + 1;
+    if (attempts >= 3) {
+      escalations = escalations.filter((e: any) => e.pane !== pane);
+    } else {
+      record.attempts = attempts;
+    }
+    writeEscalations(escalationsFile, escalations);
     return { sent: false, skippedReason: "release failed", channels: [] };
   }
   
@@ -259,7 +321,7 @@ async function handleRelease(pane: string, runner: RunCommand): Promise<{ sent: 
 
 async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ sent: boolean; channels: string[] }> {
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  const notifyDir = join(getStateDir(), "notify");
+  const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
@@ -268,24 +330,26 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
     const active = [];
     let released = 0;
     for (const esc of escalations) {
-      const age = now - esc.time;
-      let shouldRelease = age > 15 * 60 * 1000;
-      
-      if (!shouldRelease) {
-        const res = await runner([herdrBin, "pane", "get", esc.pane]);
-        if (!res.ok) {
-          // Pane is gone, drop the record entirely
-          released++;
-          continue;
-        }
+      const paneRes = await runner([herdrBin, "pane", "get", esc.pane]);
+      if (!paneRes.ok) {
+        released++;
+        continue;
       }
 
+      const age = now - esc.time;
+      let shouldRelease = age > 15 * 60 * 1000;
+
       if (shouldRelease) {
-        const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, esc.pane]);
+        const res = await runner([herdrBin, "pane", "release-agent", esc.pane, "--source", "herdr-jev", "--agent", esc.agent]);
         if (res.ok) {
           released++;
         } else {
-          active.push(esc);
+          const attempts = (esc.attempts || 0) + 1;
+          if (attempts >= 3) {
+            released++;
+          } else {
+            active.push({ ...esc, attempts });
+          }
         }
       } else {
         active.push(esc);
@@ -300,7 +364,7 @@ async function handleReleaseStale(runner: RunCommand, now: number): Promise<{ se
 
 async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; channels: string[] }> {
   const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
-  const notifyDir = join(getStateDir(), "notify");
+  const notifyDir = join(resolveStateDir(), "notify");
   const escalationsFile = join(notifyDir, "escalations.json");
   if (!existsSync(escalationsFile)) return { sent: false, channels: [] };
 
@@ -310,9 +374,16 @@ async function handleReleaseAll(runner: RunCommand): Promise<{ sent: boolean; ch
 
     const active = [];
     for (const esc of escalations) {
-      const res = await runner([herdrBin, "pane", "release-agent", "--source", "herdr-jev", "--agent", esc.agent, esc.pane]);
+      const paneRes = await runner([herdrBin, "pane", "get", esc.pane]);
+      if (!paneRes.ok) {
+        continue;
+      }
+      const res = await runner([herdrBin, "pane", "release-agent", esc.pane, "--source", "herdr-jev", "--agent", esc.agent]);
       if (!res.ok) {
-        active.push(esc);
+        const attempts = (esc.attempts || 0) + 1;
+        if (attempts < 3) {
+          active.push({ ...esc, attempts });
+        }
       }
     }
     writeEscalations(escalationsFile, active);

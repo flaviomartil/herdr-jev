@@ -15,7 +15,7 @@ herdr-jev daily [--json] [--md] [--plain] [--project <name>] [--since <ISO date-
 - `--plain`: Output Markdown without the first line `Resumo do dia DD/MM/AAAA` for embedding into other tools.
 - `--project <name>`: Filter by repository name or workspace project label (repeatable, case-insensitive). Keeps only matching project groups.
 - `--since <ISO date-time>`: Scope commits and runs since the specified ISO timestamp (defaults to local midnight).
-- `--write`: Save the Markdown report to `<stateDir>/daily/YYYY-MM-DD.md` (where `stateDir` honors `HERDR_JEV_STATE_DIR` and defaults to `~/.local/state/herdr-jev`), and prints the resulting path as the last output line.
+- `--write`: Save the Markdown report to `<stateDir>/daily/YYYY-MM-DD.md` (where `stateDir` honors `HERDR_JEV_STATE_DIR`, then `HERDR_PLUGIN_STATE_DIR`, and defaults to `~/.local/state/herdr-jev`), and prints the resulting path as the last output line.
 
 Default output without `--md`, `--json`, or `--write` is an aligned text table grouped by repository and branch, displaying repository facts once under each project heading, a 34-character `TASK` column, and cell truncation with ellipsis (`...`).
 
