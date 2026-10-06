@@ -63,6 +63,7 @@ import { parseListLimit, peerBroadcastFailed } from "./cli-support.js";
 import { studio, studioEventPane } from "./herdr/studio.js";
 import { changeEffort } from "./herdr/effort.js";
 import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
+import { reportProgress } from "./herdr/progress.js";
 
 import { spawnSync } from "node:child_process";
 import { envFileKeys, loadEnvFile } from "./config/env-file.js";
@@ -126,16 +127,43 @@ pending.command("done <id>").action(async (id: string) => {
   console.log(JSON.stringify(await historyCommand(["work-state", "--work", id, "--status", "done"])));
 });
 
+program.command("report")
+  .description("Report activity from your own pane; attention events stay in the Harness inbox")
+  .requiredOption("--activity <text>", "Current activity or question")
+  .option("--pane <id>", "Caller pane; defaults to HERDR_PANE_ID")
+  .option("--percent <number>", "Estimated progress from 0 to 100", Number)
+  .option("--reason <reason>", "none, question, approval, error or review", "none")
+  .option("--event <id>", "Stable event id; a new id represents a new occurrence")
+  .action(async (options: { activity: string; pane?: string; percent?: number; reason: string; event?: string }) => {
+    console.log(JSON.stringify(await reportProgress({ ...options, pane: options.pane || process.env.HERDR_PANE_ID || "" })));
+  });
+
+const inbox = program.command("inbox").description("Persistent attention events linked to their native source session");
+inbox.command("add <text>").requiredOption("--session <id>", "Indexed origin session")
+  .requiredOption("--event <id>", "Stable id for this occurrence")
+  .option("--kind <kind>", "question, approval, error or review", "question")
+  .action(async (text: string, options: { session: string; event: string; kind: string }) => {
+    console.log(JSON.stringify(await historyCommand(["work-event", "--session", options.session, "--event", options.event,
+      "--kind", options.kind, "--title", text])));
+  });
+inbox.command("list").option("--project <path>").option("--all").option("--status <status>", "open, done or all", "open")
+  .action(async (options: { project?: string; all?: boolean; status: string }) => {
+    console.log(JSON.stringify(await historyCommand(["work-list", "--events", "--status", options.status,
+      ...(options.all ? [] : ["--project", options.project || process.cwd()])])));
+  });
+inbox.command("seen <id>").action(async (id: string) => { console.log(JSON.stringify(await historyCommand(["work-seen", "--work", id]))); });
+inbox.command("done <id>").action(async (id: string) => { console.log(JSON.stringify(await historyCommand(["work-state", "--work", id, "--status", "done"]))); });
+
 program
   .command("overview")
   .description("Live project, branch, agent and quota overview without model calls")
   .option("--json", "Output compact JSON")
-  .option("--attention", "Show only agents waiting for input")
+  .option("--attention", "Show agents waiting for input or review")
   .option("--watch", "Refresh the dashboard every two seconds")
   .action(async (options: { json?: boolean; attention?: boolean; watch?: boolean }) => {
     if (options.watch && options.json) throw new Error("Use --watch or --json, not both");
     do {
-      const agents = (await readOverview()).filter((agent) => !options.attention || agent.state === "blocked");
+      const agents = (await readOverview()).filter((agent) => !options.attention || agent.attention !== "none");
       if (options.json) { console.log(JSON.stringify(agents)); return; }
       if (options.watch) process.stdout.write("\x1b[H\x1b[J");
       const marks: Record<string, string> = { working: "●", blocked: "?", done: "✓", idle: "○", unknown: "·" };
@@ -144,6 +172,7 @@ program
         for (const agent of agents.filter((item) => item.project === project)) {
           console.log(`  ${marks[agent.state] ?? "·"} ${agent.state} · ${agent.pane} · ${agent.branch ?? "—"}${agent.run ? ` · ${agent.run}` : ""}`);
           console.log(`    ${agent.model ?? agent.agent} · ${agent.weekly ?? "quota unknown"}${agent.context ? ` · ${agent.context}` : ""}${agent.parent ? ` · ${agent.role} ← ${agent.parent}` : ""}`);
+          if (agent.report) console.log(`    ${agent.report.percent === null ? "" : `~${agent.report.percent}% · `}${agent.report.activity} · reported${agent.attentionReason ? ` · ${agent.attentionReason}` : ""}`);
         }
       }
       if (!agents.length) console.log("No matching agents.");
