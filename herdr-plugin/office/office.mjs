@@ -381,6 +381,15 @@ function scopedPeople() {
   return filtered.length > 0 ? filtered : roster.people;
 }
 
+function liveProgress(person, data) {
+  const report = data?.report;
+  if (!report || data.state !== person.status || !person.terminalId || report.terminalId !== person.terminalId
+    || report.sessionId !== (person.sessionId || person.terminalId) || report.agent !== person.kind
+    || report.cwd !== (person.foregroundCwd || person.cwd) || !Number.isSafeInteger(report.expiresAt)
+    || report.reportedAt > Date.now() || report.expiresAt <= Date.now()) return null;
+  return report;
+}
+
 function applyJevData(people = roster.people) {
   const now = getNow();
   if (!initialRosterRecorded && people.length > 0) {
@@ -416,6 +425,22 @@ function applyJevData(people = roster.people) {
       person.jevBlockedReason = cls.blockedReason;
       person.jevBlockedReasonConfidence = cls.blockedReasonConfidence;
       person.jevActivity = cls.activity;
+    } else if (person.jevReport) {
+      person.jevState = null;
+      person.jevAttention = null;
+      person.jevConfidence = 0;
+      person.jevBlockedReason = null;
+      person.jevBlockedReasonConfidence = 0;
+      person.jevActivity = null;
+    }
+    person.jevReport = liveProgress(person, data);
+    if (person.jevReport) {
+      person.jevState = person.status;
+      person.jevConfidence = 1;
+      person.jevAttention = data.attention;
+      person.jevBlockedReason = ['question', 'approval', 'error'].includes(data.attentionReason) ? data.attentionReason : 'none';
+      person.jevBlockedReasonConfidence = person.jevBlockedReason === 'none' ? 0 : 1;
+      person.jevActivity = `${person.jevReport.percent === null ? '' : `~${person.jevReport.percent}% `}${person.jevReport.activity}`;
     }
     person.swarmBadge = aggregateSwarmBadge(subs);
     
@@ -517,6 +542,7 @@ async function pollJevOverview(force = false) {
         try {
           const items = JSON.parse(stdout);
           if (Array.isArray(items)) {
+            jevCache = new Map();
             for (const item of items) {
               if (item?.pane) {
                 jevCache.set(item.pane, {
@@ -526,6 +552,10 @@ async function pollJevOverview(force = false) {
                   role: item.role || null,
                   handle: item.handle || null,
                   context: item.context || null,
+                  state: item.state,
+                  report: item.report || null,
+                  attention: item.attention || 'none',
+                  attentionReason: item.attentionReason || null,
                 });
               }
             }
@@ -2727,6 +2757,10 @@ async function pollJevClassify() {
     const toClassify = [];
     for (const person of roster.people) {
       if (!person.id) continue;
+      if (liveProgress(person, jevCache.get(person.id))) {
+        paneRevisions.delete(person.id);
+        continue;
+      }
       const isWorking = person.status === 'working';
       
       let tracker = paneRevisions.get(person.id);
@@ -2798,6 +2832,8 @@ async function pollJevClassify() {
 }
 
 export const _testHooks = {
+  get jevCache() { return jevCache; },
+  pollJevOverview,
   pollJevClassify,
   get classifyCache() { return classifyCache; },
   get classifyHashes() { return classifyHashes; },

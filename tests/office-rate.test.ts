@@ -130,3 +130,38 @@ test("office.mjs contains no spawnSync or require", () => {
   const spawnSyncMatches = [...content.matchAll(/spawnSync/g)];
   expect(spawnSyncMatches.length).toBe(0);
 });
+
+test("explicit progress skips classification, expires and refuses reused panes", async () => {
+  process.env.HERDR_OFFICE_TEST_UNIT = "1";
+  process.env.HERDR_JEV_CLASSIFY = "1";
+  process.env.HERDR_JEV_BIN = join(tempDir, "fake-jev-classify.sh");
+  const office = await import("../herdr-plugin/office/office.mjs");
+  const hooks = office._testHooks;
+  hooks.notifyPending.length = 0;
+  const person: any = { id: "progress-pane", terminalId: "terminal", sessionId: "native", kind: "codex",
+    cwd: "/test", status: "working", revision: 1, focused: true };
+  hooks.roster.people = [person];
+  let reads = 0;
+  hooks.api = { request: async () => { reads++; return { read: { text: "progress test output" } }; } };
+  const report = { terminalId: "terminal", sessionId: "native", agent: "codex", cwd: "/test", activity: "Testing",
+    percent: 40, reason: "none", reportedAt: Date.now(), expiresAt: Date.now() + 300_000 };
+  const data = { state: "working", report, attention: "none", attentionReason: null };
+  hooks.jevCache.set(person.id, data);
+  hooks.applyJevData();
+  expect(person.jevActivity).toBe("~40% Testing");
+  await hooks.pollJevClassify();
+  expect(reads).toBe(0);
+  person.terminalId = "replacement";
+  hooks.applyJevData();
+  expect(person.jevReport).toBeNull();
+  expect(person.jevActivity).toBeNull();
+  person.terminalId = "terminal";
+  hooks.applyJevData();
+  expect(person.jevReport).not.toBeNull();
+  report.expiresAt = Date.now() - 1;
+  hooks.applyJevData();
+  expect(person.jevActivity).toBeNull();
+  await hooks.pollJevClassify();
+  expect(reads).toBe(1);
+  hooks.jevCache.delete(person.id);
+});

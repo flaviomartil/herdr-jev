@@ -1,5 +1,6 @@
 import { createProcessCommandAdapter, type RunCommand } from "./client.js";
 import { listRunHistory, runStateSummary, formatRunAge, type RunHistoryEntry } from "../orchestration/run-history.js";
+import { progressForAgent, progressAttention, PROGRESS_TTL_MS } from "./progress.js";
 
 function runReferencesPane(
   projection: Record<string, any>,
@@ -76,7 +77,7 @@ export async function readOverview(
     : listRunHistory(typeof runsOrStateDir === "string" ? runsOrStateDir : undefined);
   const workspaces = new Map<string, string>(snapshot.workspaces.map((w: any) => [w.workspace_id, w.label]));
   const branches = new Map<string, Promise<string | null>>();
-  return Promise.all(snapshot.agents.map(async (agent: any) => {
+  const agents = await Promise.all(snapshot.agents.map(async (agent: any) => {
     const cwd = agent.foreground_cwd || agent.cwd;
     if (typeof cwd === "string" && !branches.has(cwd)) {
       branches.set(cwd, run(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
@@ -93,10 +94,14 @@ export async function readOverview(
       agent: agent.agent || null,
       cwd: typeof cwd === "string" ? cwd : null,
     });
+    const report = progressForAgent(agent, now);
+    const state = agent.agent_status ?? "unknown";
     return {
       project: workspaces.get(agent.workspace_id) ?? agent.workspace_id,
       pane: agent.pane_id,
-      state: agent.agent_status ?? "unknown",
+      state,
+      report: report ? { ...report, expiresAt: report.reportedAt + PROGRESS_TTL_MS } : null,
+      ...progressAttention(state, report),
       agent: agent.agent,
       model: cleanModel(tokens.quota_model || tokens.jev_model),
       parent: tokens.jev_parent || null,
@@ -109,4 +114,6 @@ export async function readOverview(
       run: formatOverviewRun(matchedRun, now),
     };
   }));
+  const rank: Record<string, number> = { now: 2, soon: 1, none: 0 };
+  return agents.sort((a, b) => rank[b.attention]! - rank[a.attention]!);
 }

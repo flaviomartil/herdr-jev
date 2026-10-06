@@ -350,6 +350,8 @@ export class Roster {
           head: this.heads.get(id)?.gauge || null,
           title: sanitize(a.terminal_title_stripped || a.terminal_title || ''),
           sessionId: a.agent_session?.value || null,
+          terminalId: a.terminal_id || null,
+          foregroundCwd: a.foreground_cwd || a.cwd || '',
           revision: a.pane_revision || a.revision || 0,
         };
       })
