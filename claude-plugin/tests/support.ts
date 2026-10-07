@@ -27,6 +27,13 @@ export type Seen = {
   toasts: string[]
   logs: string[]
   opened: string[]
+  closed: string[]
+  skillSelect: Record<string, unknown>
+  failSelect: boolean
+  routeSkill: string | null
+  skills: { name: string; source: string }[]
+  failUsage: boolean
+  surfaces: string[]
   alive: { id: string; status: string }[]
   registered: string[]
   specs: SpecSeen[]
@@ -35,6 +42,7 @@ export type Seen = {
   failModels: boolean
   failList: boolean
   denySpawn: string[]
+  throwSpawn: string | null
   models: ModelsFixture
   reviewExit: number
   reviewBody: Record<string, unknown>
@@ -122,7 +130,7 @@ export function pendingReport(): Record<string, unknown> {
 
 export function wire(on: On, extra: { model?: string; session?: string; store?: Record<string, unknown> } = {}): Seen {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock }
+  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock }
 
   on('store.get', (_$, e) => ({ value: seen.saved.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -139,11 +147,26 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     return next(e)
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('prompt.attachment', (_$, e) => ({ text: e.text }))
+  on('agent.offer', () => ({ isOffered: true }))
+  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  on('classic.SessionStart', () => ({}))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['engine band'] }))
   on('tool.call', () => ({ result: 'ok' }))
   on('session.cwd', () => ({ value: CWD }))
   on('session.model', () => ({ value: extra.model ?? SESSION_MODEL }))
+  on('session.usage', () => {
+    if (seen.failUsage) throw new Error('usage down')
+    return {
+      value: {
+        startedAt: 0,
+        context: { breakdown: { skills: { skillFrontmatter: seen.skills.map(one => ({ ...one, tokens: 10 })) } } },
+        rateLimits: [],
+      },
+    } as never
+  })
+  on('session.surfaces', () => ({ value: seen.surfaces as never }))
   on('session.id', () => ({ value: seen.sessionId }))
   on('tool.register', (_$, e) => {
     seen.descriptions.set(e.name, e.description)
@@ -178,6 +201,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     const raw = e as unknown as Record<string, unknown>
     const kind = raw.subagentType ?? raw.subagent_type
     if (typeof kind === 'string' && seen.denySpawn.includes(kind)) return { deny: `refused ${kind}` }
+    if (seen.throwSpawn !== null) throw new Error(seen.throwSpawn)
     seen.spawns.push({
       subagentType: typeof kind === 'string' ? kind : undefined,
       prompt: e.prompt,
@@ -196,6 +220,13 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     const done = (exitCode: number, stdout: string, stderr = '') => ({
       value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
     })
+    if (e.argv[0] === 'ai-harness' && sub === 'skill-select') {
+      if (seen.failSelect) return done(2, '', 'select down')
+      return done(0, JSON.stringify(seen.skillSelect))
+    }
+    if (sub === 'route-turn') {
+      return done(0, JSON.stringify({ decision: { tier: 'deep', skill: seen.routeSkill } }))
+    }
     if (e.argv[0] === 'git') {
       if (seen.failGit) throw new Error('git down')
       return done(0, e.argv.includes('--stat') ? seen.gitStat : seen.gitDiff)
@@ -219,6 +250,10 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
   on('ui.open', (_$, e) => {
     seen.opened.push(e.id)
     return { value: { isPlaced: true as const } }
+  })
+  on('ui.close', (_$, e) => {
+    seen.closed.push(e.id)
+    return { value: undefined }
   })
   on('ui.log', (_$, e) => {
     seen.logs.push(e.text)

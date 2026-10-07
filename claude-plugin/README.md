@@ -4,9 +4,40 @@ Mod do Claude Code que mostra e comanda o trabalho que o Herdr-Jev já decide: p
 
 ## O que aparece
 
-- Banda acima do prompt: `harness · <pasta> · ● <tarefa rodando> · <papel/modelo> · <verificadas>/<total> ██████░░░░`, mais `N approved, harness review pending` (`running` enquanto o review roda; depois de um review que não ficou `ready`, `harness review: <status>`, `harness review: timed out` ou `harness review: failed`), `? N needs you`, `✗ <tarefa falha>` ou `all verified` (some sozinha após 20 s). Botões `Plan` e `Hide`.
-- Pane `harness` (comando `/harness`): objetivo e modelo do advisor, uma linha por tarefa (estado, id, título, papel/modelo/effort, dependências, motivo), workers ativos (última ferramenta e tempo), pendências para você, o resultado do último `herdr-jev review` (status e resultado por escopo) e os botões `Run next` e `Refresh review`.
-- Se o modelo da sessão não for Fable, a banda avisa em cinza: `advisor model is <x>, expected Fable`. O mod continua funcionando.
+- Banda acima do prompt: uma linha só, sem borda, no formato do task-line. Da esquerda: botão `▸`/`▾`, glifo do estado (`●` claude rodando ou em review, `?` aviso precisa de você, `!` erro falha, `◆` aviso aprovada esperando o review do harness, `✓` sucesso tudo verificado com o título `Done`, `○` inactive planejado), título da tarefa atual (`wrap="truncate-end"`), barra que enche o espaço restante, `liquidadas/total`, percentual em negrito (sucesso, aviso, erro ou cor padrão conforme o estado), nota em negrito na cor do estado (`needs you`, `failed` ou `failed: <tarefa>` quando outra roda, `review`, `review pending|running|<status>`), tempo do worker atual, `approved N` em cinza e, à direita, os botões simples `Plan` (abre o pane), a contagem de pendências em aviso e `×` (esconde até o próximo plano). A barra usa fatias de `Box` com `overflow="hidden"` e `━` repetido (receita do frank-claude-cockpit), por isso preenche qualquer largura em terminal e desktop. No desktop uma sobreposição `position="absolute"` com um `Button plain` de NBSP faz a linha inteira alternar o cartão. `all verified` some sozinha após 20 s.
+  - Expandida (`▾`): um cartão `round` com `borderDimColor`, `paddingX={2}`, `paddingY={1}` e `rowGap={1}` acima da linha, com uma linha por tarefa aberta (no máximo 4): `● <título> (papel · modelo · effort)`, a ferramenta atual em cinza no meio e o tempo (`12s`, `1m 48s`) alinhado à direita por `Box flexGrow`. O ponto segue o estado. Depois, `+N more · N done`. Começa recolhida.
+- Pane `harness` (comando `/harness`), no estilo do painel Sessions do frank-claude-cockpit:
+  - Cabeçalho: glifo do estado, objetivo em negrito, `planned <idade>` em cinza e, à direita, `Run ready`, `↻ review` e `✕` (fecha o pane). Embaixo, a barra do plano enchendo a largura e o percentual.
+  - Caixa `round` em aviso `── Needs you ──` (só aparece quando há perguntas, como no human-in-the-loop): `☐ N task(s) for you` em negrito e, por pergunta, `☐ #n <tarefa> <idade>` em negrito, a pergunta na linha seguinte e `Done when: <checks>` em cinza.
+  - Seções `Needs you N` (falhas e perguntas), `Working N`, `Approved N` (esperando o review do harness), `Queued N` e `Done N` (recolhida; o título abre). Cada linha: `▸`/`▾`, `◐` (rodando ou review) ou `●` na cor do estado, id curto, título (clique abre) e o tempo à direita; abaixo, `papel · modelo · effort` em cinza. Aberta (a tarefa rodando abre sozinha), mostra um bloco chave/valor com chaves cinzas alinhadas (`worker`, `tool`, `deps`, `reason`, `review`, `note`) e, para `failed` e `needs_you`, o botão `Rerun`.
+  - Uma linha de aviso para advisor diferente de Fable e dados desatualizados, `N approved, harness review ...`, o último `herdr-jev review` e o rodapé cinza `pasta · advisor <modelo> · review <status|not run> · auto-run on|off · auto-review on|off`.
+  - Seção `Scope · enforce · 12 of 74 skills · 9 of 41 agents`, recolhida; aberta lista o que ficou visível e o motivo.
+  - Sem plano: `No plan yet. Ask the advisor for one.` e os botões.
+- Se o modelo da sessão não for Fable, o pane avisa; o mod continua funcionando.
+
+## Scope
+
+Reduz o que o modelo enxerga (listagem de skills e agentes) sem apagar nada e sem bloquear nada. Porta do mecanismo do harness-scope (MIT, shimo4228): `prompt.attachment` do tipo `skill_listing`, `agent.offer` e o recibo por `$.ui.log`. Em vez de arquivos de perfil estáticos, a lista permitida vem do AI Harness e do Jev. Não foram portados os denies de `tool.call` e `tool.describe` nem o filtro de arquivos de instrução: CLIs, regras obrigatórias e skills chamadas de propósito continuam. Uma skill escondida da listagem ainda roda se for chamada.
+
+Skills mantidas, na ordem do motivo:
+
+1. `project` e `built-in`: skills cuja origem é `projectSettings` ou `built-in` em `$.session.usage({ breakdown: 'summary' })`.
+2. `invoked`: qualquer skill que você chamou com `/nome` na sessão (observado em `prompt.submit`).
+3. `always`: `alwaysAllowSkills` (padrão `writing-clearly-and-concisely, harness-router, herdr-jev, ai-harness-context, plugin-authoring, vault, promote, code-review, simplify`), também com prefixo de plugin (`plug:vault`).
+4. `skill-select`: `selected[].name` e `cliSelected[].name` de `ai-harness skill-select --client claude --query <consulta> [--runbook <id>]`. Roda no `session.start` (depois do `next(e)`, sem bloquear) com a consulta `<pasta> session` e de novo a cada `harness_plan` com o objetivo.
+5. `route-turn`: `decision.skill` de `herdr-jev route-turn <texto> --json` a cada prompt (limite de 2 s, falha ignorada, nunca bloqueia).
+
+Agentes mantidos: os embutidos (`general-purpose`, `Explore`, `Plan`, `claude-code-guide`, `statusline-setup`, `PlanChecker`), `harness:*`, os agentes do projeto (`source` `projectSettings`) e `alwaysAllowAgents` (padrão: os 16 nomes do ROUTER do AI Harness). O resto (`llmtrim-*`, `GrokForge`, `pr-review-toolkit:*`, agentes depreciados) recebe `{ isOffered: false }`.
+
+`scopeMode`: `enforce` (padrão) esconde; `report` não esconde nada mas calcula o recibo (`would hide`); `off` desliga tudo. `runbook` (vazio por padrão) vai em `--runbook`.
+
+Falhas: se o `skill-select` falha, o escopo fica `partial` e nenhuma skill é escondida; formato de listagem desconhecido ou skills do projeto ilegíveis deixam o texto passar sem mudança, com uma linha cinza em `$.ui.log` uma vez só. O escopo zera em `/clear` e `resume` (`classic.SessionStart`). `/harness scope` mostra o recibo (itens mantidos por motivo, escondidos, notas) só na tela; o pane tem a seção `Scope` recolhida.
+
+Limite conhecido: o runbook não é detectado sozinho. O `ai-harness skill-select` roda sem `--runbook` (aceita) e só usa `runbook` quando configurado, então as CLIs que dependem de runbook só aparecem com ele.
+
+## Créditos
+
+Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions) e shimo4228/harness-scope (mecanismo do Scope).
 
 ## Como carregar
 
@@ -59,12 +90,15 @@ Um `role` informado na tarefa (`reader`, `mechanic`, `implementer`, `advisor`) v
 
 `proposed` -> `running` -> `review` -> `approved` -> `verified`.
 
-- `approved`: o reviewer deu `APPROVE`. Ainda não é `verified`. Tarefas `approved` já liberam as dependentes, mas a banda mostra `N approved, harness review pending` (ou o status do último review).
-- `verified`: só o botão `Refresh review` promove. Ele roda `herdr-jev review --json` (passa `--timeout-ms 540000`, o prazo de cada judge do `herdr-jev review`, abaixo do teto de 600 s do `$.process.run`, para o CLI devolver um status não `ready` em vez de ser morto; se o processo ainda assim estourar os 600 s, o refresh aparece como `review timed out`, separado de `review failed`); se o `status` do relatório for `ready`, toda tarefa que estava `approved` quando o refresh começou vira `verified`. Qualquer outro status (`pending_*`, erro) mantém as tarefas `approved`. O `herdr-jev review` sai com código 1 sempre que o status não é `ready`, então o mod lê o JSON do stdout mesmo assim. O relatório não tem campo `verdict`: o pane mostra o `status` e o resultado de cada escopo (`verify ready, <escopo> <status>`). Durante o review a banda e o pane mostram `review running`, e um segundo refresh não roda enquanto o primeiro não termina.
+Com `autoRun` ligado (padrão) o encadeamento é automático: `harness_plan` já inicia toda tarefa `proposed` pronta (mesmo caminho do `harness_run` sem `taskId`, respeitando `maxWorkers`) e devolve o resultado em `Auto-run:`. Sempre que um `turn.complete` liquida uma tarefa (`done`, `approved`, `verified`, `failed` ou `needs_you`), o mod inicia as próximas tarefas prontas; o encadeamento implementer/mechanic -> reviewer continua igual. Tarefa `failed` ou `needs_you` nunca é reiniciada sozinha. Com `autoRun` desligado nada inicia sem `harness_run` ou `Run ready`.
+
+- `approved`: o reviewer deu `APPROVE`. Ainda não é `verified`. Tarefas `approved` já liberam as dependentes, mas a banda mostra `◆ approved` com `harness review pending` (ou o status do último review).
+- `verified`: só o review do harness promove (botão `Refresh review`, ou sozinho com `autoReview`, abaixo). Ele roda `herdr-jev review --json` (passa `--timeout-ms 540000`, o prazo de cada judge do `herdr-jev review`, abaixo do teto de 600 s do `$.process.run`, para o CLI devolver um status não `ready` em vez de ser morto; se o processo ainda assim estourar os 600 s, o refresh aparece como `review timed out`, separado de `review failed`); se o `status` do relatório for `ready`, toda tarefa que estava `approved` quando o refresh começou vira `verified`. Qualquer outro status (`pending_*`, erro) mantém as tarefas `approved`. O `herdr-jev review` sai com código 1 sempre que o status não é `ready`, então o mod lê o JSON do stdout mesmo assim. O relatório não tem campo `verdict`: o pane mostra o `status` e o resultado de cada escopo (`verify ready, <escopo> <status>`). Durante o review a banda e o pane mostram `review running`, e um segundo refresh não roda enquanto o primeiro não termina.
 - O prompt do reviewer inclui o relatório do implementer e um bloco `<<<DIFF ... DIFF>>>` com `git diff --stat` e `git diff` dos paths da tarefa (o repositório inteiro se não houver paths), gerados pelo mod no momento do spawn, a partir do cwd, com o diff limitado a 20000 caracteres e uma nota de truncamento. Só entram mudanças ainda não staged; arquivos novos não rastreados não aparecem no diff.
 - `harness_run <taskId>` numa tarefa `failed` por `CHANGES_REQUIRED` reexecuta o implementer ou mechanic com o último parecer do reviewer (guardado na tarefa como `reviewReport`, até 8000 caracteres) sob o título `Previous review findings`. Se a tarefa está `needs_you` porque o reviewer não deu veredito, o rerun refaz o REVIEW, não o implementer.
 - Reader vai de `running` para `done` (sem review, conta como completo). Mechanic segue o mesmo caminho do implementer.
 - `failed` (review com `CHANGES_REQUIRED`, turno abortado ou spawn recusado) e `needs_you` (worker terminou com `NEEDS_YOU: <pergunta>` ou o reviewer não deu veredito) podem ser reexecutados com `harness_run <taskId>`.
+- Com `autoReview` ligado, quando toda tarefa está `done` ou `approved`, pelo menos uma está `approved` e nenhum refresh está rodando, o mod dispara o `Refresh review` uma vez, em segundo plano, sem bloquear o turno. Ele nunca repete para o mesmo conjunto de tarefas aprovadas (mesmo que o review não termine `ready`); um novo `harness_plan` zera isso. O botão continua disponível.
 - `all verified` só aparece quando toda tarefa está `verified` ou `done`.
 
 ## Restauração
@@ -81,11 +115,15 @@ O hook `tool.call` atribui as chamadas de ferramenta de um subagente ao worker p
 
 - `herdrJevBin` (padrão `herdr-jev`): executável, resolvido pelo PATH.
 - `maxWorkers` (padrão `3`): máximo de tarefas `running` ao mesmo tempo. Reviewers não contam.
+- `autoRun` (padrão `true`): `harness_plan` e cada tarefa liquidada iniciam sozinhos as tarefas prontas.
+- `scopeMode` (padrão `enforce`), `runbook` (vazio), `alwaysAllowSkills` e `alwaysAllowAgents`: ver a seção Scope.
+- `autoReview` (padrão `false`): dispara o review do harness uma vez quando tudo está `done` ou `approved` e há ao menos uma `approved`.
 
 ## Limites conhecidos
 
-- O mod é observacional: não nega nada e não muda permissões. Workers só nascem por `harness_run`, pelo botão `Run next` ou pelo encadeamento implementer/mechanic -> reviewer em `turn.complete`. A restrição de ferramentas dos tipos de agente vem de `tools` e `disallowedTools` do `$.agent.register`.
-- Spawn de reviewer usa o mesmo claim atômico do `startTask` (`reviewStarting`), então `harness_run` em paralelo, `Run next` e reload nunca criam dois reviewers para a mesma tarefa.
+- O mod é observacional: não nega nada e não muda permissões. Workers só nascem por `harness_plan` e `turn.complete` (com `autoRun`), `harness_run`, pelo botão `Run ready` ou pelo encadeamento implementer/mechanic -> reviewer em `turn.complete`; nunca por um hook de render. A restrição de ferramentas dos tipos de agente vem de `tools` e `disallowedTools` do `$.agent.register`.
+- Spawn de reviewer usa o mesmo claim atômico do `startTask` (`reviewStarting`), então `harness_run` em paralelo, `Run ready`, o encadeamento automático e reload nunca criam dois reviewers para a mesma tarefa, nem dois workers para a mesma tarefa.
 - `$` não pode ser passado entre arquivos do mod (regra do validador), então `cli.ts` e `workers.ts` recebem portas (`run`, `spawn`, `register`) em vez de `$`.
 - O spawn de um plugin sempre roda em background; não existe campo `background` em `$.agent.spawn`, nem `effort`: o effort vai no tipo registrado.
-- O review do harness é manual (`Refresh review`); nada o dispara sozinho.
+- O review do harness é manual (`Refresh review`) a menos que `autoReview` esteja ligado.
+- Smoke test do harness mod: `claude plugin validate` e `claude plugin test` cobrem comportamento de plano, spawn, reviewer e restauração; validação local é pré-requisito para mudanças.

@@ -14,6 +14,7 @@ import {
   parseSaved,
   parseVerdict,
   reviewPhrase,
+  spawnModelOf,
   taskId,
 } from '../hooks/plan'
 import { runReview } from '../hooks/cli'
@@ -122,6 +123,16 @@ test('claudeEffort maps Herdr-Jev efforts to Claude Code levels', async () => {
   expect(claudeEffort('xhigh')).toBe('xhigh')
   expect(claudeEffort('weird')).toBeUndefined()
   expect(claudeEffort(null)).toBeUndefined()
+})
+
+test('spawnModelOf maps catalog ids to Claude Code aliases and refuses unknown ids', async () => {
+  expect(spawnModelOf('claude-fable-5-1')).toBe('fable')
+  expect(spawnModelOf('claude-opus-5-5')).toBe('opus')
+  expect(spawnModelOf('claude-sonnet-5-5')).toBe('sonnet')
+  expect(spawnModelOf('claude-sonnet-5-6')).toBe('sonnet')
+  expect(spawnModelOf('claude-haiku-4-5-20251001')).toBe('haiku')
+  expect(spawnModelOf('Claude-Opus-5-5')).toBe('opus')
+  expect(spawnModelOf('gpt-5.5')).toBeNull()
 })
 
 test('taskId is stable and eight hex digits', async () => {

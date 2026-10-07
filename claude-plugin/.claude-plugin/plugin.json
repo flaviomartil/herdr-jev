@@ -15,6 +15,42 @@
       "title": "Max parallel workers",
       "description": "Most implementer and reader tasks harness_run starts at once.",
       "default": 3
+    },
+    "autoRun": {
+      "type": "boolean",
+      "title": "Run tasks automatically",
+      "description": "harness_plan starts every ready task and each finished task starts the next ready ones.",
+      "default": true
+    },
+    "scopeMode": {
+      "type": "string",
+      "title": "Scope mode",
+      "description": "off, report or enforce. enforce hides skills and agents the harness did not select for the task; report only computes the receipt.",
+      "default": "enforce"
+    },
+    "runbook": {
+      "type": "string",
+      "title": "Scope runbook",
+      "description": "Optional ai-harness runbook id passed to skill-select --runbook.",
+      "default": ""
+    },
+    "alwaysAllowSkills": {
+      "type": "string",
+      "title": "Always visible skills",
+      "description": "Comma separated skill names the scope never hides.",
+      "default": "writing-clearly-and-concisely,harness-router,herdr-jev,ai-harness-context,plugin-authoring,vault,promote,code-review,simplify"
+    },
+    "alwaysAllowAgents": {
+      "type": "string",
+      "title": "Always offered agents",
+      "description": "Comma separated agent names the scope never hides, besides built-ins, harness:* and the project's own agents.",
+      "default": "business-operator,claudex-coordinator,commercial-operator,harness-operator,knowledge-maintainer,legacy-archaeologist,media-producer,platform-reliability,product-discovery,quality-reviewer,recording-analyst,research-analyst,security-operator,software-architect,software-engineer,web-experience"
+    },
+    "autoReview": {
+      "type": "boolean",
+      "title": "Refresh the harness review automatically",
+      "description": "Run the herdr-jev review once when every task is done or approved and at least one is approved.",
+      "default": false
     }
   }
 }

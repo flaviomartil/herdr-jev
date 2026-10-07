@@ -57,6 +57,7 @@ export type HarnessPlan = {
   advisorModel: string
   roles: HarnessRoleTable
   tasks: HarnessTask[]
+  at?: number
 }
 
 export type HarnessWorkerRow = {
@@ -86,6 +87,17 @@ export type HarnessReview = {
   at: number
 }
 
+export type ScopeState = {
+  status: 'pending' | 'ready' | 'partial'
+  selected: string[]
+  clis: string[]
+  turn: string[]
+  invoked: string[]
+  query: string
+  total: number | null
+  note: string | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     harness: {
@@ -98,6 +110,9 @@ declare module 'claude-code' {
       advisorModel: string
       review: HarnessReview | null
       isReviewRunning: boolean
+      isExpanded: boolean
+      folds: Record<string, boolean>
+      scope: ScopeState
     }
   }
 }

@@ -2,7 +2,7 @@ import type { AgentSpawnArgs, AgentSpawnResult, EngineInterface } from 'claude-c
 
 import type { HarnessPlan, HarnessRoleTable, HarnessTask, HarnessTaskState, HarnessVerdict } from '../types'
 import type { RunPort } from './cli'
-import { claudeEffort, fit, modelRoleOf, parseNeedsYou, parseVerdict } from './plan'
+import { claudeEffort, fit, modelRoleOf, parseNeedsYou, parseVerdict, spawnModelOf } from './plan'
 import type { AgentKind } from './plan'
 
 export type AgentSpec = Parameters<EngineInterface['agent']['register']>[0]
@@ -89,12 +89,12 @@ const SCOPE_LINES: Readonly<Record<AgentKind, string>> = {
     'Make only this mechanical change inside the owned paths, run the acceptance checks, then report the files you changed. If you are blocked on a human decision, end with one line: NEEDS_YOU: <question>.',
 }
 
-export function agentSpec(kind: AgentKind, cliModel: string, effort: string | undefined): AgentSpec {
+export function agentSpec(kind: AgentKind, spawnModel: string, effort: string | undefined): AgentSpec {
   const common = {
     name: kind,
     description: DESCRIPTIONS[kind],
     prompt: PROMPTS[kind],
-    model: cliModel,
+    model: spawnModel,
     ...(effort === undefined ? {} : { effort }),
   }
   if (kind === 'reviewer') {
@@ -122,8 +122,8 @@ async function exclusive<T>(gate: Gate, work: () => Promise<T>): Promise<T> {
   return run
 }
 
-function registrationKey(cliModel: string, effort: string | undefined): string {
-  return `${cliModel}|${effort ?? ''}`
+function registrationKey(spawnModel: string, effort: string | undefined): string {
+  return `${spawnModel}|${effort ?? ''}`
 }
 
 export async function registerKinds(
@@ -135,12 +135,14 @@ export async function registerKinds(
   for (const kind of AGENT_KINDS) {
     const entry = roles[modelRoleOf(kind)]
     if (entry === undefined) continue
+    const spawnModel = spawnModelOf(entry.cliModel)
+    if (spawnModel === null) continue
     const effort = claudeEffort(entry.effort)
-    const key = registrationKey(entry.cliModel, effort)
+    const key = registrationKey(spawnModel, effort)
     await exclusive(gate, async () => {
       if (gate.registered.get(kind) === key) return
       try {
-        await ports.register(agentSpec(kind, entry.cliModel, effort))
+        await ports.register(agentSpec(kind, spawnModel, effort))
         gate.registered.set(kind, key)
         registered.push(kind)
       } catch {
@@ -186,7 +188,7 @@ export async function collectDiff(run: RunPort, cwd: string, paths: readonly str
 }
 
 export type LaunchTarget =
-  | { ok: true; cliModel: string; effort: string | undefined }
+  | { ok: true; cliModel: string; spawnModel: string; effort: string | undefined }
   | { ok: false; reason: string }
 
 export function resolveLaunch(plan: HarnessPlan, task: HarnessTask, kind: AgentKind): LaunchTarget {
@@ -198,8 +200,12 @@ export function resolveLaunch(plan: HarnessPlan, task: HarnessTask, kind: AgentK
       reason: `herdr-jev models list has no ${roleKey} model, so the ${kind} is not started; fix it and call harness_plan again`,
     }
   }
+  const spawnModel = spawnModelOf(entry.cliModel)
+  if (spawnModel === null) {
+    return { ok: false, reason: `model ${entry.cliModel} has no Claude Code alias` }
+  }
   const effort = kind === 'reviewer' ? entry.effort : (task.effort ?? entry.effort)
-  return { ok: true, cliModel: entry.cliModel, effort: claudeEffort(effort) }
+  return { ok: true, cliModel: entry.cliModel, spawnModel, effort: claudeEffort(effort) }
 }
 
 export type PromptExtras = {
@@ -253,10 +259,10 @@ export async function launchAgent(
   const diff = kind === 'reviewer' ? await collectDiff(ports.run, cwd, task.paths) : undefined
 
   return exclusive(gate, async (): Promise<SpawnOutcome> => {
-    const key = registrationKey(target.cliModel, target.effort)
+    const key = registrationKey(target.spawnModel, target.effort)
     if (gate.registered.get(kind) !== key) {
       try {
-        await ports.register(agentSpec(kind, target.cliModel, target.effort))
+        await ports.register(agentSpec(kind, target.spawnModel, target.effort))
         gate.registered.set(kind, key)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -270,7 +276,7 @@ export async function launchAgent(
         prompt: buildPrompt(plan, task, kind, { report, diff }),
         description: fit(`${kind}: ${task.title}`, 60),
         cwd,
-        model: target.cliModel,
+        model: target.spawnModel,
       })
       if (spawned.deny !== undefined) return { ok: false, reason: spawned.deny }
       if (spawned.agentId === undefined) return { ok: false, reason: 'spawn returned no agent id' }
