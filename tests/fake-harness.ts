@@ -164,9 +164,13 @@ else if (command === "model-catalog") {
   const state = load();
   if (pipeline) {
     if (options["--action"] === "create") {
-      const stages = JSON.parse(process.env.FAKE_PIPELINE_STAGES).map((stage) => ({ ...stage, state: "queued" }));
+      const stages = JSON.parse(process.env.FAKE_PIPELINE_STAGES).map((stage) => ({ state: "queued", ...stage }));
       state.pipelines = [{ id: "00000000-0000-4000-8000-0000000000aa", kind: "pipeline", client: request.client, cwd: request.cwd, createdAt: new Date(0).toISOString(), objectiveDigest: request.objectiveDigest, stages }];
       save(state);
+    }
+    if (!state.pipelines || !state.pipelines.length) {
+      const stages = JSON.parse(process.env.FAKE_PIPELINE_STAGES).map((stage) => ({ state: "queued", ...stage }));
+      state.pipelines = [{ id: "00000000-0000-4000-8000-0000000000aa", kind: "pipeline", client: process.env.FAKE_PIPELINE_CLIENT || "claude", cwd: process.env.FAKE_PIPELINE_CWD, createdAt: new Date(0).toISOString(), objectiveDigest: process.env.FAKE_PIPELINE_DIGEST, stages }];
     }
     const run = state.pipelines[0];
     if (options["--action"] === "settle") run.stages.find((stage) => stage.role === request.stage).state = request.state;
