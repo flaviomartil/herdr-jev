@@ -1,0 +1,20 @@
+{
+  "name": "harness",
+  "version": "0.1.0",
+  "description": "Shows and drives Herdr-Jev role plans inside Claude Code: the advisor is the session, and the implementer, reviewer and reader models come from herdr-jev models list.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "herdrJevBin": {
+      "type": "string",
+      "title": "herdr-jev binary",
+      "description": "Executable used for triage, plan and review. Resolved through PATH unless absolute.",
+      "default": "herdr-jev"
+    },
+    "maxWorkers": {
+      "type": "number",
+      "title": "Max parallel workers",
+      "description": "Most implementer and reader tasks harness_run starts at once.",
+      "default": 3
+    }
+  }
+}
