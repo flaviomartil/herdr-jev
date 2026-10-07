@@ -162,8 +162,8 @@ export class ResilientJevClient {
       const outcome: JevOutcome<Q> = {
         answers: data.answers,
         jevMs: performance.now() - started,
-        inputTokens: data.usage.input_tokens,
-        outputTokens: data.usage.output_tokens,
+        inputTokens: data.usage?.input_tokens ?? 0,
+        outputTokens: data.usage?.output_tokens ?? 0,
         model: data.model,
         requestId,
         fromCache: false,
@@ -180,8 +180,8 @@ export class ResilientJevClient {
             const lateOutcome: JevOutcome<Q> = {
               answers: data.answers,
               jevMs: performance.now() - started,
-              inputTokens: data.usage.input_tokens,
-              outputTokens: data.usage.output_tokens,
+              inputTokens: data.usage?.input_tokens ?? 0,
+              outputTokens: data.usage?.output_tokens ?? 0,
               model: data.model,
               requestId,
               fromCache: false,
@@ -190,7 +190,7 @@ export class ResilientJevClient {
             onLate?.(lateOutcome);
           },
           () => {},
-        );
+        ).catch(() => {});
       } else {
         inflight.catch(() => {});
       }
