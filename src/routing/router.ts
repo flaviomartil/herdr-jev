@@ -1,9 +1,11 @@
 import { performance } from "node:perf_hooks";
+import { randomUUID } from "node:crypto";
 import { Lru, hashKey } from "../cache/lru.js";
 import {
   ResilientJevClient,
   getGlobalJevClient,
   type ResilientJevOptions,
+  JevError,
 } from "../triage/jev-client.js";
 import {
   COMMAND_PREFIX,
@@ -15,7 +17,35 @@ import {
   type ToolDef,
 } from "./catalog.js";
 import { decideRoute, DEFAULT_POLICY_THRESHOLDS, type PolicyThresholds, type RouteTurnDecision } from "./policy.js";
-import { buildRoutingQuestions } from "./questions.js";
+import { buildRoutingQuestions, routingAnswersStatus } from "./questions.js";
+
+export type RouteMode = "off" | "shadow" | "active";
+export type RouteReason = "judged" | "shortcut" | "off" | "shadow" | "invalid_answer" | "abstained" | "deadline" | "aborted" | "api" | "network" | "missing_key";
+
+export interface RouteSummary {
+  tier: RouteTurnDecision["tier"];
+  effort: RouteTurnDecision["effort"];
+  toolCount: number;
+  hasSkill: boolean;
+}
+
+export interface RouteObservation {
+  id: string;
+  specId: "turn.route";
+  specVersion: 1;
+  mode: RouteMode;
+  source: RouterTelemetry["source"];
+  reason: RouteReason;
+  applied: RouteSummary;
+  judged: RouteSummary | null;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+function summarizeRoute(decision: RouteTurnDecision): RouteSummary {
+  return { tier: decision.tier, effort: decision.effort, toolCount: decision.tools.length, hasSkill: decision.skill !== null };
+}
 
 export interface TurnInput {
   message: string;
@@ -29,11 +59,13 @@ export interface RouterTelemetry {
   source: "shortcut" | "cache" | "jev" | "fallback";
   model: string;
   requestId?: string;
+  recorded?: boolean;
 }
 
 export interface FullRouteResult {
   decision: RouteTurnDecision;
   telemetry: RouterTelemetry;
+  observation: RouteObservation;
 }
 
 export function normalizeDiacritics(text: string): string {
@@ -123,11 +155,12 @@ export function heuristicRoute(
 
 export class TurnRouter {
   private readonly jevClient: ResilientJevClient;
-  private readonly cache = new Lru<RouteTurnDecision>(256);
+  private readonly cache = new Lru<{ decision: RouteTurnDecision; judged: RouteSummary | null; reason: RouteReason }>(256);
   private readonly tools: Record<string, ToolDef>;
   private readonly models: readonly ModelTierCard[];
   private readonly skills: Record<string, SkillCard>;
   private readonly thresholds: PolicyThresholds;
+  private readonly mode: RouteMode;
 
   constructor(options: {
     jevOptions?: ResilientJevOptions;
@@ -135,6 +168,7 @@ export class TurnRouter {
     models?: readonly ModelTierCard[];
     skills?: Record<string, SkillCard>;
     thresholds?: PolicyThresholds;
+    mode?: RouteMode;
   } = {}) {
     this.jevClient = options.jevOptions
       ? new ResilientJevClient(options.jevOptions)
@@ -143,28 +177,34 @@ export class TurnRouter {
     this.models = options.models ?? DEFAULT_MODELS;
     this.skills = options.skills ?? {};
     this.thresholds = options.thresholds ?? DEFAULT_POLICY_THRESHOLDS;
+    this.mode = options.mode ?? "active";
+    if (!["off", "shadow", "active"].includes(this.mode)) throw new Error("invalid_route_mode");
   }
 
   prewarm(): Promise<boolean> {
-    return this.jevClient.prewarm();
+    return this.mode === "off" ? Promise.resolve(true) : this.jevClient.prewarm();
   }
 
   async route(input: TurnInput, signal?: AbortSignal): Promise<FullRouteResult> {
     const started = performance.now();
     const elapsed = () => performance.now() - started;
+    const finish = (decision: RouteTurnDecision, telemetry: RouterTelemetry, reason: RouteReason, judged: RouteSummary | null = null, inputTokens = 0, outputTokens = 0): FullRouteResult => ({
+      decision,
+      telemetry,
+      observation: { id: randomUUID(), specId: "turn.route", specVersion: 1, mode: this.mode, source: telemetry.source, reason, applied: summarizeRoute(decision), judged, latencyMs: telemetry.totalMs, inputTokens, outputTokens },
+    });
 
     // Lane 1: Shortcut (0ms)
     if (isShortcut(input)) {
-      return {
-        decision: shortcutRoute(input),
-        telemetry: {
+      return finish(shortcutRoute(input), {
           totalMs: elapsed(),
           jevMs: 0,
           source: "shortcut",
           model: "none",
-        },
-      };
+        }, "shortcut");
     }
+
+    if (this.mode === "off") return finish(heuristicRoute(input, this.tools, this.models, this.skills), { totalMs: elapsed(), jevMs: 0, source: "fallback", model: "heuristic" }, "off");
 
     // Lane 2: Cache
     const key = hashKey("turn_route", {
@@ -172,19 +212,17 @@ export class TurnRouter {
       context: input.recentContext?.trim() ?? "",
       tools: Object.keys(this.tools),
       skills: Object.keys(this.skills),
+      unavailableTools: [...new Set(input.unavailableTools ?? [])].sort(),
     });
 
     const cached = this.cache.get(key);
     if (cached) {
-      return {
-        decision: cached,
-        telemetry: {
+      return finish(cached.decision, {
           totalMs: elapsed(),
           jevMs: 0,
           source: "cache",
           model: "cache",
-        },
-      };
+        }, cached.reason, cached.judged);
     }
 
     // Lane 3: Jev Call with strict deadline and fallback
@@ -208,37 +246,36 @@ export class TurnRouter {
         questions,
         signal,
         (late) => {
+          if (this.mode !== "active" || routingAnswersStatus(late.answers, questions) !== "valid") return;
           const lateDecision = decideRoute(late.answers, availableToolsList, this.models, this.thresholds);
-          this.cache.set(key, lateDecision);
+          this.cache.set(key, { decision: lateDecision, judged: summarizeRoute(lateDecision), reason: "judged" });
         },
       );
 
-      const decision = decideRoute(outcome.answers, availableToolsList, this.models, this.thresholds);
-      this.cache.set(key, decision);
+      const status = routingAnswersStatus(outcome.answers, questions);
+      const judged = status === "valid" ? decideRoute(outcome.answers, availableToolsList, this.models, this.thresholds) : null;
+      const decision = judged && this.mode === "active" ? judged : heuristicRoute(input, availableToolsList, this.models, this.skills);
+      const reason = status !== "valid" ? status : this.mode === "shadow" ? "shadow" : "judged";
+      if (judged) this.cache.set(key, { decision, judged: summarizeRoute(judged), reason });
 
-      return {
-        decision,
-        telemetry: {
+      return finish(decision, {
           totalMs: elapsed(),
           jevMs: outcome.jevMs,
-          source: outcome.fromCache ? "cache" : "jev",
+          source: outcome.fromCache ? "cache" : judged ? "jev" : "fallback",
           model: outcome.model,
           requestId: outcome.requestId,
-        },
-      };
+        }, reason, judged ? summarizeRoute(judged) : null, outcome.fromCache ? 0 : outcome.inputTokens, outcome.fromCache ? 0 : outcome.outputTokens);
     } catch (err) {
       // Lane 4: Fallback
       const fallbackDecision = heuristicRoute(input, availableToolsList, this.models, this.skills);
-      fallbackDecision.why.unshift(`fallback triggered: ${String(err)}`);
-      return {
-        decision: fallbackDecision,
-        telemetry: {
+      const reason: RouteReason = err instanceof JevError ? err.failure : "network";
+      fallbackDecision.why.unshift(`fallback triggered: ${reason}`);
+      return finish(fallbackDecision, {
           totalMs: elapsed(),
           jevMs: Math.min(elapsed(), this.jevClient.deadline),
           source: "fallback",
           model: "heuristic",
-        },
-      };
+        }, reason);
     }
   }
 }

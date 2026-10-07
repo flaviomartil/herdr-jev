@@ -31,6 +31,7 @@ export const INTENT_CRITERIA = {
   modify: "The user wants code, config or files changed. Correct whenever the turn should end with the project different from how it started.",
   operate: "The user wants a command or an outside service driven: build, test, deploy, git, a ticket board, an API.",
   meta: "The user is steering the session rather than the work: undo that, try the other approach, stop, keep going.",
+  unclear: "The message does not provide enough information to determine the user's intent.",
 } as const;
 
 export const NO_SKILL = "none";
@@ -99,4 +100,33 @@ export function buildRoutingQuestions(
   }
 
   return q;
+}
+
+export function routingAnswersStatus(
+  answers: Record<string, any>,
+  questions: ReturnType<typeof buildRoutingQuestions>,
+): "valid" | "invalid_answer" | "abstained" {
+  const probability = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+  if (!answers || typeof answers !== "object" || Array.isArray(answers)) return "invalid_answer";
+  for (const [id, question] of Object.entries(questions)) {
+    const answer = answers[id];
+    if (!answer || typeof answer !== "object" || answer.type !== question.type) return "invalid_answer";
+    if (answer.confidence !== undefined && !probability(answer.confidence)) return "invalid_answer";
+    if (question.type === "noul") {
+      if (!probability(answer.noul)) return "invalid_answer";
+      continue;
+    }
+    const criteria = question.type === "score" ? question.criteria.map((_, index) => String(index)) : Object.keys(question.criteria);
+    if (question.type === "choice" && !criteria.includes(answer.choice)) return "invalid_answer";
+    if (question.type === "score" && (typeof answer.score !== "number" || !Number.isFinite(answer.score) || answer.score < 0 || answer.score >= criteria.length)) return "invalid_answer";
+    const distribution = answer.probabilities;
+    if (distribution !== undefined) {
+      if (!distribution || typeof distribution !== "object" || Array.isArray(distribution)) return "invalid_answer";
+      const entries = Object.entries(distribution);
+      if (!entries.length || entries.some(([key, value]) => !criteria.includes(key) || !probability(value))) return "invalid_answer";
+      const mass = entries.reduce((sum, [, value]) => sum + (value as number), 0);
+      if (Math.abs(mass - 1) > 0.02) return "invalid_answer";
+    } else if (question.type === "score") return "abstained";
+  }
+  return answers["turn::intent"]?.choice === "unclear" ? "abstained" : "valid";
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { choice, noul, score } from "@typesafe-ai/sdk";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { triageTaskWithJev, resolveTypeSafeApiKey } from "./triage/client.js";
 import { planExecution } from "./pipelines/planner.js";
 import { startMcpServer } from "./mcp/server.js";
@@ -27,7 +27,7 @@ import {
 import { resolveStageSpec } from "./pipelines/matrix.js";
 import { resolveRoleMatrix } from "./pipelines/roles.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
-import { checkHarnessStatus, externalRun, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
+import { checkHarnessStatus, externalRun, harnessCommand, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
 import { formatReviewReport, runReview } from "./harness/review.js";
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
 import { resolveHerdrContext } from "./herdr/context.js";
@@ -54,7 +54,7 @@ import { BASE_CLIENTS, loadClientAliases, resolveBaseClientKind } from "./config
 import { calibrateJevLatency } from "./triage/calibrator.js";
 import { getGlobalJevClient } from "./triage/jev-client.js";
 import { classifyPaneText, parseClassifyInput, readClassifyInput } from "./triage/pane-classifier.js";
-import { TurnRouter } from "./routing/router.js";
+import { TurnRouter, isShortcut, type RouteMode } from "./routing/router.js";
 import { systemPromptParts } from "./routing/prompt.js";
 import { readOverview } from "./herdr/overview.js";
 import { buildDailyReport, formatDailyText, formatDailyMarkdown, writeDailyMarkdown } from "./herdr/daily.js";
@@ -888,17 +888,27 @@ program
   .option("--prompt", "Show generated system prompt suffix (<skill_relevance>)")
   .option("--cold", "Skip connection prewarming (fresh TLS handshake)")
   .option("--deadline <ms>", "Override deadline in milliseconds")
-  .action(async (turn: string, options: { json?: boolean; prompt?: boolean; cold?: boolean; deadline?: string }) => {
+  .addOption(new Option("--mode <mode>", "Apply Jev, compare it with the heuristic, or skip it").choices(["off", "shadow", "active"]).default("active"))
+  .option("--record", "Record value-free decision metadata in AI Harness")
+  .action(async (turn: string, options: { json?: boolean; prompt?: boolean; cold?: boolean; deadline?: string; mode: RouteMode; record?: boolean }) => {
     const deadlineMs = options.deadline ? parseInt(options.deadline, 10) : undefined;
     const router = new TurnRouter({
       jevOptions: deadlineMs ? { deadlineMs } : undefined,
+      mode: options.mode,
     });
 
-    if (!options.cold) {
+    if (!options.cold && options.mode !== "off" && !isShortcut({ message: turn })) {
       await router.prewarm();
     }
 
     const result = await router.route({ message: turn });
+    if (options.record || options.mode === "shadow") {
+      try {
+        result.telemetry.recorded = harnessCommand<{ recorded: boolean }>(["route-observation", "--input-json", JSON.stringify(result.observation)], 1000).recorded;
+      } catch {
+        result.telemetry.recorded = false;
+      }
+    }
 
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
