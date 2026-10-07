@@ -3,7 +3,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasExhaustedUsageQuota } from "../harness/bridge.js";
 import { resolveConfigDir, resolveConfigDirs } from "../herdr/state-dir.js";
-import type { ClientKind, RoleKind, ReasoningEffort } from "../types/index.js";
+import { ROLE_KINDS, type ClientKind, type RoleKind, type ReasoningEffort } from "../types/index.js";
 
 export interface ModelCatalogEntry {
   model: string;
@@ -50,10 +50,34 @@ function userQuotasFile(): string {
   return join(userConfigDir(), "herdr-jev-quotas.json");
 }
 
+const VALID_EFFORTS: readonly string[] = ["standard", "high", "xhigh"];
+
+export function validateCatalog(catalog: unknown): CatalogSchema {
+  const clients = (catalog as { clients?: Record<string, Record<string, Partial<ModelCatalogEntry>> | undefined> } | null)?.clients;
+  if (!clients || typeof clients !== "object") throw new Error("Invalid models catalog: missing clients");
+  for (const [client, roles] of Object.entries(clients)) {
+    for (const role of ROLE_KINDS) {
+      const entry = roles?.[role];
+      if (!entry || typeof entry !== "object") throw new Error(`Invalid models catalog: ${client}/${role} entry is missing`);
+      if (typeof entry.model !== "string" || entry.model.trim() === "") throw new Error(`Invalid models catalog: ${client}/${role} requires a model`);
+      if (!Array.isArray(entry.fallbackChain) || entry.fallbackChain.length === 0 || entry.fallbackChain.some((m) => typeof m !== "string")) {
+        throw new Error(`Invalid models catalog: ${client}/${role} requires a nonempty fallbackChain`);
+      }
+      if (!Array.isArray(entry.extraFlags) || entry.extraFlags.some((flag) => typeof flag !== "string")) {
+        throw new Error(`Invalid models catalog: ${client}/${role} requires extraFlags as an array of strings`);
+      }
+      if (typeof entry.defaultEffort !== "string" || !VALID_EFFORTS.includes(entry.defaultEffort)) {
+        throw new Error(`Invalid models catalog: ${client}/${role} requires defaultEffort standard, high or xhigh`);
+      }
+    }
+  }
+  return catalog as CatalogSchema;
+}
+
 export function loadBaseCatalog(): CatalogSchema {
   if (existsSync(DEFAULT_CONFIG_PATH)) {
     const raw = readFileSync(DEFAULT_CONFIG_PATH, "utf-8");
-    return JSON.parse(raw) as CatalogSchema;
+    return validateCatalog(JSON.parse(raw));
   }
   throw new Error(`Base models configuration not found at ${DEFAULT_CONFIG_PATH}`);
 }

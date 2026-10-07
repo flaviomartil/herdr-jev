@@ -5,7 +5,8 @@ export type TaskComplexity = "trivial" | "routine" | "moderate" | "architectural
 
 export type ReasoningEffort = "standard" | "high" | "xhigh";
 
-export type RoleKind = "advisor" | "implementer" | "reviewer" | "researcher";
+export const ROLE_KINDS = ["advisor", "implementer", "reviewer", "researcher", "reader"] as const;
+export type RoleKind = (typeof ROLE_KINDS)[number];
 
 export interface TriageDecision {
   complexity: TaskComplexity;

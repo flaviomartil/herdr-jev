@@ -202,6 +202,8 @@ export function getJevRecommendedClientForRole(role: RoleKind, triage?: TriageDe
       return "antigravity";
     case "researcher":
       return "antigravity";
+    case "reader":
+      return "claude";
   }
 }
 

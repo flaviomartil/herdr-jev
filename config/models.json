@@ -29,6 +29,13 @@
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Claude Sonnet 5: Codebase search and documentation research subagent"
+      },
+      "reader": {
+        "model": "claude-haiku-4-5-20251001",
+        "fallbackChain": ["claude-haiku-4-5-20251001", "sonnet-5"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Claude Haiku 4.5: bulk reading and mechanical tasks, read-only"
       }
     },
     "codex": {
@@ -59,6 +66,13 @@
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Codex GPT-5.6 Terra: Background research and codebase analyst"
+      },
+      "reader": {
+        "model": "gpt-5.6-terra",
+        "fallbackChain": ["gpt-5.6-terra", "gpt-5.6-luna"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Codex gpt-5.6-terra: bulk reading and mechanical tasks, read-only"
       }
     },
     "antigravity": {
@@ -89,6 +103,13 @@
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "AntiGravity Gemini 3.8 Flash: Lightweight read-only research subagent"
+      },
+      "reader": {
+        "model": "gemini-3-8-flash",
+        "fallbackChain": ["gemini-3-8-flash", "gemini-3-8-flash-lite"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "AntiGravity gemini-3-8-flash: bulk reading and mechanical tasks, read-only"
       }
     },
     "cursor": {
@@ -119,6 +140,13 @@
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Cursor Fast: Rapid codebase exploration"
+      },
+      "reader": {
+        "model": "cursor-fast",
+        "fallbackChain": ["cursor-fast"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Cursor cursor-fast: bulk reading and mechanical tasks, read-only"
       }
     },
     "opencode": {
@@ -149,6 +177,13 @@
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "OpenCode Primary: Read-only codebase explorer"
+      },
+      "reader": {
+        "model": "opencode-primary",
+        "fallbackChain": ["opencode-primary"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "OpenCode opencode-primary: bulk reading and mechanical tasks, read-only"
       }
     },
     "kimi": {
@@ -179,6 +214,13 @@
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Kimi K3: Long-context research and codebase search"
+      },
+      "reader": {
+        "model": "kimi-code/k3",
+        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "defaultEffort": "standard",
+        "extraFlags": [],
+        "description": "Kimi kimi-code/k3: bulk reading and mechanical tasks, read-only"
       }
     }
   }
