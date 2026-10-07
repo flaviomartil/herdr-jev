@@ -1,7 +1,8 @@
 import type { ClientKind, PipelinePlan, RoleKind, StageSpec, TriageDecision } from "../types/index.js";
 import { resolveStageSpec } from "./matrix.js";
+import { isModelExhausted } from "../config/catalog.js";
 import { resolveHarnessDelegation, type DelegationInput } from "../harness/bridge.js";
-import { resolveDelegatedClient, parseCrossHarnessConfig, type CrossHarnessConfig } from "../delegation/cross-harness.js";
+import { availableDelegationClients, resolveDelegatedClient, parseCrossHarnessConfig, type CrossHarnessConfig } from "../delegation/cross-harness.js";
 
 export function planExecution(
   task: string,
@@ -37,12 +38,26 @@ export function planExecution(
     ? [resolveStage("advisor"), resolveStage("implementer"), resolveStage("reviewer")]
     : [resolveStage("implementer")];
 
-  const delegation = resolveHarnessDelegation(client, !options?.forceDirect && (options?.requestDelegation === true || isTriad || triage.complexity === "moderate"), options?.delegation);
+  const wantsDelegation = !options?.forceDirect && (options?.requestDelegation === true || isTriad || triage.complexity === "moderate");
+  let availableClients = availableDelegationClients(client, crossHarness);
+  const attempts = availableClients.length + 1;
+  let routing = { complexity: triage.complexity, effort: triage.effort, availableClients };
+  let delegation = resolveHarnessDelegation(client, wantsDelegation, { ...options?.delegation, ...routing });
+  for (let attempt = 1; attempt < attempts && delegation.mode === "delegate"; attempt++) {
+    const peers: string[] = availableClients;
+    const exhausted = [delegation.profile.executor, delegation.profile.reviewer].find((target) => target.client && peers.includes(target.client)
+      && (isModelExhausted(target.client, target.model) || (target.cliModel !== undefined && isModelExhausted(target.client, target.cliModel))));
+    if (!exhausted) break;
+    availableClients = availableClients.filter((peer) => peer !== exhausted.client);
+    routing = { complexity: triage.complexity, effort: triage.effort, availableClients };
+    delegation = resolveHarnessDelegation(client, wantsDelegation, { ...options?.delegation, ...routing });
+  }
   const executionStages: StageSpec[] = delegation.mode === "delegate"
     ? (["implementer", "reviewer"] as const).map((role) => {
       const target = role === "implementer" ? delegation.profile.executor : delegation.profile.reviewer;
-      return { role, client: delegation.profile.client, model: target.model, ...(target.cliModel ? { cliModel: target.cliModel } : {}), effort: target.effort ?? "standard",
-        extraFlags: target.effort && client === "codex" ? ["-c", `model_reasoning_effort="${target.effort}"`] : [],
+      const stageClient = target.client ?? delegation.profile.client;
+      return { role, client: stageClient, model: target.model, ...(target.cliModel ? { cliModel: target.cliModel } : {}), effort: target.effort ?? "standard",
+        extraFlags: target.effort && stageClient === "codex" ? ["-c", `model_reasoning_effort="${target.effort}"`] : [],
         description: `AI Harness profile: ${delegation.profile.id}` };
     }) : [];
 
@@ -55,5 +70,6 @@ export function planExecution(
     autoImprovement: true,
     delegation,
     executionStages,
+    routing,
   };
 }
