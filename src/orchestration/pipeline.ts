@@ -92,7 +92,8 @@ async function continueRun(run: any, task: string, options: RunOptions) {
         extraFlags: entry.effort ? stageClient === "codex" ? ["-c", `model_reasoning_effort="${entry.effort}"`]
           : stageClient === "claude" ? ["--effort", entry.effort] : [] : [], description: "AI Harness canonical stage" };
       if (stage.role === "reviewer" && entry.state === "queued" && !options.verifyCommandJson) break;
-      if (entry.state === "queued" && stageClient !== run.client && !availableDelegationClients(run.client, options.crossHarness).includes(stageClient)) {
+      const peerAllowed = () => stageClient === run.client || availableDelegationClients(run.client, options.crossHarness).includes(stageClient);
+      if ((entry.state === "queued" || stage.role === "implementer" && entry.promptPending === true) && !peerAllowed()) {
         launchError = "peer_unavailable";
         break;
       }
@@ -152,6 +153,10 @@ async function continueRun(run: any, task: string, options: RunOptions) {
           if (result.paneId) externalRun("ack", { ...request, pane: result.paneId });
           projectRun(run.id);
         } else if (claim.promptPending) {
+          if (!peerAllowed()) {
+            launchError = "peer_unavailable";
+            break;
+          }
           const screen = await herdr.readAgent!(claim.agent);
           if (!screen.ok || requiresTrustConfirmation(screen)) {
             externalRun("settle", { ...request, state: screen.ok ? "blocked" : "unknown",

@@ -320,11 +320,11 @@ Runs live in the existing Harness ledger; Herdr-Jev projects them to `~/.local/s
 | Command | Purpose |
 | :--- | :--- |
 | `run-status <id>` and `runs get <id>` | Reconcile deadlines, refresh the sanitized projection and print `{run, projection}` as JSON. Nothing is redispatched. |
-| `run-resume <id>` | Observes the existing attempt and continues verified dependencies. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`. |
+| `run-resume <id>` | Observes the existing attempt and continues verified dependencies. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`, `--cross-harness`. |
 | `runs list` | Lists recorded runs, newest first, merging the local projections with `ai-harness external-run --action list`. Each entry shows its kind (`pipeline` or `worker`) after the id; `--json` adds `kind` and `source` (`local`, `harness` or `both`). Options: `--limit <n>` (a non-negative integer, default 20; anything else prints `{"error":"invalid_limit"}` on stderr and exits 1), `--json`. Fields the Harness supplies are printed without terminal control sequences and line breaks, and malformed harness entries are skipped or shown without stages instead of aborting the list. |
-| `runs retry <id> --from-failed` | Retries only `failed`, `unknown` and `blocked` stages. `--from-failed` is required. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`. |
+| `runs retry <id> --from-failed` | Retries only `failed`, `unknown` and `blocked` stages. `--from-failed` is required. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`, `--cross-harness`. |
 
-`run-resume` and `runs retry` exit with code 1 when a stage is still `failed`, `unknown` or `blocked`.
+`run-resume` and `runs retry` exit with code 1 when a stage is still `failed`, `unknown` or `blocked`. Pass the same `--cross-harness` value the run was created with; a queued or prompt-pending stage on a peer client that is no longer allowed stops with `peer_unavailable`.
 
 ### subagent
 

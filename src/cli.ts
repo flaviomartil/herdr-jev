@@ -371,9 +371,11 @@ program
   .option("--timeout-ms <ms>", "Deadline for a newly claimed stage", "900000")
   .option("--verify-command-json <path>", "Deterministic check argv file")
   .option("--cwd <path>", "Original worker repository")
-  .action(async (id: string, options: { timeoutMs: string; verifyCommandJson?: string; cwd?: string }) => {
+  .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
+  .action(async (id: string, options: { timeoutMs: string; verifyCommandJson?: string; cwd?: string; crossHarness?: string }) => {
     const result = await resumePipeline(id, { delegation: {}, wait: true,
-      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd });
+      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd,
+      crossHarness: options.crossHarness ? parseCrossHarnessConfig(options.crossHarness) : undefined });
     console.log(JSON.stringify(result, null, 2));
     if ("error" in result || result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state))) process.exitCode = 1;
   });
@@ -412,11 +414,13 @@ runsCommand
   .option("--timeout-ms <ms>", "Deadline for a newly claimed stage", "900000")
   .option("--verify-command-json <path>", "Deterministic check argv file")
   .option("--cwd <path>", "Original worker repository")
-  .action(async (id: string, options: { fromFailed?: boolean; timeoutMs: string; verifyCommandJson?: string; cwd?: string }) => {
+  .option("--cross-harness <mode>", "Cross-harness delegation mode: disabled, auto, or peer mapping")
+  .action(async (id: string, options: { fromFailed?: boolean; timeoutMs: string; verifyCommandJson?: string; cwd?: string; crossHarness?: string }) => {
     assertRunId(id);
     if (!options.fromFailed) throw new Error("from_failed_required");
     const result = await resumePipeline(id, { delegation: {}, wait: true, fromFailed: true,
-      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd });
+      timeoutMs: Number(options.timeoutMs), verifyCommandJson: options.verifyCommandJson, cwd: options.cwd,
+      crossHarness: options.crossHarness ? parseCrossHarnessConfig(options.crossHarness) : undefined });
     console.log(JSON.stringify(result, null, 2));
     if ("error" in result || result.run.stages.some((stage: any) => ["failed", "unknown", "blocked"].includes(stage.state))) process.exitCode = 1;
   });
