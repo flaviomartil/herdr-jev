@@ -35,6 +35,14 @@ export function maxWorkers(options: PluginOptions): number {
     : 3
 }
 
+export function autoRun(options: PluginOptions): boolean {
+  return options.autoRun !== false
+}
+
+export function autoReview(options: PluginOptions): boolean {
+  return options.autoReview === true
+}
+
 function parseJson(stdout: string): CliResult<unknown> {
   const body = stdout.trim()
   if (body.length === 0) return { ok: false, reason: 'empty output' }
@@ -58,7 +66,7 @@ function firstLine(value: string): string {
   return line === undefined ? '' : line.trim().slice(0, 160)
 }
 
-async function runJson(
+export async function runJson(
   run: RunPort,
   config: CliConfig,
   argv: readonly string[],
@@ -86,7 +94,7 @@ async function runJson(
   }
 }
 
-function safeTask(task: string): string {
+export function safeTask(task: string): string {
   const clean = task.replace(/\s+/g, ' ').trim()
   return clean.startsWith('-') ? `Task: ${clean}` : clean
 }

@@ -228,6 +228,15 @@ export function modelRoleOf(kind: AgentKind): HarnessModelRole {
   return kind === 'mechanic' ? 'reader' : kind
 }
 
+export type SpawnModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
+
+const SPAWN_MODELS: readonly SpawnModel[] = ['fable', 'opus', 'sonnet', 'haiku']
+
+export function spawnModelOf(cliModel: string): SpawnModel | null {
+  const lower = cliModel.toLowerCase()
+  return SPAWN_MODELS.find(alias => lower.includes(alias)) ?? null
+}
+
 export function claudeEffort(effort: string | null | undefined): string | undefined {
   if (effort === null || effort === undefined) return undefined
   if (effort === 'standard') return 'medium'
@@ -400,6 +409,63 @@ export function isAllVerified(plan: HarnessPlan): boolean {
   return plan.tasks.length > 0 && plan.tasks.every(isSettled)
 }
 
+export function approvedKey(plan: HarnessPlan): string | null {
+  const ready = plan.tasks.length > 0 && plan.tasks.every(task => isSettled(task) || task.state === 'approved')
+  const approved = plan.tasks.filter(task => task.state === 'approved').map(task => task.id)
+  return ready && approved.length > 0 ? approved.sort().join(',') : null
+}
+
+export type Hue = 'claude' | 'warning' | 'error' | 'success' | 'inactive' | 'dim' | 'plain'
+
+export type BandState = {
+  word: 'all verified' | 'failed' | 'needs you' | 'review' | 'running' | 'approved' | 'planned'
+  glyph: string
+  hue: Hue
+  isWorking: boolean
+  task: HarnessTask | undefined
+  failed: HarnessTask | undefined
+}
+
+export function bandState(plan: HarnessPlan, asks: number): BandState {
+  const counts = countTasks(plan)
+  const first = (state: HarnessTask['state']): HarnessTask | undefined =>
+    plan.tasks.find(task => task.state === state)
+  const running = first('running')
+  const reviewing = first('review')
+  const failed = first('failed')
+  const needs = first('needs_you')
+  const isWorking = running !== undefined || reviewing !== undefined
+  const task =
+    running ?? reviewing ?? failed ?? needs ?? first('approved') ?? plan.tasks.find(one => !isSettled(one))
+  const base = { isWorking, task, failed }
+
+  if (isAllVerified(plan)) return { ...base, word: 'all verified', glyph: '✓', hue: 'success' }
+  if (failed !== undefined) return { ...base, word: 'failed', glyph: '!', hue: 'error' }
+  if (asks > 0 || counts.needsYou > 0) return { ...base, word: 'needs you', glyph: '?', hue: 'warning' }
+  if (reviewing !== undefined) return { ...base, word: 'review', glyph: '●', hue: 'claude' }
+  if (running !== undefined) return { ...base, word: 'running', glyph: '●', hue: 'claude' }
+  if (counts.approved > 0) return { ...base, word: 'approved', glyph: '◆', hue: 'warning' }
+  return { ...base, word: 'planned', glyph: '○', hue: 'inactive' }
+}
+
+export const ROW_MARK: Readonly<Record<HarnessTaskState, { glyph: string; hue: Hue }>> = {
+  proposed: { glyph: '○', hue: 'dim' },
+  advisor: { glyph: '◇', hue: 'dim' },
+  running: { glyph: '●', hue: 'claude' },
+  review: { glyph: '◐', hue: 'dim' },
+  approved: { glyph: '◆', hue: 'warning' },
+  verified: { glyph: '✓', hue: 'success' },
+  failed: { glyph: '!', hue: 'error' },
+  needs_you: { glyph: '?', hue: 'warning' },
+  done: { glyph: '✓', hue: 'success' },
+}
+
+export function duration(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  if (seconds < 60) return `${seconds}s`
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
+}
+
 export function parseVerdict(answer: string): HarnessVerdict | null {
   const matches = [...answer.matchAll(VERDICT_LINE)]
   const last = matches[matches.length - 1]
@@ -419,9 +485,23 @@ export function shortModel(model: string | null): string {
   return model.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 }
 
+export function barParts(done: number, total: number, cells = 10): { filled: string; empty: string } {
+  const count = total <= 0 ? 0 : Math.min(cells, Math.round((done / total) * cells))
+  return { filled: '█'.repeat(count), empty: '░'.repeat(cells - count) }
+}
+
 export function bar(done: number, total: number, cells = 10): string {
-  const filled = total <= 0 ? 0 : Math.min(cells, Math.round((done / total) * cells))
-  return '█'.repeat(filled) + '░'.repeat(cells - filled)
+  const parts = barParts(done, total, cells)
+  return parts.filled + parts.empty
+}
+
+export function percent(done: number, total: number): number {
+  return total <= 0 ? 0 : Math.round((done / total) * 100)
+}
+
+export function effortLabel(effort: string | null): string {
+  if (effort === null || effort.length === 0) return '-'
+  return effort === 'standard' ? 'std' : effort
 }
 
 export function fit(value: string, max: number): string {
@@ -437,10 +517,10 @@ export function baseName(path: string): string {
 
 export const STATE_GLYPH: Readonly<Record<HarnessTaskState, string>> = {
   proposed: '○',
-  advisor: '◆',
+  advisor: '◇',
   running: '●',
   review: '◐',
-  approved: '◑',
+  approved: '◆',
   verified: '✓',
   failed: '✗',
   needs_you: '?',
@@ -604,6 +684,7 @@ export function parseSaved(raw: unknown): SavedState | null {
       advisorModel: typeof raw.plan.advisorModel === 'string' ? raw.plan.advisorModel : '',
       roles: normalizeRoleTable(raw.plan.roles) ?? {},
       tasks,
+      at: optionalNumber(raw.plan.at),
     },
     workers,
     needsYou,
