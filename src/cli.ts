@@ -302,7 +302,7 @@ program
     console.log(`Root Client: ${plan.client.toUpperCase()}`);
     console.log(`Triage: ${plan.triage.complexity.toUpperCase()} (effort: ${plan.triage.effort}, research: ${plan.spawnResearchSubagent})`);
     console.log(`Harness: ${JSON.stringify(plan.delegation)}`);
-    console.log(`Executable stages: ${plan.executionStages?.map((stage) => `${stage.role}:${stage.model}`).join(", ") || "direct in current session"}`);
+    console.log(`Executable stages: ${plan.executionStages?.map((stage) => `${stage.role}:${stage.client ?? plan.client}/${stage.model}`).join(", ") || "direct in current session"}`);
     console.log(`Advisory stages (${plan.stages.length}, not launch authorization):`);
     plan.stages.forEach((stage, idx) => {
       const stageClient = (stage.client ?? plan.client).toUpperCase();
@@ -344,7 +344,7 @@ program
     const plan = planExecution(task, client, triage, { forceTriad: options.triad, crossHarness: crossConfig,
       delegation: context.delegation, requestDelegation: true });
     const result = await runPipeline(plan, {
-      delegation: context.delegation,
+      delegation: context.delegation, crossHarness: crossConfig,
       layout: options.tab ? "tab" : "split", sourcePaneId: context.sourcePaneId, workspaceId: context.workspaceId, cwd: options.cwd ?? context.cwd,
       wait: options.wait, timeoutMs: Number(options.timeoutMs), direction: options.direction as SplitDirectionOption,
       verifyCommandJson: options.verifyCommandJson,

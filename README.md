@@ -18,6 +18,8 @@ For implementation followed by independent review, use `--wait --verify-command-
 
 `plan` and MCP `herdr_plan` expose both advisory `stages` and canonical `executionStages`. Only the latter can be launched automatically by `route`. Supply the actual advisor model and verified available model IDs; an unknown model, unavailable Harness, or missing exact profile means direct execution in the current session. `--triad` and local quota cascades do not override this decision.
 
+Execution stages follow the profile's route for the triage complexity, so a stage can run on another client than the session. The peers offered to the Harness come from the cross-harness setting (none when it is disabled or not recognised), minus the session client, `HERDR_JEV_EXCLUDE_CLIENTS`, clients with exhausted quota and peers whose routed model is exhausted. Each stage is launched with its own client, shown as `role:client/model` by `plan`. `route` stops with `peer_unavailable` and leaves a queued stage untouched when its client is no longer an allowed peer on resume.
+
 ```sh
 herdr-jev plan "Implement the change" --client codex --model gpt-6-astra --available-models gpt-5.6-luna,gpt-5.6-sol --triad --json
 herdr-jev route "Implement the change" --client codex --model gpt-6-astra --available-models gpt-5.6-luna,gpt-5.6-sol --triad --wait --verify-command-json /absolute/path/checks.json
@@ -186,7 +188,7 @@ Every `HERDR_JEV_*` variable read by the CLI, the Herdr plugin scripts, the Jev 
 | `HERDR_JEV_PLACEMENT` | `overlay` | Placement used by `herdr-plugin/open-pane.sh`; the manifest actions set `tab`. |
 | `HERDR_JEV_RESUME_CLIENT`, `HERDR_JEV_RESUME_SESSION` | unset | Set by the session picker for the resume pane. `HERDR_JEV_RESUME_CLIENT` must be `claude`, `codex`, `kimi` or `opencode`. |
 | `HERDR_JEV_ENABLE_OPENCODE` | off | `1` lets `detect` treat OpenCode as configured. |
-| `HERDR_JEV_EXCLUDE_CLIENTS` | unset | Comma-separated clients that `detect` leaves out of its recommendation. |
+| `HERDR_JEV_EXCLUDE_CLIENTS` | unset | Comma-separated clients that `detect` leaves out of its recommendation and that `plan` and `route` never offer as peers for routed execution stages. |
 | `HERDR_JEV_TEST_GUARD` | unset | `1` blocks anything that would change Herdr state or launch a real agent. Set by `tests/preload.ts`. `AI_HARNESS_TEST_GUARD=1` is treated the same way. Under the guard only an `ai-harness` executable under the OS temp dir is used, and the Harness `tool-env.json` is ignored. |
 | `HERDR_JEV_CLI` | `bun src/cli.ts` | Command `scripts/smoke.sh` runs instead of the checkout CLI. |
 

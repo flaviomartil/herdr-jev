@@ -147,15 +147,32 @@ else if (command === "model-catalog") {
   else if (process.env.FAKE_PROFILE === "claude-fable") {
     out({ mode: "delegate", profile: { id: "claude-fable-5", client: "claude", advisor: "fable-5",
       executor: { model: "claude-sonnet-5", cliModel: "claude-sonnet-5-5", effort: "high" }, reviewer: { model: "opus-5", cliModel: "claude-opus-5-5", effort: "xhigh" } } });
+  } else if (process.env.FAKE_PROFILE === "routed") {
+    const peers = (options["--available-clients"] || "").split(",");
+    const external = peers.includes("codex");
+    out({ mode: "delegate", profile: { id: "routed-profile", client: options["--client"], advisor: "advisor-model", route: options["--complexity"] || undefined,
+      executor: external ? { client: "codex", model: "gpt-5.6-luna", cliModel: "gpt-5.6-luna", effort: "xhigh" } : { client: options["--client"], model: "claude-sonnet-5", cliModel: "claude-sonnet-5-5", effort: "high" },
+      reviewer: { client: "claude", model: "opus-5", cliModel: "claude-opus-5-5", effort: "xhigh" } } });
   } else if (process.env.FAKE_PROFILE === "1") {
     out({ mode: "delegate", profile: { id: "fake-profile", client: options["--client"], advisor: "advisor-model",
       executor: { model: "gpt-5.6-luna", cliModel: "gpt-5.6-luna-cli", effort: "high" }, reviewer: { model: "gpt-5.6-sol", cliModel: "gpt-5.6-sol-cli", effort: "xhigh" } } });
   } else out({ mode: "direct", reason: "no_profile" });
 } else if (command === "external-run") {
-  if (mode === "legacy" || !["worker-create", "worker-settle", "list"].includes(options["--action"])) fail("invalid_external_action");
+  const pipeline = process.env.FAKE_PIPELINE_STAGES !== undefined && ["create", "claim", "project", "status", "settle"].includes(options["--action"]);
+  if (!pipeline && (mode === "legacy" || !["worker-create", "worker-settle", "list"].includes(options["--action"]))) fail("invalid_external_action");
   const request = JSON.parse(options["--request-json"]);
   const state = load();
-  if (options["--action"] === "worker-create") {
+  if (pipeline) {
+    if (options["--action"] === "create") {
+      const stages = JSON.parse(process.env.FAKE_PIPELINE_STAGES).map((stage) => ({ ...stage, state: "queued" }));
+      state.pipelines = [{ id: "00000000-0000-4000-8000-0000000000aa", kind: "pipeline", client: request.client, cwd: request.cwd, createdAt: new Date(0).toISOString(), objectiveDigest: request.objectiveDigest, stages }];
+      save(state);
+    }
+    const run = state.pipelines[0];
+    if (options["--action"] === "settle") run.stages.find((stage) => stage.role === request.stage).state = request.state;
+    save(state);
+    out(options["--action"] === "claim" ? { token: "token", agent: "agent-" + request.stage } : run);
+  } else if (options["--action"] === "worker-create") {
     const run = { id: "00000000-0000-4000-8000-" + String(state.runs.length + 1).padStart(12, "0"), kind: "worker", client: request.client,
       cwd: request.cwd, createdAt: new Date(Date.UTC(2026, 9, 1, 12, state.runs.length)).toISOString(), objectiveDigest: request.objectiveDigest,
       branch: request.branch, forkSha: request.forkSha,

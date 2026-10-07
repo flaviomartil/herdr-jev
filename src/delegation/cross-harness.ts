@@ -362,3 +362,15 @@ export function resolveDelegatedClient(
     reason: `All mapped peers (${externalPeers.join(", ")}) quota exhausted: falling back to source harness ${sourceClient}`,
   };
 }
+
+const HARNESS_ROUTE_CLIENTS: readonly string[] = ["codex", "claude", "kimi", "opencode", "antigravity", "kiro"];
+
+export function availableDelegationClients(sourceClient: ClientKind, config: CrossHarnessConfig = parseCrossHarnessConfig()): ClientKind[] {
+  if (config.mode === "disabled") return [];
+  if (config.mode === "auto" && !["1", "true", "on", "auto"].includes((config.rawEnv ?? "").trim().toLowerCase())) return [];
+  const excluded = (process.env.HERDR_JEV_EXCLUDE_CLIENTS ?? "").toLowerCase().split(",").map((entry) => entry.trim()).filter(Boolean);
+  return (config.allowedPeers[sourceClient] ?? [])
+    .filter((peer) => peer !== sourceClient && HARNESS_ROUTE_CLIENTS.includes(peer) && !excluded.includes(peer))
+    .filter((peer) => peer !== "opencode" || process.env.HERDR_JEV_ENABLE_OPENCODE === "1")
+    .filter((peer) => !isClientExhausted(peer, "implementer") && !isClientExhausted(peer, "reviewer"));
+}

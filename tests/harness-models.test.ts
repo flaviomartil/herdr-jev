@@ -3,7 +3,10 @@ import { harnessModelCatalog, harnessModelResolve, resetHarnessCaches } from "..
 import { builtinLaunchArgs, buildAgentCommand, buildInlineCommand, bypassEnabled, readonlyReviewerArgs } from "../src/herdr/launcher.js";
 import { reviewerCommand } from "../src/orchestration/pipeline.js";
 import { planExecution } from "../src/pipelines/planner.js";
+import { availableDelegationClients, parseCrossHarnessConfig } from "../src/delegation/cross-harness.js";
 import type { ClientKind, RoleKind, StageSpec, TriageDecision } from "../src/types/index.js";
+import { markModelExhausted, resetQuotas } from "../src/config/catalog.js";
+import { createTestStateDir } from "./helpers.js";
 import { createFakeHarness, type FakeHarness, type FakeHarnessMode } from "./fake-harness.js";
 
 const CLAUDE_BYPASS = "--dangerously-skip-permissions";
@@ -164,6 +167,88 @@ describe("model catalog through ai-harness", () => {
     const plan = planExecution("task", "codex", triage, { forceTriad: true, delegation: { model: "advisor-model", availableModels: ["gpt-5.6-luna", "gpt-5.6-sol"] } });
     expect(plan.executionStages?.map((item) => [item.role, item.model, item.cliModel])).toEqual([["implementer", "gpt-5.6-luna", "gpt-5.6-luna-cli"], ["reviewer", "gpt-5.6-sol", "gpt-5.6-sol-cli"]]);
     expect(buildAgentCommand("codex", plan.executionStages![0]!)[2]).toBe("gpt-5.6-luna-cli");
+  });
+
+  describe("routed delegation", () => {
+    const moderate: TriageDecision = { complexity: "moderate", confidence: 1, needsResearch: false, effort: "xhigh", recommendedPipeline: "triad", latencyMs: 0, rawAnswers: {} };
+    const saved = { cross: process.env.HERDR_JEV_CROSS_HARNESS, exclude: process.env.HERDR_JEV_EXCLUDE_CLIENTS };
+    const plan = (cross?: string) => planExecution("task", "claude", moderate, { forceTriad: true, requestDelegation: true,
+      ...(cross === undefined ? {} : { crossHarness: parseCrossHarnessConfig(cross) }), delegation: { model: "opus-5", availableModels: ["claude-sonnet-5", "opus-5"] } });
+    const forwarded = () => harness!.callsFor("delegation-plan").at(-1)!;
+    const option = (name: string) => forwarded()[forwarded().indexOf(name) + 1];
+
+    let state: ReturnType<typeof createTestStateDir>;
+    beforeEach(() => { state = createTestStateDir(); resetQuotas(); });
+
+    afterEach(() => {
+      resetQuotas();
+      state.cleanup();
+      for (const [key, value] of [["HERDR_JEV_CROSS_HARNESS", saved.cross], ["HERDR_JEV_EXCLUDE_CLIENTS", saved.exclude]] as const) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    });
+
+    it("takes each execution stage client from the target and builds flags for that client", () => {
+      install("contract", { FAKE_PROFILE: "routed" });
+      const result = plan("claude:codex");
+      expect(option("--complexity")).toBe("moderate");
+      expect(option("--effort")).toBe("xhigh");
+      expect(option("--available-clients")).toBe("codex");
+      expect(result.delegation).toMatchObject({ mode: "delegate", profile: { route: "moderate" } });
+      expect(result.executionStages?.map((item) => [item.role, item.client, item.model, item.extraFlags])).toEqual([
+        ["implementer", "codex", "gpt-5.6-luna", ["-c", 'model_reasoning_effort="xhigh"']],
+        ["reviewer", "claude", "opus-5", []],
+      ]);
+      expect(result.routing).toEqual({ complexity: "moderate", effort: "xhigh", availableClients: ["codex"] });
+    });
+
+    it("falls back to the profile client when a stage carries none", () => {
+      install("contract", { FAKE_PROFILE: "1" });
+      const result = plan();
+      expect(result.executionStages?.map((item) => item.client)).toEqual(["claude", "claude"]);
+    });
+
+    it("offers no peers when cross-harness is disabled", () => {
+      install("contract", { FAKE_PROFILE: "routed" });
+      const result = plan();
+      expect(forwarded()).not.toContain("--available-clients");
+      expect(result.executionStages?.[0]?.client).toBe("claude");
+      expect(result.routing?.availableClients).toEqual([]);
+    });
+
+    it("drops a peer whose routed model is exhausted and resolves again", () => {
+      install("contract", { FAKE_PROFILE: "routed" });
+      markModelExhausted("codex", "gpt-5.6-luna");
+      const result = plan("claude:codex,antigravity");
+      expect(harness!.callsFor("delegation-plan").map((call) => call[call.indexOf("--available-clients") + 1])).toEqual(["codex,antigravity", "antigravity"]);
+      expect(result.routing?.availableClients).toEqual(["antigravity"]);
+      expect(result.executionStages?.map((item) => item.client)).toEqual(["claude", "claude"]);
+    });
+
+    it("keeps a healthy peer without a second resolution", () => {
+      install("contract", { FAKE_PROFILE: "routed" });
+      const result = plan("claude:codex,antigravity");
+      expect(harness!.callsFor("delegation-plan")).toHaveLength(1);
+      expect(result.executionStages?.[0]?.client).toBe("codex");
+    });
+
+    it("authorises no peers for an unrecognised cross-harness value", () => {
+      for (const value of ["no", "codexx", "enabled"]) {
+        expect(parseCrossHarnessConfig(value).mode).toBe("auto");
+        expect(availableDelegationClients("claude", parseCrossHarnessConfig(value))).toEqual([]);
+      }
+      for (const value of ["1", "true", "ON", " auto "]) expect(availableDelegationClients("claude", parseCrossHarnessConfig(value))).toContain("codex");
+    });
+
+    it("drops the session client and excluded clients from the peers", () => {
+      install("contract", { FAKE_PROFILE: "routed" });
+      process.env.HERDR_JEV_EXCLUDE_CLIENTS = "codex";
+      expect(availableDelegationClients("claude", parseCrossHarnessConfig("claude:claude,codex,antigravity"))).toEqual(["antigravity"]);
+      delete process.env.HERDR_JEV_EXCLUDE_CLIENTS;
+      expect(availableDelegationClients("claude", parseCrossHarnessConfig("claude:claude,codex,antigravity"))).toEqual(["codex", "antigravity"]);
+      expect(availableDelegationClients("claude", parseCrossHarnessConfig("claude:codex"))).toEqual(["codex"]);
+      expect(availableDelegationClients("claude", parseCrossHarnessConfig("off"))).toEqual([]);
+    });
   });
 
   it("falls back to the built-in mapping for a model the harness does not know", () => {

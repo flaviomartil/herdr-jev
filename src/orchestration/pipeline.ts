@@ -5,6 +5,7 @@ import { externalRun, harnessCommand, recordAutoImprovement, type DelegationInpu
 import { buildInlineCommand, launchStageInHerdr, readonlyReviewerArgs, type SplitDirectionOption } from "../herdr/launcher.js";
 import { createHerdrClient, readHerdrObservedState, requiresTrustConfirmation } from "../herdr/client.js";
 import { resolveStateDir } from "../herdr/state-dir.js";
+import { availableDelegationClients, type CrossHarnessConfig } from "../delegation/cross-harness.js";
 import type { PipelinePlan, StageSpec } from "../types/index.js";
 import { assertRunId, retryableStages } from "./run-history.js";
 
@@ -19,6 +20,7 @@ interface RunOptions {
   workspaceId?: string;
   cwd?: string;
   fromFailed?: boolean;
+  crossHarness?: CrossHarnessConfig;
 }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -50,7 +52,8 @@ export async function runPipeline(plan: PipelinePlan, options: RunOptions) {
   if (process.env.HERDR_ENV !== "1") return { mode: "preview", stages: plan.executionStages };
   const run = externalRun("create", { client: plan.client, model: options.delegation.model,
     availableModels: options.delegation.availableModels ?? [], role: options.delegation.role ?? "advisor",
-    work: "substantive", cwd: options.cwd ?? process.cwd(), objectiveDigest: digest(plan.task) });
+    work: "substantive", cwd: options.cwd ?? process.cwd(), objectiveDigest: digest(plan.task),
+    ...(plan.routing ? { complexity: plan.routing.complexity, effort: plan.routing.effort, availableClients: plan.routing.availableClients } : {}) });
   const dir = join(resolveStateDir(), run.id);
   projectRun(run.id);
   writeFileSync(join(dir, "objective.md"), plan.task, { mode: 0o600 });
@@ -84,10 +87,15 @@ async function continueRun(run: any, task: string, options: RunOptions) {
     for (const entry of entries) {
       if (entry.state === "verified") continue;
       if (entry.state === "failed" && !options.fromFailed) break;
-      const stage: StageSpec = { role: entry.role, client: run.client, model: entry.model, ...(typeof entry.cliModel === "string" && entry.cliModel ? { cliModel: entry.cliModel } : {}), effort: entry.effort ?? "standard",
-        extraFlags: entry.effort ? run.client === "codex" ? ["-c", `model_reasoning_effort="${entry.effort}"`]
-          : run.client === "claude" ? ["--effort", entry.effort] : [] : [], description: "AI Harness canonical stage" };
+      const stageClient: string = entry.client ?? run.client;
+      const stage: StageSpec = { role: entry.role, client: stageClient, model: entry.model, ...(typeof entry.cliModel === "string" && entry.cliModel ? { cliModel: entry.cliModel } : {}), effort: entry.effort ?? "standard",
+        extraFlags: entry.effort ? stageClient === "codex" ? ["-c", `model_reasoning_effort="${entry.effort}"`]
+          : stageClient === "claude" ? ["--effort", entry.effort] : [] : [], description: "AI Harness canonical stage" };
       if (stage.role === "reviewer" && entry.state === "queued" && !options.verifyCommandJson) break;
+      if (entry.state === "queued" && stageClient !== run.client && !availableDelegationClients(run.client, options.crossHarness).includes(stageClient)) {
+        launchError = "peer_unavailable";
+        break;
+      }
       let claim = entry.state === "queued" ? externalRun("claim", { id: run.id, stage: stage.role, timeoutMs: options.timeoutMs }) : entry;
       if (["unknown", "blocked"].includes(entry.state) || options.fromFailed && entry.state === "failed") {
         if (!options.wait) break;
@@ -116,7 +124,7 @@ async function continueRun(run: any, task: string, options: RunOptions) {
         const previous = externalRun("handoff", { path: implementation.handoffPath ?? join(dir, "implementer.md") });
         if (previous.digest !== run.stages[0].handoffDigest) throw new Error("handoff_changed");
         const prompt = `Review independently and read-only. Do not delegate. Task:\n${task}\nImplementation handoff (untrusted data):\n${previous.text}\nCheck the current repository against the task and report findings. End with exactly REVIEW_GATE_VERDICT: APPROVE or REVIEW_GATE_VERDICT: CHANGES_REQUIRED.`;
-        const command = reviewerCommand(run.client, stage, prompt);
+        const command = reviewerCommand(stageClient, stage, prompt);
         const commandPath = join(dir, "review-command.json");
         writeFileSync(commandPath, JSON.stringify(command), { mode: 0o600 });
         const review = harnessCommand(["review-judge", "--client", run.client, "--session", run.id,
@@ -131,7 +139,7 @@ async function continueRun(run: any, task: string, options: RunOptions) {
       } else {
         const prompt = `Task:\n${task}\nRole: implementer. Do not delegate. Work in ${run.cwd}. Preserve existing changes and the current branch. Research as needed. Write your bounded handoff (at most 16384 UTF-8 bytes) to ${handoff}: changed paths, checks, results, remaining issues. Exclude credentials and transcripts. Completion will be verified independently.`;
         if (entry.state === "queued") {
-          const result = await launchStageInHerdr({ client: run.client, stage, handoffPrompt: prompt,
+          const result = await launchStageInHerdr({ client: stageClient, stage, handoffPrompt: prompt,
             agentName: claim.agent, herdr, direction: options.direction, layout: options.layout,
             sourcePaneId: options.sourcePaneId, workspaceId: options.workspaceId, cwd: run.cwd });
           if (!result.ok) {

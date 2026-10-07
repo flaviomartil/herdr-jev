@@ -122,18 +122,22 @@ export interface DelegationInput {
   model?: string;
   availableModels?: string[];
   role?: "advisor" | "executor" | "reviewer";
+  complexity?: string;
+  effort?: string;
+  availableClients?: string[];
 }
 
 export type HarnessDecision = { mode: "direct"; reason: string } | {
   mode: "delegate";
-  profile: { id: string; client: string; advisor: string;
-    executor: { model: string; cliModel?: string; effort?: StageEffort };
-    reviewer: { model: string; cliModel?: string; effort?: StageEffort } };
+  profile: { id: string; client: string; advisor: string; route?: string;
+    executor: { model: string; client?: string; cliModel?: string; effort?: StageEffort };
+    reviewer: { model: string; client?: string; cliModel?: string; effort?: StageEffort } };
 };
 
 function validStage(value: any): boolean {
   return Boolean(value) && typeof value === "object" && typeof value.model === "string" && value.model.length > 0
-    && (value.cliModel === undefined || typeof value.cliModel === "string") && (value.effort === undefined || STAGE_EFFORTS.includes(value.effort));
+    && (value.cliModel === undefined || typeof value.cliModel === "string")
+    && (value.client === undefined || typeof value.client === "string" && value.client.length > 0) && (value.effort === undefined || STAGE_EFFORTS.includes(value.effort));
 }
 
 function parseDecision(value: any): HarnessDecision | null {
@@ -141,7 +145,8 @@ function parseDecision(value: any): HarnessDecision | null {
   if (value.mode === "direct") return { mode: "direct", reason: typeof value.reason === "string" ? value.reason : "unspecified" };
   const profile = value.profile;
   if (value.mode === "delegate" && profile && typeof profile === "object" && typeof profile.id === "string" && typeof profile.client === "string"
-    && typeof profile.advisor === "string" && validStage(profile.executor) && validStage(profile.reviewer)) return value as HarnessDecision;
+    && typeof profile.advisor === "string" && (profile.route === undefined || typeof profile.route === "string")
+    && validStage(profile.executor) && validStage(profile.reviewer)) return value as HarnessDecision;
   return null;
 }
 
@@ -150,7 +155,10 @@ export function resolveHarnessDelegation(client: string, substantive: boolean, i
     const decision = parseDecision(harnessCommand<unknown>(["delegation-plan", "--client", client,
       "--work", substantive ? "substantive" : "simple", "--role", input.role ?? "advisor",
       ...(input.model ? ["--model", input.model] : []),
-      ...(input.availableModels?.length ? ["--available-models", input.availableModels.join(",")] : [])]));
+      ...(input.availableModels?.length ? ["--available-models", input.availableModels.join(",")] : []),
+      ...(input.complexity ? ["--complexity", input.complexity] : []),
+      ...(input.effort ? ["--effort", input.effort] : []),
+      ...(input.availableClients?.length ? ["--available-clients", input.availableClients.join(",")] : [])]));
     return decision ?? { mode: "direct", reason: "invalid_delegation_plan" };
   } catch (error) {
     const reason = error instanceof Error && /^[a-z][a-z0-9_]*$/.test(error.message) ? error.message : "harness_unavailable";
