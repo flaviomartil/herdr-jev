@@ -25,6 +25,7 @@ import {
   type CrossHarnessConfig,
 } from "./delegation/cross-harness.js";
 import { resolveStageSpec } from "./pipelines/matrix.js";
+import { resolveRoleMatrix } from "./pipelines/roles.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
 import { checkHarnessStatus, externalRun, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
 import { formatReviewReport, runReview } from "./harness/review.js";
@@ -668,7 +669,17 @@ const modelsCommand = program.command("models").description("Manage client model
 modelsCommand
   .command("list")
   .description("List all configured models, active overrides, and fallback cascades per client")
-  .action(() => {
+  .option("--json", "Print the role matrix as JSON")
+  .option("--client <client>", "Client for the JSON role matrix", "claude")
+  .action(async (options: { json?: boolean; client: string }) => {
+    if (options.json) {
+      if (!recognisedClient(options.client)) {
+        console.error(`Unknown client: ${options.client}`);
+        process.exit(1);
+      }
+      console.log(JSON.stringify(await resolveRoleMatrix(options.client as ClientKind)));
+      return;
+    }
     const catalog = loadBaseCatalog();
     const userOverrides = loadUserOverrides();
     console.log("\n=== Herdr-Jev Model Matrix & Fallback Chains ===");

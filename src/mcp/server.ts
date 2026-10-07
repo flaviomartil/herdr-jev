@@ -79,7 +79,7 @@ const TOOLS = [
         },
         role: {
           type: "string",
-          enum: ["researcher", "implementer", "reviewer", "advisor"],
+          enum: ["researcher", "implementer", "reviewer", "advisor", "reader"],
           description: "Role of the subagent (defaults to researcher)",
         },
         target: {

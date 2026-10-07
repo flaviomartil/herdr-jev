@@ -12,7 +12,7 @@ import { resolveHerdrContext } from "./context.js";
 export async function resolvePeerStage(input: { prompt: string; source: ClientKind; target?: ClientKind; role?: RoleKind; model?: string; effort?: string; crossHarness?: string }) {
   if (!input.prompt?.trim()) throw new Error("A nonempty peer prompt is required");
   const role = input.role ?? "researcher";
-  if (!["researcher", "implementer", "reviewer", "advisor"].includes(role)) throw new Error("Invalid peer role");
+  if (!["researcher", "implementer", "reviewer", "advisor", "reader"].includes(role)) throw new Error("Invalid peer role");
   if (input.effort && !["standard", "high", "xhigh"].includes(input.effort)) throw new Error("Invalid effort: standard, high or xhigh required");
   const config = parseCrossHarnessConfig(input.crossHarness ?? process.env.HERDR_JEV_CROSS_HARNESS ?? "auto");
   const allowed = config.allowedPeers[input.source] ?? config.allowedPeers[resolveBaseClientKind(input.source)] ?? [input.source];
@@ -27,7 +27,7 @@ export async function resolvePeerStage(input: { prompt: string; source: ClientKi
   if (resolveBaseClientKind(client) === "codex" && hasExhaustedUsageQuota("codex")) throw new Error("Codex account quota is exhausted in a fresh usage observation; select another permitted peer");
   if (client === "kiro" && !input.model?.trim()) throw new Error("Kiro peer requires a verified model from kiro-cli chat --list-models --format json");
   const isDifferentClient = resolveBaseClientKind(client) !== resolveBaseClientKind(input.source);
-  const stageEffort = input.effort ?? (isDifferentClient ? undefined : triage.effort);
+  const stageEffort = input.effort ?? (isDifferentClient || role === "reader" ? undefined : triage.effort);
   const stage = client === "kiro"
     ? { role, client, model: input.model!.trim(), effort: (input.effort ?? triage.effort) as ReasoningEffort, extraFlags: [] as string[], description: "Kiro peer with explicit model; native scalar effort unavailable" }
     : resolveStageSpec(client, role, stageEffort as ReasoningEffort | undefined);

@@ -902,7 +902,7 @@ function localEffortArgs(client: ClientKind, stage: StageSpec): string[] {
 function resolveLaunchProfile(client: ClientKind, stage: StageSpec): LaunchProfile {
   const base = resolveBaseClientKind(client);
   const resolution = CATALOG_CLIENTS.has(base)
-    ? harnessModelResolve({ client: base, model: stage.model, effort: stage.effort, role: stage.role }) : null;
+    ? harnessModelResolve({ client: base, model: stage.model, effort: stage.effort, role: stage.role === "reader" ? "researcher" : stage.role }) : null;
   const known = resolution?.known === true;
   const fallbackModel = base === "claude" ? resolveClaudeModel(stage.model)
     : base === "antigravity" ? resolveAntigravityModel(stage.model, stage.effort) : stage.model;
@@ -960,9 +960,13 @@ function stripReviewerFlags(flags: readonly string[], profile: LaunchProfile): s
   return kept;
 }
 
+function isReadOnlyRole(role: RoleKind): boolean {
+  return role === "reviewer" || role === "reader";
+}
+
 function stageFlags(client: ClientKind, stage: StageSpec, profile: LaunchProfile): string[] {
   const base = resolveBaseClientKind(client);
-  const requested = stage.role === "reviewer" ? stripReviewerFlags(stage.extraFlags, profile) : stage.extraFlags;
+  const requested = isReadOnlyRole(stage.role) ? stripReviewerFlags(stage.extraFlags, profile) : stage.extraFlags;
   if (base !== "codex" && base !== "claude" && base !== "antigravity") return requested;
   const flags: string[] = [];
   for (let i = 0; i < requested.length; i++) {
@@ -976,7 +980,7 @@ function stageFlags(client: ClientKind, stage: StageSpec, profile: LaunchProfile
 
 function bypassFlags(client: ClientKind, stage: StageSpec, profile: LaunchProfile, present: readonly string[]): string[] {
   const base = resolveBaseClientKind(client);
-  if (stage.role === "reviewer" || !bypassEnabled() || !(base in FALLBACK_BYPASS_ARGS)) return [];
+  if (isReadOnlyRole(stage.role) || !bypassEnabled() || !(base in FALLBACK_BYPASS_ARGS)) return [];
   return profile.bypassArgs.filter((arg) => !present.includes(arg));
 }
 
@@ -994,12 +998,12 @@ function prepareLaunch(client: ClientKind, stage: StageSpec, structural: readonl
     model: profile.model,
     flags,
     bypass: bypassFlags(client, stage, profile, [...structural, ...flags]),
-    readonly: stage.role === "reviewer" ? profile.readonlyArgs : [],
+    readonly: isReadOnlyRole(stage.role) ? profile.readonlyArgs : [],
   };
 }
 
 function kiroTrustFlags(stage: StageSpec): string[] {
-  return stage.role === "reviewer" ? [] : ["--trust-all-tools"];
+  return isReadOnlyRole(stage.role) ? [] : ["--trust-all-tools"];
 }
 
 function optionSafe(text: string): string {
