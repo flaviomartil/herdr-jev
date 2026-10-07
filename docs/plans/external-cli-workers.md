@@ -46,7 +46,7 @@ Binários confirmados em `~/.local/bin`: `codex`, `kimi`, `agy`. Flags abaixo v�
 | CLI | Revisão (somente leitura) | Implementação (em worktree) | Effort |
 | --- | --- | --- | --- |
 | codex | `codex exec review --uncommitted --ephemeral` | `codex exec` com o brief | por config, flag a validar |
-| kimi | `kimi --plan -p <prompt> --output-format text` | `kimi --auto -p <prompt>` | não expõe |
+| kimi | `kimi -p <prompt> --output-format text` (`--plan` não combina com `-p`; sem modo somente leitura) | `kimi --auto -p <prompt>` | não expõe |
 | agy | `agy --print <prompt> --mode plan --sandbox --output-format json --json-schema <schema> --print-timeout <t>` | `agy --print <prompt> --mode accept-edits` | `--effort low..max` |
 
 Regras dos adapters:
@@ -56,7 +56,9 @@ Regras dos adapters:
 - Saída pedida em uma linha JSON por achado: `path`, `line`, `severity`, `title`, `detail`. Texto livre vira um achado único. `agy` usa `--json-schema` para forçar o formato.
 - Um membro só conta como instalado quando `<bin> --version` devolve a assinatura esperada.
 
-A validar na 4a: se `kimi --plan -p` é de fato somente leitura, e qual modo de `agy` garante isso sem depender só de `--sandbox`.
+Verificado em 2026-10-07 com um prompt mínimo: `codex exec --ephemeral`, `kimi -p` e `agy --print --mode plan` respondem em modo headless. `kimi --plan -p` falha com "Cannot combine --prompt with --plan", então o Kimi depende do worktree descartável para revisar com segurança.
+
+A validar na 4a: qual modo de `agy` garante somente leitura sem depender só de `--sandbox`, e o formato de saída de cada CLI com um diff real.
 
 ## 5. Isolamento
 
