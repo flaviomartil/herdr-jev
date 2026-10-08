@@ -81,6 +81,7 @@ const reviewAtom = atom({ plugin: 'harness', key: 'review' } as const, null)
 const isReviewRunningAtom = atom({ plugin: 'harness', key: 'isReviewRunning' } as const, false)
 const isExpandedAtom = atom({ plugin: 'harness', key: 'isExpanded' } as const, false)
 const foldsAtom = atom({ plugin: 'harness', key: 'folds' } as const, {})
+const reviewIdsAtom = atom({ plugin: 'harness', key: 'reviewIds' } as const, {})
 const scopeAtom = atom({ plugin: 'harness', key: 'scope' } as const, EMPTY_SCOPE as ScopeState)
 
 const PANE_ID = 'harness'
@@ -907,8 +908,14 @@ async function refreshReview($: EngineInterface, options: PluginOptions, cwd: st
       return ran.timedOut === true ? `harness review timed out: ${ran.reason}.` : `harness review failed: ${ran.reason}.`
     }
 
-    const { status, detail, error } = ran.value
+    const { status, detail, error, identity } = ran.value
     await setReview($, { ok: true, status, detail, reason: error, at })
+    if (identity !== null) {
+      await update($, reviewIdsAtom, ids => ({
+        ...ids,
+        [identity.cwd]: { client: identity.client, session: identity.session, at },
+      }))
+    }
     if (status !== 'ready') return `harness review ${status ?? 'unknown'}; approved tasks stay approved.`
 
     let verified = 0
@@ -1071,7 +1078,7 @@ export const register: Register = (on, options) => {
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
-        description: 'Show the Herdr-Jev harness plan and workers in a pane',
+        description: 'Show the Herdr-Jev harness plan and workers in a pane; /harness review runs the harness review',
       }),
     )
     await attempt('register harness_plan', $, () =>
@@ -1140,6 +1147,9 @@ export const register: Register = (on, options) => {
       if (!hasScreen) return { text }
       $.ui.log(text)
       return {}
+    }
+    if (e.args.trim() === 'review') {
+      return { text: await refreshReview($, options, await $.session.cwd()) }
     }
     await update($, isHiddenAtom, () => false)
     await $.ui.open({ id: PANE_ID, title: 'Harness', closeOnEscape: true })
