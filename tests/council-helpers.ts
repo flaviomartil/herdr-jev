@@ -4,10 +4,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProcessOutput, SpawnedProcess, SpawnFn, SpawnOptions } from "../src/council/spawn.js";
 
-export function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { cwd, encoding: "utf8" });
+process.env.GIT_CONFIG_GLOBAL = "/dev/null";
+process.env.GIT_CONFIG_NOSYSTEM = "1";
+
+export function gitRaw(cwd: string, ...args: string[]): string {
+  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${result.stderr}`);
-  return result.stdout.trim();
+  return result.stdout;
+}
+
+export function git(cwd: string, ...args: string[]): string {
+  return gitRaw(cwd, ...args).trim();
 }
 
 export function writeIn(root: string, path: string, content: string): void {
@@ -35,36 +42,58 @@ export interface Call {
 
 export type Handler = (call: Call) => ProcessOutput | Promise<ProcessOutput> | "hang";
 
+export interface FakeSpawnOptions {
+  installed?: string[];
+  versions?: Record<string, string>;
+  hangProbe?: string[];
+  onProbe?: (bin: string) => void;
+}
+
 export interface FakeSpawn {
   spawn: SpawnFn;
   calls: Call[];
-  reviewCalls: Call[];
+  readonly reviewCalls: Call[];
+  readonly probeCalls: Call[];
 }
 
-export function fakeSpawn(handlers: Record<string, Handler>, installed: string[] = Object.keys(handlers)): FakeSpawn {
+const DEFAULT_VERSIONS: Record<string, string> = { codex: "codex-cli 0.160.1\n", kimi: "2.1.1\n", agy: "1.3.1\n" };
+
+export function fakeSpawn(handlers: Record<string, Handler>, options: FakeSpawnOptions = {}): FakeSpawn {
+  const installed = options.installed ?? Object.keys(handlers);
   const calls: Call[] = [];
-  const spawn: SpawnFn = (argv: readonly string[], options: SpawnOptions): SpawnedProcess => {
-    const call: Call = { argv: [...argv], cwd: options.cwd, stdin: options.stdin, killed: false };
+  const spawn: SpawnFn = (argv: readonly string[], spawnOptions: SpawnOptions): SpawnedProcess => {
+    const call: Call = { argv: [...argv], cwd: spawnOptions.cwd, stdin: spawnOptions.stdin, killed: false };
     calls.push(call);
     const bin = argv[0];
-    if (argv[1] === "--version") {
-      return { result: Promise.resolve({ exitCode: installed.includes(bin) ? 0 : 127, stdout: installed.includes(bin) ? "1.0.0\n" : "", stderr: "" }), kill() {} };
-    }
     let release: (output: ProcessOutput) => void = () => {};
-    const killedResult = new Promise<ProcessOutput>((resolve) => {
+    const held = new Promise<ProcessOutput>((resolve) => {
       release = resolve;
     });
-    const handled = handlers[bin]?.(call);
-    const result = handled === "hang" || handled === undefined ? killedResult : Promise.resolve(handled);
-    return {
-      result,
-      kill() {
-        call.killed = true;
-        release({ exitCode: 137, stdout: "", stderr: "killed" });
-      },
+    const kill = () => {
+      call.killed = true;
+      release({ exitCode: 137, stdout: "", stderr: "killed" });
     };
+    if (argv[1] === "--version") {
+      options.onProbe?.(bin);
+      if (options.hangProbe?.includes(bin)) return { result: held, kill };
+      const ok = installed.includes(bin);
+      const version = options.versions?.[bin] ?? DEFAULT_VERSIONS[bin] ?? "1.0.0\n";
+      return { result: Promise.resolve({ exitCode: ok ? 0 : 127, stdout: ok ? version : "", stderr: "" }), kill };
+    }
+    const handled = handlers[bin]?.(call);
+    const result = handled === "hang" || handled === undefined ? held : Promise.resolve(handled);
+    return { result, kill };
   };
-  return { spawn, calls, get reviewCalls() { return calls.filter((call) => call.argv[1] !== "--version"); } };
+  return {
+    spawn,
+    calls,
+    get reviewCalls() {
+      return calls.filter((call) => call.argv[1] !== "--version");
+    },
+    get probeCalls() {
+      return calls.filter((call) => call.argv[1] === "--version");
+    },
+  };
 }
 
 export const ok = (stdout: string): ProcessOutput => ({ exitCode: 0, stdout, stderr: "" });

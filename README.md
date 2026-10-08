@@ -773,6 +773,16 @@ bun run smoke
 
 ---
 
+## Review council
+
+`src/council` reviews one diff with several external CLIs (codex, kimi, agy) in parallel. Each member runs in its own throwaway clone of the repository (`git clone --shared`, no remote), never in your working tree and never through `git worktree`, so a member that writes cannot change your stash, config, hooks or refs. The clone is removed after every member, and stale ones are swept at the start of a run.
+
+Sensitive paths never reach a member. Every changed path, tracked or not, is checked against the `SENSITIVE_FILES` patterns in `src/harness/review.ts` plus `.npmrc`, `.netrc`, `.pypirc` and `*.tfvars`; a match is left out of the patch and the prompt, and tracked files that match are removed from the clone. The skipped paths come back in `CouncilRun.skippedPaths` and are counted in `CouncilRun.note`. Names such as `src/auth/credentials.ts` or `tests/secret.test.ts` are not matched, because the patterns need a bare `credentials` or `secret` name with a data extension. Untracked files over 5 MB are also left out and reported.
+
+Live behaviour of kimi and agy is unvalidated until the checklist in [docs/plans/council-live-validation.md](docs/plans/council-live-validation.md) is run.
+
+---
+
 ## Scheduling
 
 `standup --auto` and `daily --write` are meant to run unattended. The `herdr-routines` plugin entry and the idempotency rules for the standup are in [docs/standup.md](docs/standup.md); the report formats and the `daily/` output path are in [docs/daily.md](docs/daily.md).

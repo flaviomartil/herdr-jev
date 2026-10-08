@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { NO_FINDINGS } from "./members.js";
 import type { CouncilFinding, CouncilMemberName } from "./types.js";
 
@@ -9,11 +10,18 @@ export interface MemberOutput {
 
 export type ParseResult = { findings: CouncilFinding[]; note?: string } | { error: string };
 
+export interface ParseOptions {
+  question?: boolean;
+}
+
 const MAX_TITLE = 160;
 const MAX_DETAIL = 4000;
+const MAX_NOTE = 600;
 const CODEX_HEAD = /^- (?:\[[ x]\] )?(.+) — (.+):(\d+)(?:-\d+)?$/u;
 const PRIORITY = /^\[P(\d)\]\s*/u;
+const NO_FINDINGS_LINE = new RegExp(`^${NO_FINDINGS}\\.?$`, "u");
 const ENVELOPE_TEXT_KEYS = ["result", "response", "text", "output", "content", "message"] as const;
+const ENVELOPE_ERROR_KEYS = ["error", "error_message", "errorMessage"] as const;
 
 type Severity = CouncilFinding["severity"];
 
@@ -32,6 +40,7 @@ function severityOfPriority(digit: string | undefined): Severity {
 
 export function relativePath(path: string, roots: readonly string[]): string {
   let value = path.trim().replace(/\\/gu, "/");
+  if (value === "") return "";
   for (const root of roots) {
     const normalized = root.replace(/\\/gu, "/").replace(/\/+$/u, "");
     if (normalized && value.startsWith(`${normalized}/`)) {
@@ -39,7 +48,9 @@ export function relativePath(path: string, roots: readonly string[]): string {
       break;
     }
   }
-  return value.replace(/^\.\//u, "");
+  const clean = posix.normalize(value);
+  if (clean === "." || clean.startsWith("/") || /^[A-Za-z]:\//u.test(clean) || clean === ".." || clean.startsWith("../")) return "";
+  return clean;
 }
 
 function textField(value: unknown, key: string): string | undefined {
@@ -82,6 +93,16 @@ function proseFinding(member: CouncilMemberName, text: string): CouncilFinding {
   return { member, path: "", severity: "medium", title: `${member}: unstructured review`, detail: text.slice(0, MAX_DETAIL) };
 }
 
+function lastLineOf(text: string): string {
+  return (
+    text
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line !== "")
+      .at(-1) ?? ""
+  );
+}
+
 function codexFindings(stdout: string, roots: readonly string[]): CouncilFinding[] {
   const found: CouncilFinding[] = [];
   for (const block of stdout.split(/\n(?=- )/u)) {
@@ -89,12 +110,11 @@ function codexFindings(stdout: string, roots: readonly string[]): CouncilFinding
     const head = CODEX_HEAD.exec(first.trimEnd());
     if (!head) continue;
     const [, rawTitle = "", path = "", line = "0"] = head;
-    const title = rawTitle.replace(PRIORITY, "");
     const finding: CouncilFinding = {
       member: "codex",
       path: relativePath(path, roots),
       severity: severityOfPriority(PRIORITY.exec(rawTitle)?.[1]),
-      title: title.slice(0, MAX_TITLE),
+      title: rawTitle.replace(PRIORITY, "").slice(0, MAX_TITLE),
       detail: body
         .filter((text) => text.startsWith("  "))
         .map((text) => text.slice(2))
@@ -109,13 +129,34 @@ function codexFindings(stdout: string, roots: readonly string[]): CouncilFinding
   return found;
 }
 
-function textFindings(member: CouncilMemberName, text: string, roots: readonly string[]): ParseResult {
+function listFindings(member: CouncilMemberName, list: unknown[], roots: readonly string[]): ParseResult {
+  const findings = list.flatMap((entry) => {
+    const finding = findingOf(member, entry, roots);
+    return finding ? [finding] : [];
+  });
+  if (findings.length === 0 && list.length > 0) return { error: `${member}: malformed output, findings without title` };
+  return { findings };
+}
+
+function findingsArray(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).findings)) return (value as Record<string, unknown>).findings as unknown[];
+  return undefined;
+}
+
+function structuredText(member: CouncilMemberName, text: string, roots: readonly string[], strict: boolean): ParseResult {
   const trimmed = text.trim();
   if (trimmed === "") return { error: `${member}: empty output` };
+  const whole = tryJson(trimmed);
+  if (whole.ok) {
+    const list = findingsArray(whole.value);
+    if (list) return listFindings(member, list, roots);
+  }
   const lines = trimmed.split("\n").map((line) => line.trim());
   const candidates = lines.filter((line) => line.startsWith("{"));
   if (candidates.length === 0) {
-    if (lines.every((line) => line === "" || line === NO_FINDINGS)) return { findings: [] };
+    if (NO_FINDINGS_LINE.test(lastLineOf(trimmed))) return { findings: [] };
+    if (strict) return { error: `${member}: output is neither findings nor ${NO_FINDINGS}` };
     return { findings: [proseFinding(member, trimmed)] };
   }
   const findings: CouncilFinding[] = [];
@@ -126,51 +167,57 @@ function textFindings(member: CouncilMemberName, text: string, roots: readonly s
     if (finding) findings.push(finding);
     else rejected += 1;
   }
-  if (findings.length === 0) return { error: `${member}: malformed output, ${rejected} unreadable JSON line${rejected === 1 ? "" : "s"}` };
+  if (findings.length === 0) {
+    if (NO_FINDINGS_LINE.test(lastLineOf(trimmed))) return { findings: [] };
+    return { error: `${member}: malformed output, ${rejected} unreadable JSON line${rejected === 1 ? "" : "s"}` };
+  }
   return rejected > 0 ? { findings, note: `${rejected} unreadable line${rejected === 1 ? "" : "s"} skipped` } : { findings };
+}
+
+function envelopeError(value: Record<string, unknown>): string | undefined {
+  if (value.is_error === true || value.isError === true) {
+    for (const key of [...ENVELOPE_TEXT_KEYS, ...ENVELOPE_ERROR_KEYS]) {
+      const text = textField(value, key);
+      if (text) return text;
+    }
+    return "reported an error";
+  }
+  for (const key of ENVELOPE_ERROR_KEYS) {
+    const field = value[key];
+    if (typeof field === "string" && field.trim() !== "") return field.trim();
+    if (field && typeof field === "object") return textField(field, "message") ?? "reported an error";
+  }
+  return undefined;
 }
 
 function envelopeResult(member: CouncilMemberName, stdout: string, roots: readonly string[]): ParseResult {
   const trimmed = stdout.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return textFindings(member, stdout, roots);
+  if (trimmed === "") return { error: `${member}: empty output` };
   const parsed = tryJson(trimmed);
   if (!parsed.ok) return { error: `${member}: malformed JSON output` };
   const value = parsed.value;
-  const list = Array.isArray(value) ? value : value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).findings) ? ((value as Record<string, unknown>).findings as unknown[]) : undefined;
-  if (list) {
-    const findings = list.flatMap((entry) => {
-      const finding = findingOf(member, entry, roots);
-      return finding ? [finding] : [];
-    });
-    if (findings.length === 0 && list.length > 0) return { error: `${member}: malformed output, findings without title` };
-    return { findings };
-  }
+  const direct = findingsArray(value);
+  if (direct) return listFindings(member, direct, roots);
   if (value && typeof value === "object") {
-    if (findingOf(member, value, roots)) return textFindings(member, trimmed, roots);
+    const failure = envelopeError(value as Record<string, unknown>);
+    if (failure) return { error: `${member}: ${failure}`.slice(0, 400) };
     for (const key of ENVELOPE_TEXT_KEYS) {
       const inner = textField(value, key);
-      if (inner !== undefined) return textFindings(member, inner, roots);
+      if (inner !== undefined) return structuredText(member, inner, roots, true);
     }
   }
   return { error: `${member}: JSON output has no readable result` };
 }
 
-function lastLineOf(text: string): string {
-  return (
-    text
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line !== "")
-      .at(-1) ?? ""
-  );
-}
-
-export function parseMemberOutput(member: CouncilMemberName, run: MemberOutput, roots: readonly string[]): ParseResult {
+export function parseMemberOutput(member: CouncilMemberName, run: MemberOutput, roots: readonly string[], options: ParseOptions = {}): ParseResult {
   if (run.exitCode !== 0) return { error: `${member}: exit ${run.exitCode}: ${lastLineOf(run.stderr) || lastLineOf(run.stdout) || "no output"}`.slice(0, 400) };
   if (member === "codex") {
     const structured = codexFindings(run.stdout, roots);
-    return structured.length > 0 ? { findings: structured } : textFindings(member, run.stdout, roots);
+    if (structured.length > 0) return { findings: structured };
+    if (options.question) return structuredText(member, run.stdout, roots, false);
+    const prose = run.stdout.trim();
+    return prose === "" ? { findings: [] } : { findings: [], note: prose.slice(0, MAX_NOTE) };
   }
   if (member === "antigravity") return envelopeResult(member, run.stdout, roots);
-  return textFindings(member, run.stdout, roots);
+  return structuredText(member, run.stdout, roots, false);
 }
