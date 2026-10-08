@@ -52,7 +52,7 @@ Limites conhecidos (falsos negativos aceitos pela regra de não avisar na dúvid
 - Edições feitas por scripts ou geradores de código (`python gen.py`, `node codegen.js`, `pnpm db:migrate`) não são vistas.
 - Ferramentas de shell via MCP são invisíveis ao mod.
 - O estado nasce vazio depois de `resume`; evidência de antes não é lembrada.
-- Comandos com mais de 64 KB não são classificados (nem evidência nem edição) e o desembrulho de prefixos e de `xargs` para em 16 níveis.
+- Comandos com mais de 64 KB (sem contar corpos de heredoc) não são classificados (nem evidência nem edição) e o desembrulho de prefixos e de `xargs` para em 16 níveis.
 - `sh -c "..."` depois de `docker compose run`, `watch` e `php bin/console lint:*` não são reconhecidos como evidência.
 - O Bash de um subagente rodando em outro worktree conta como evidência do loop principal, porque o mod não sabe em qual árvore ele rodou.
 
