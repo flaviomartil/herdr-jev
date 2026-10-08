@@ -55,6 +55,7 @@ export type Seen = {
   state: Map<string, unknown>
   saved: Map<string, unknown>
   clock: MockClock
+  turnIds: string[]
 }
 
 export const CWD = '/work/demo'
@@ -130,7 +131,7 @@ export function pendingReport(): Record<string, unknown> {
 
 export function wire(on: On, extra: { model?: string; session?: string; store?: Record<string, unknown> } = {}): Seen {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock }
+  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [] }
 
   on('store.get', (_$, e) => ({ value: seen.saved.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -151,9 +152,13 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
   on('agent.offer', () => ({ isOffered: true }))
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('classic.SessionStart', () => ({}))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }) as never)
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('ui.render', () => ({ type: 'engine', ref: 0 }) as never)
-  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.start', (_$, e) => {
+    seen.turnIds.push(e.turnId)
+    return { turnId: e.turnId }
+  })
   on('tool.call', () => ({ result: 'ok' }))
   on('session.cwd', () => ({ value: CWD }))
   on('session.model', () => ({ value: extra.model ?? SESSION_MODEL }))

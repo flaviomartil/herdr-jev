@@ -19,10 +19,13 @@ const LINKS =
   '(?:\\s+(?:all|now|still|fully|are|is|were|was|todos?|todas?|agora|ainda|est[aá]|est[aã]o|ficou|ficaram|foi|foram|j[aá]|tamb[eé]m))*'
 const PASSED =
   '(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|clean(?:ly)?|ok|passa(?:m|ndo)?|passou|passaram|verdes?|limp[oa]s?|sucesso|aprovad[oa]s?|funcion(?:a|am|ou|aram))'
-const ADVERB = '(?:\\s+(?:now|again|too|locally|agora|novamente|localmente))?'
+const ADVERB =
+  '(?:\\s+(?:now|again|too|locally|successfully|cleanly|agora|novamente|localmente|com sucesso))?'
 const STOP_MARKS = '[.,;!)\\]*_✅✔]'
 const JOINERS = '\\s+(?:and|but|e|mas)(?![\\p{L}\\p{N}_])'
-const END = `(?=\\s*(?:[:]|${STOP_MARKS}|$)|${JOINERS})`
+const LATER =
+  '\\s+(?:after|depois|(?:with(?:out)?|com|sem)\\s+(?:(?:no|zero|nenhum)\\s+)?(?:errors?|erros?|warnings?|failures?))(?![\\p{L}\\p{N}_])'
+const END = `(?=\\s*(?:[:]|${STOP_MARKS}|[—–]|-\\s|\\(\\d|$)|${JOINERS}|${LATER})`
 const END_V = `(?=\\s*(?:${STOP_MARKS}|$)|${JOINERS})`
 const TAIL = `${LINKS}\\s+${PASSED}${ADVERB}${END}`
 
@@ -75,12 +78,12 @@ const CLAIM_PATTERNS: readonly [ClaimKind, RegExp][] = [
       `(?:^|${LEFT}(?:est[aá]|ficou|foi|tudo|j[aá]|totalmente|devidamente|agora)\\s+)(?:(?:j[aá]|totalmente|devidamente|agora)\\s+)*verificad[oa]s?${END_V}`,
     ),
   ],
-  ['verified', pattern(`${LEFT}(?:tudo|todos|todas)\\s+(?:j[aá]\\s+)?(?:passou|passaram)${END_V}`)],
+  ['verified', pattern(`${LEFT}(?:tudo|todos|todas)\\s+(?:(?:j[aá]|e)\\s+)?(?:passou|passaram)${END_V}`)],
   ['verified', pattern(`${LEFT}(?:everything${LINKS}\\s+(?:green|pass(?:es|ed|ing)?|ok)|all green)${END_V}`)],
 ]
 
 const CONDITION = pattern(
-  `${LEFT}(?:unless|until|once|if|whether|make sure|ensure|assuming|before|so that|to make|to get|confirm|check that|verify that|earlier|previously|se|quando|at[eé]|assim que|caso|desde que|antes|para que|garanta|garantir|certifique|certificar|confirme|verifique|anteriormente|mais cedo)${RIGHT}`,
+  `${LEFT}(?:unless|until|once|if|when|after|as soon as|whether|goal|expected|means|make sure|ensure|assuming|before|so that|to make|to get|confirm|check that|verify that|earlier|previously|se|quando|depois que|esperado|at[eé]|assim que|caso|desde que|antes|para que|garanta|garantir|certifique|certificar|confirme|verifique|anteriormente|mais cedo)${RIGHT}`,
 )
 
 const NEGATION = pattern(
@@ -88,11 +91,15 @@ const NEGATION = pattern(
 )
 
 const REPORTED = pattern(
-  `${LEFT}(?:says?|said|reports?|reported|according to|disse|diz|relatou|segundo)${RIGHT}`,
+  `${LEFT}(?:says?|said|reports?|reported|answered|claims?|claimed|per|according to|disse|diz|relatou|informou|respondeu|afirmou|segundo)${RIGHT}`,
 )
 
 const LABELLED = pattern(
-  '^(?:[-*]\\s*\\[ \\]|\\||(?:acceptance criteria|criteria|dod|definition of done|goal|todo|next|crit[eé]rios?(?: de aceite)?|objetivo|pr[oó]ximos? passos?)(?![\\p{L}\\p{N}_]))',
+  '^(?:[-*]\\s*\\[ \\]|\\||(?:acceptance criteria|criteria|dod|definition of done|goal|todo|next|step \\d+|expected result|crit[eé]rios?(?: de aceite)?|objetivo|pr[oó]ximos? passos?)(?![\\p{L}\\p{N}_]))',
+)
+
+const MIXED = pattern(
+  `(?<!${LEFT}(?:no|0|zero|without|sem|nenhum|nenhuma)\\s+)${LEFT}(?:fails?|failed|failing|failures?|errors?|falh(?:a|as|am|ou|aram)|erros?)${RIGHT}`,
 )
 
 const NEAR_WORDS = 4
@@ -136,6 +143,7 @@ export function detectClaims(answer: string): Claim[] {
       const match = regex.exec(sentence)
       if (match === null) continue
       if (REPORTED.test(sentence.slice(0, match.index))) continue
+      if (MIXED.test(sentence.slice(match.index + match[0].length))) continue
       const clause = clauseBefore(sentence, match.index)
       if (CONDITION.test(`${clause} ${match[0]}`)) continue
       if (NEGATION.test(`${nearBefore(clause)} ${match[0]}`)) continue
@@ -150,13 +158,14 @@ const SEPARATOR = /(\|\||&&|\|&|\||;|\n)/
 const stripQuoted = (command: string) =>
   command.replace(/'[^']*'|"[^"]*"/g, '""').replace(/(^|\s)#.*$/gm, '$1')
 
-const PREFIX = /^(?:rtk(?:\s+-u)?|sudo|time|env|nice|\w+=\S*)\s+/
+const PREFIX =
+  /^(?:[({!]+\s*|exec\s+|docker\s+exec\s+(?:-\S+\s+)*\S+\s+|(?:if|then|do|while|until)\s+|rtk(?:\s+-u)?(?:\s+(?:test|err|proxy|summary))?\s+|(?:sudo|time|nice)\s+|command\s+(?!-[vV])|timeout\s+(?:-\S+\s+)*\S+\s+|env\s+(?:-\S+\s+)*|\w+=\S*\s+|docker(?:\s+compose|-compose)\s+(?:exec|run)\s+(?:-\S+\s+)*\S+\s+)/
 
 type Segment = { program: string; args: string[]; text: string }
 
 function segmentOf(raw: string): Segment {
-  let text = raw.trim()
-  for (let round = 0; round < 8; round += 1) {
+  let text = raw.trim().replace(/[)}\s]+$/, '')
+  for (let round = 0; round < 32; round += 1) {
     const next = text.replace(PREFIX, '')
     if (next === text) break
     text = next
@@ -166,8 +175,29 @@ function segmentOf(raw: string): Segment {
   return { program, args: tokens.slice(1), text }
 }
 
+const HEREDOC = /<<-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([\w-]+))/
+
+function dropHeredocs(command: string): string {
+  let text = command
+  for (let round = 0; round < 16; round += 1) {
+    const match = HEREDOC.exec(text)
+    if (match === null) break
+    const tag = match[1] ?? match[2] ?? match[3] ?? ''
+    const lineEnd = text.indexOf('\n', match.index)
+    if (lineEnd < 0) {
+      text = text.slice(0, match.index)
+      break
+    }
+    const lines = text.slice(lineEnd + 1).split('\n')
+    const close = lines.findIndex(line => line.trim() === tag)
+    const rest = close < 0 ? '' : lines.slice(close + 1).join('\n')
+    text = `${text.slice(0, match.index)}${text.slice(match.index + match[0].length, lineEnd)}\n${rest}`
+  }
+  return text
+}
+
 function segmentsOf(command: string): Segment[] {
-  return stripQuoted(command)
+  return stripQuoted(dropHeredocs(command))
     .split(SEPARATOR)
     .filter((_, index) => index % 2 === 0)
     .map(segmentOf)
@@ -249,10 +279,12 @@ export function classifyCommand(command: string): ClaimCheck[] {
   return CHECK_ORDER.filter(check => found.has(check))
 }
 
-function gitCommand(args: readonly string[]): { name: string; rest: string[]; flags: string[] } | null {
+function gitCommand(args: readonly string[]): { name: string; rest: string[]; flags: string[]; dir?: string } | null {
   let index = 0
+  let dir: string | undefined
   while (index < args.length) {
     const arg = args[index] ?? ''
+    if (arg === '-C') dir = args[index + 1]
     if (['-C', '-c', '--git-dir', '--work-tree'].includes(arg)) {
       index += 2
       continue
@@ -262,7 +294,7 @@ function gitCommand(args: readonly string[]): { name: string; rest: string[]; fl
       continue
     }
     const rest = args.slice(index + 1)
-    return { name: arg, rest, flags: rest.filter(one => one.startsWith('-')) }
+    return { name: arg, rest, flags: rest.filter(one => one.startsWith('-')), ...(dir === undefined ? {} : { dir }) }
   }
   return null
 }
@@ -271,12 +303,13 @@ const OFF_TREE = /^(?:\/tmp|\/var\/tmp|\/dev)(?:\/|$)/
 const isOffTree = (path: string) => OFF_TREE.test(path)
 
 const REDIRECT = /(?<![=\-<>])(?:\d+|&)?>>?\s*(&?)([^\s;&|<>()]*)/g
-const IN_PLACE = /^-[a-zA-Z]*i[a-zA-Z]*$|^--in-place(?:=.*)?$/
+const IN_PLACE = /^-[a-zA-Z]*i[\w.~-]*$|^--in-place(?:=.*)?$/
 
-function gitMutates(args: readonly string[]): boolean {
+function gitMutates(args: readonly string[], cwd: string | undefined): boolean {
   const git = gitCommand(args)
   if (git === null) return false
-  const { name, rest, flags } = git
+  const { name, rest, flags, dir } = git
+  if (dir !== undefined && cwd !== undefined && !isInside(dir, cwd)) return false
   const has = (...names: string[]) => flags.some(flag => names.includes(flag))
   switch (name) {
     case 'checkout':
@@ -310,7 +343,7 @@ function gitMutates(args: readonly string[]): boolean {
   }
 }
 
-function segmentMutates(segment: Segment): boolean {
+function segmentMutates(segment: Segment, cwd: string | undefined): boolean {
   const { program, args, text } = segment
   if (program === 'test' || program === '[' || program === '[[') return false
   for (const match of text.matchAll(REDIRECT)) {
@@ -322,10 +355,10 @@ function segmentMutates(segment: Segment): boolean {
   switch (program) {
     case 'xargs': {
       const start = args.findIndex(arg => !arg.startsWith('-'))
-      return start >= 0 && segmentMutates(segmentOf(args.slice(start).join(' ')))
+      return start >= 0 && segmentMutates(segmentOf(args.slice(start).join(' ')), cwd)
     }
     case 'git':
-      return gitMutates(args)
+      return gitMutates(args, cwd)
     case 'patch':
       return true
     case 'tee':
@@ -359,9 +392,9 @@ function segmentMutates(segment: Segment): boolean {
   )
 }
 
-export function isMutatingCommand(command: string, isReadOnly = false): boolean {
+export function isMutatingCommand(command: string, isReadOnly = false, cwd?: string): boolean {
   if (isReadOnly) return false
-  return segmentsOf(command).some(segmentMutates)
+  return segmentsOf(command).some(segment => segmentMutates(segment, cwd))
 }
 
 type EntryInput =
@@ -393,7 +426,7 @@ export function unverifiedClaims(claims: readonly Claim[], log: readonly ClaimEn
     const { checks, noun } = EVIDENCE[claim.kind]
     const isCi = claim.kind === 'ci'
     const since = isCi ? lastSeq(log, isPush) : lastSeq(log, entry => entry.type === 'edit')
-    if (!isCi && since === undefined) return []
+    if (since === undefined && (!isCi || !log.some(entry => entry.type === 'edit'))) return []
     const runs = log.filter(
       (entry): entry is Extract<ClaimEntry, { type: 'run' }> =>
         entry.type === 'run' &&
@@ -429,11 +462,15 @@ function debug($: EngineInterface, label: string, error: unknown): void {
   }
 }
 
-function isTracked(path: string, cwd: string): boolean {
-  if (/\.md$/i.test(path)) return false
+function isInside(path: string, cwd: string): boolean {
+  if (path.includes('/.claude/worktrees/')) return false
   if (!path.startsWith('/')) return true
   const root = cwd.endsWith('/') ? cwd : `${cwd}/`
   return path === cwd || path.startsWith(root)
+}
+
+function isTracked(path: string, cwd: string): boolean {
+  return !/\.md$/i.test(path) && isInside(path, cwd)
 }
 
 type RecordInput = { tool: string; agentId?: string } & Record<string, unknown>
@@ -444,10 +481,11 @@ async function record(
   ran: { isError?: boolean; isReadOnly?: boolean; result?: unknown },
 ): Promise<void> {
   const agentId = typeof input.agentId === 'string' ? input.agentId : undefined
+  const cwd = await $.session.cwd()
   if (EDIT_TOOLS.has(input.tool)) {
     if (ran.isError === true) return
     const path = String(input.file_path ?? input.notebook_path ?? '')
-    if (!isTracked(path, await $.session.cwd())) return
+    if (!isTracked(path, cwd)) return
     await update($, logAtom, entries => appendEntry(entries ?? [], { type: 'edit', path, ...(agentId === undefined ? {} : { agentId }) }))
     return
   }
@@ -458,7 +496,7 @@ async function record(
   const isOk = ran.isError !== true && !isInterrupted
   let checks = classifyCommand(command)
   if (!isOk && checks.length > 1) checks = []
-  const isMutating = agentId === undefined && isMutatingCommand(command, ran.isReadOnly === true)
+  const isMutating = agentId === undefined && isMutatingCommand(command, ran.isReadOnly === true, cwd)
   if (checks.length === 0 && !isMutating) return
   const short = shorten(command, COMMAND_LIMIT)
   await update($, logAtom, entries => {
@@ -492,12 +530,24 @@ export function registerClaims(on: On): void {
 
   on('turn.start', async ($, e, next) => {
     const started = await next(e)
+    if ((e as { agentId?: unknown }).agentId !== undefined) return started
     try {
       await update($, warningsAtom, current => ((current ?? []).length === 0 ? current : []))
     } catch (error) {
       debug($, 'clear', error)
     }
     return started
+  }).catch(($, e, next) => next(e))
+
+  on('session.end', { reason: 'clear' }, async ($, e, next) => {
+    const ended = await next(e)
+    try {
+      await update($, warningsAtom, () => [])
+      await update($, logAtom, () => [])
+    } catch (error) {
+      debug($, 'reset', error)
+    }
+    return ended
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', { reason: 'answer' }, async ($, e, next) => {

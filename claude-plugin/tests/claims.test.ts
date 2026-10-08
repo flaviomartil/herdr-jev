@@ -91,6 +91,39 @@ test('claims inside code blocks, inline code, quotes and blockquotes are not cla
   expect(kinds('The script prints "ok". All tests pass.')).toEqual(['test'])
 })
 
+test('claims keep their recall with trailing adverbs, figures and dashes', () => {
+  for (const text of [
+    'All tests passed successfully.',
+    'Todos os testes passaram com sucesso.',
+    'All tests pass (143 pass, 0 fail).',
+    'All tests pass \u2014 143 total.',
+    'All tests pass - 143 total.',
+    'All tests pass after the change.',
+    'All tests pass with no errors.',
+    'Os testes passaram sem erros.',
+    'Os testes passam depois da mudan\u00e7a.',
+    'Rodei tudo e passou.',
+  ]) {
+    expect(kinds(text).length, text).toBeGreaterThan(0)
+  }
+})
+
+test('plans, expectations and relayed reports are not claims', () => {
+  for (const text of [
+    "I'll commit when the tests pass.",
+    "After the tests pass, I'll open the PR.",
+    'Expected result: all tests pass.',
+    'The worker answered that all tests pass.',
+    'O Codex informou que os testes passaram.',
+    'O worker respondeu que todos os testes passaram.',
+    'Quando os testes passarem eu abro o PR.',
+    'Depois que os testes passarem eu abro o PR.',
+    'The reviewer claims the tests pass.',
+  ]) {
+    expect(kinds(text), text).toEqual([])
+  }
+})
+
 test('ordinary prose with verified, passou, ok or checks is not a claim', () => {
   for (const text of [
     'O handler leu o body e passou o id para o serviço.',
@@ -154,6 +187,27 @@ test('Bash commands are classified by the check they run', () => {
   expect(classifyCommand('npm run lint && npm test')).toEqual(['test', 'lint'])
   expect(classifyCommand('rtk -u bun test')).toEqual(['test'])
   expect(classifyCommand('rtk git push')).toEqual(['push'])
+})
+
+test('a runner behind a wrapper is still evidence', () => {
+  const wrapped: [string, string][] = [
+    ['(cd apps/api && pnpm test)', 'test'],
+    ['timeout 300 bun test', 'test'],
+    ['env -i PATH="$PATH" pnpm test', 'test'],
+    ['env -i HOME=$HOME PATH=$PATH RECAST_DB_URL=postgres://x pnpm --filter @recast/worker test', 'test'],
+    ['docker compose exec api pnpm test', 'test'],
+    ['docker compose run --rm worker pnpm test', 'test'],
+    ['docker exec -t api pnpm test', 'test'],
+    ['rtk test pnpm test', 'test'],
+    ['rtk err bun run typecheck', 'lint'],
+    ['command claude plugin test .', 'test'],
+    ['if bun test; then echo ok; fi', 'test'],
+    ['while ! bun test; do sleep 1; done', 'test'],
+    ['{ bun test; } 2>&1 | tail -3', 'test'],
+    ['exec bun test', 'test'],
+    ['time nice timeout 60 sudo pnpm -r typecheck', 'lint'],
+  ]
+  for (const [command, check] of wrapped) expect(classifyCommand(command), command).toEqual([check])
 })
 
 test('runners of the usual stacks are evidence', () => {
@@ -251,6 +305,32 @@ test('Bash commands that write files in the tree are mutating', () => {
   ]) {
     expect(isMutatingCommand(command), command).toBe(true)
   }
+})
+
+test('sed in place with a backup suffix is mutating', () => {
+  expect(isMutatingCommand("sed -i.bak 's/a/b/' src/a.ts")).toBe(true)
+  expect(isMutatingCommand("perl -pi.orig -e 's/a/b/' src/a.ts")).toBe(true)
+  expect(isMutatingCommand("sed -n '1,5p' src/a.ts")).toBe(false)
+})
+
+test('git aimed at a folder outside the session does not touch the tree', () => {
+  expect(isMutatingCommand('git -C /tmp/wt checkout main', false, CWD)).toBe(false)
+  expect(isMutatingCommand('git -C /other/repo reset --hard', false, CWD)).toBe(false)
+  expect(isMutatingCommand(`git -C ${CWD}/.claude/worktrees/agent-a1 checkout main`, false, CWD)).toBe(false)
+  expect(isMutatingCommand(`git -C ${CWD} checkout main`, false, CWD)).toBe(true)
+  expect(isMutatingCommand('git -C sub checkout main', false, CWD)).toBe(true)
+  expect(isMutatingCommand('git -C /tmp/wt checkout main')).toBe(true)
+})
+
+test('heredoc bodies are text, not commands', () => {
+  const body = "cat > /tmp/pr-body.txt <<'EOF'\n> quoted line\nrm -rf src\nsed -i s/a/b/ src/a.ts\nEOF"
+  expect(isMutatingCommand(body)).toBe(false)
+  expect(isMutatingCommand(`${body}\nrm src/a.ts`)).toBe(true)
+  expect(isMutatingCommand('cat <<EOF > src/a.ts\nx\nEOF')).toBe(true)
+  expect(isMutatingCommand("cat > /tmp/x <<-'END'\n\t> a\n\tEND\nbun test")).toBe(false)
+  expect(classifyCommand("cat > /tmp/x <<'EOF'\nbun test\nEOF")).toEqual([])
+  expect(classifyCommand("cat > /tmp/x <<'EOF'\nx\nEOF\nbun test")).toEqual(['test'])
+  expect(isMutatingCommand("cat <<'EOF'\nunterminated > file")).toBe(false)
 })
 
 test('read-only, scratch and branch-only Bash commands are not mutating', () => {
@@ -354,7 +434,9 @@ test('a verified claim is backed by any check and a CI claim is judged against t
   expect(unverifiedClaims(claim('ci'), log('push'))[0]?.reason).toBe('no CI check ran after the last push')
   expect(unverifiedClaims(claim('ci'), log('push', 'ci'))).toEqual([])
   expect(unverifiedClaims(claim('ci'), log('ci', 'push'))).toHaveLength(1)
-  expect(unverifiedClaims(claim('ci'), log())[0]?.reason).toBe('no CI check ran this session')
+  expect(unverifiedClaims(claim('ci'), log('edit'))[0]?.reason).toBe('no CI check ran this session')
+  expect(unverifiedClaims(claim('ci'), log())).toEqual([])
+  expect(unverifiedClaims(claim('ci'), log('push'))).toHaveLength(1)
 })
 
 test('a failed push is not a marker for CI evidence', () => {
@@ -558,6 +640,38 @@ test('edits to markdown or outside the session folder do not invalidate evidence
   expect(await warnings($)).toHaveLength(1)
 })
 
+test('a heredoc PR body does not invalidate evidence', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'bun test')
+  await bash($, "cat > /tmp/pr-body.txt <<'EOF'\n> quoted\nEOF")
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+})
+
+test('git aimed outside the session folder keeps the evidence', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'bun test')
+  await bash($, 'git -C /tmp/wt checkout main')
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+  await bash($, 'git checkout main')
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toHaveLength(1)
+})
+
+test('wrapped runners back the claim', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'env -i HOME=$HOME PATH=$PATH pnpm --filter @recast/worker test')
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+})
+
 test('a failed Edit and a denied call are not recorded', OPTIONS, async ($, on) => {
   world(on)
   await start($)
@@ -582,14 +696,28 @@ test('a failing or interrupted run is not evidence', OPTIONS, async ($, on) => {
   expect(await warnings($)).toEqual(['unverified: "Tests pass now" · the last test run was interrupted (bun test INTERRUPT)'])
 })
 
-test('a failed compound command does not blame or back any single check', OPTIONS, async ($, on) => {
+test('a failed compound command does not blame any single check', OPTIONS, async ($, on) => {
   world(on)
   await start($)
   await edit($)
-  await bash($, 'bun test')
   await bash($, 'bun test && bun run typecheck FAIL')
   await answer($, 'The tests pass; the typecheck still reports two errors.')
   expect(await warnings($)).toEqual([])
+})
+
+test('a mixed report is not a claim, a clean one still is', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'bun test FAIL')
+  for (const text of ['142 tests pass, 1 fails.', 'The unit tests pass, but the e2e suite fails.', 'Os testes passam, mas o e2e falhou.']) {
+    await answer($, text)
+    expect(await warnings($), text).toEqual([])
+  }
+  await answer($, 'All tests pass (143 pass, 0 fail).')
+  expect(await warnings($)).toHaveLength(1)
+  await answer($, 'All tests pass with no errors.')
+  expect(await warnings($)).toHaveLength(1)
 })
 
 test('a failed compound command is no evidence either', OPTIONS, async ($, on) => {
@@ -666,6 +794,40 @@ test('the notice also goes to the transcript with the answer', OPTIONS, async ($
   expect(seen.logs).toHaveLength(before)
 })
 
+test('turn.start reaches the engine and a subagent turn start keeps the warning', OPTIONS, async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await edit($)
+  await answer($, 'All tests pass.')
+  await $.turn.start({ text: 'sub', turnId: 'turn-sub', agentId: 'sub-1' } as never)
+  expect(await warnings($)).toHaveLength(1)
+  await beginTurn($)
+  expect(seen.turnIds).toHaveLength(2)
+  expect(await warnings($)).toEqual([])
+})
+
+test('/clear drops the warning and the log', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toHaveLength(1)
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
+  expect(await warnings($)).toEqual([])
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+})
+
+test('a CI claim with no edit and no push is quiet', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await answer($, 'CI is green.')
+  expect(await warnings($)).toEqual([])
+  await edit($)
+  await answer($, 'CI is green.')
+  expect(await warnings($)).toHaveLength(1)
+})
+
 test('the next answer replaces the warnings', OPTIONS, async ($, on) => {
   world(on)
   await start($)
@@ -698,6 +860,36 @@ test('a subagent edit in the session folder invalidates evidence, one elsewhere 
   await edit($, { agentId: 'sub-1' })
   await answer($, 'All tests pass.')
   expect(await warnings($)).toHaveLength(1)
+})
+
+test('a subagent edit inside an agent worktree of the session folder does not invalidate evidence', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'bun test')
+  await edit($, { agentId: 'sub-1', path: `${CWD}/.claude/worktrees/agent-a1/src/b.ts` })
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+})
+
+test('a subagent shell write is never an edit of the main loop', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'bun test')
+  await bash($, "sed -i 's/a/b/' src/a.ts", 'sub-1')
+  await bash($, 'echo x > src/out.ts', 'sub-1')
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+})
+
+test('the log stores a shortened command', OPTIONS, async ($, on) => {
+  const { seen } = world(on)
+  await start($)
+  await bash($, `bun test ${'x'.repeat(300)}`)
+  const stored = (seen.state.get('harness.claimLog') as { command?: string }[]).map(entry => entry.command ?? '')
+  expect(stored).toHaveLength(1)
+  expect(stored[0]?.length).toBeLessThanOrEqual(80)
 })
 
 test('a subagent run backs the claim and a failing one is never reported', OPTIONS, async ($, on) => {
