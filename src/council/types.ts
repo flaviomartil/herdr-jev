@@ -15,6 +15,7 @@ export interface CouncilMemberResult {
   reason?: string;
   findings: CouncilFinding[];
   durationMs: number;
+  note?: string;
 }
 
 export interface CouncilRun {
@@ -22,4 +23,5 @@ export interface CouncilRun {
   diffHash: string;
   ran: boolean;
   note?: string;
+  skippedPaths?: string[];
 }

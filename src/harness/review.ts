@@ -45,7 +45,7 @@ const MAX_TOTAL_SCOPES = 32;
 export const MAX_CONCURRENT_JUDGES = 4;
 const SCOPE_OPTION_UNSUPPORTED = /^unknown_option:--scopes?\b/;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/;
-const SENSITIVE_FILES = [
+export const SENSITIVE_FILES = [
   /(^|\/)\.env(\.(?!example$|sample$|template$|dist$)[^/]*)?$/,
   /\.(pem|key|p12|pfx|jks|keystore)$/i,
   /(^|\/)id_(rsa|dsa|ecdsa|ed25519)$/,
