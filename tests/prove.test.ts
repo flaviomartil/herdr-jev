@@ -13,7 +13,7 @@ let savedEnv: Record<string, string | undefined>;
 const ISOLATED_ENV = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
 
 function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { cwd, encoding: "utf8" });
+  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", ...args], { cwd, encoding: "utf8", env: { ...process.env } });
   expect(result.status).toBe(0);
   return result.stdout.trim();
 }
@@ -70,6 +70,20 @@ function expectClean(report: { worktreeRemoved: boolean }) {
   expect(git(repo, "branch", "--list")).not.toContain("herdr-jev-prove");
   expect(git(repo, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1);
   expect(existsSync(join(repo, ".git", "worktrees"))).toBe(false);
+}
+
+async function expectDead(pid: number): Promise<void> {
+  const deadline = Date.now() + 3000;
+  let alive = true;
+  while (alive && Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+      await new Promise((r) => setTimeout(r, 50));
+    } catch {
+      alive = false;
+    }
+  }
+  expect(alive).toBe(false);
 }
 
 function tempDir(prefix: string): string {
@@ -309,7 +323,7 @@ describe("runProve", () => {
     expect(report.reason).toBe("test_timeout");
     expect(report.withoutSource?.timedOut).toBe(true);
     const pid = Number(readFileSync(pidFile, "utf8").trim());
-    expect(() => process.kill(pid, 0)).toThrow();
+    await expectDead(pid);
     expectClean(report);
   });
 
@@ -320,7 +334,7 @@ describe("runProve", () => {
     write("tests/check.sh", `sleep 30 >/dev/null 2>&1 &\necho $! >> "${pidFile}"\n${check("2")}`);
     const closed = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
     expect(closed.verdict).toBe("proven");
-    for (const line of readFileSync(pidFile, "utf8").trim().split("\n")) expect(() => process.kill(Number(line), 0)).toThrow();
+    for (const line of readFileSync(pidFile, "utf8").trim().split("\n")) await expectDead(Number(line));
     expectClean(closed);
 
     rmSync(pidFile, { force: true });
@@ -329,7 +343,7 @@ describe("runProve", () => {
     const held = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
     expect(Date.now() - started).toBeLessThan(20000);
     expect(held.verdict).toBe("proven");
-    for (const line of readFileSync(pidFile, "utf8").trim().split("\n")) expect(() => process.kill(Number(line), 0)).toThrow();
+    for (const line of readFileSync(pidFile, "utf8").trim().split("\n")) await expectDead(Number(line));
     expectClean(held);
   });
 
