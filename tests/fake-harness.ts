@@ -19,6 +19,7 @@ export interface FakeHarness {
 const SCRIPT = `#!${process.execPath}
 import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join, resolve } from "node:path";
 
 const argv = process.argv.slice(2);
@@ -158,7 +159,7 @@ else if (command === "model-catalog") {
       executor: { model: "gpt-5.6-luna", cliModel: "gpt-5.6-luna-cli", effort: "high" }, reviewer: { model: "gpt-5.6-sol", cliModel: "gpt-5.6-sol-cli", effort: "xhigh" } } });
   } else out({ mode: "direct", reason: "no_profile" });
 } else if (command === "external-run") {
-  const pipeline = process.env.FAKE_PIPELINE_STAGES !== undefined && ["create", "claim", "project", "status", "settle"].includes(options["--action"]);
+  const pipeline = process.env.FAKE_PIPELINE_STAGES !== undefined && ["create", "claim", "project", "status", "settle", "handoff", "verify"].includes(options["--action"]);
   if (!pipeline && (mode === "legacy" || !["worker-create", "worker-settle", "list"].includes(options["--action"]))) fail("invalid_external_action");
   const request = JSON.parse(options["--request-json"]);
   const state = load();
@@ -174,7 +175,13 @@ else if (command === "model-catalog") {
     }
     const run = state.pipelines[0];
     if (options["--action"] === "settle") run.stages.find((stage) => stage.role === request.stage).state = request.state;
+    if (options["--action"] === "verify") run.stages.find((stage) => stage.role === request.stage).state = "verified";
     save(state);
+    if (options["--action"] === "handoff") {
+      const text = readFileSync(request.path, "utf8");
+      out({ text, digest: createHash("sha256").update(text).digest("hex") });
+      process.exit(0);
+    }
     out(options["--action"] === "claim" ? { token: "token", agent: "agent-" + request.stage } : run);
   } else if (options["--action"] === "worker-create") {
     const run = { id: "00000000-0000-4000-8000-" + String(state.runs.length + 1).padStart(12, "0"), kind: "worker", client: request.client,

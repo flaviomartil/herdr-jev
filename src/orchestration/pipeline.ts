@@ -1,13 +1,14 @@
 import { mkdirSync, writeFileSync, renameSync, chmodSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
-import { externalRun, harnessCommand, recordAutoImprovement, type DelegationInput } from "../harness/bridge.js";
+import { externalRun, harnessCommand, harnessCommandAsync, recordAutoImprovement, type DelegationInput } from "../harness/bridge.js";
 import { buildInlineCommand, launchStageInHerdr, readonlyReviewerArgs, type SplitDirectionOption } from "../herdr/launcher.js";
 import { createHerdrClient, readHerdrObservedState, requiresTrustConfirmation } from "../herdr/client.js";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import { availableDelegationClients, type CrossHarnessConfig } from "../delegation/cross-harness.js";
 import type { PipelinePlan, StageSpec } from "../types/index.js";
 import { assertRunId, retryableStages } from "./run-history.js";
+import type { ConsultDeps, CouncilAlongside } from "../council/command.js";
 
 interface RunOptions {
   delegation: DelegationInput;
@@ -21,6 +22,8 @@ interface RunOptions {
   cwd?: string;
   fromFailed?: boolean;
   crossHarness?: CrossHarnessConfig;
+  council?: "off" | "auto";
+  councilDeps?: ConsultDeps;
 }
 const digest = (text: string) => createHash("sha256").update(text).digest("hex");
 
@@ -128,13 +131,37 @@ async function continueRun(run: any, task: string, options: RunOptions) {
         const command = reviewerCommand(stageClient, stage, prompt);
         const commandPath = join(dir, "review-command.json");
         writeFileSync(commandPath, JSON.stringify(command), { mode: 0o600 });
-        const review = harnessCommand(["review-judge", "--client", run.client, "--session", run.id,
-          "--cwd", run.cwd, "--command-json", commandPath], 660_000);
+        const judgeArgs = ["review-judge", "--client", run.client, "--session", run.id,
+          "--cwd", run.cwd, "--command-json", commandPath];
+        let councilBeside: CouncilAlongside | undefined;
+        let councilSection = "";
+        let review: any;
+        if (options.council === "auto") {
+          const { startAutoCouncilAlongside } = await import("../council/command.js");
+          councilBeside = startAutoCouncilAlongside({ task }, { cwd: run.cwd, client: run.client }, options.councilDeps);
+          try {
+            review = await harnessCommandAsync(judgeArgs, 660_000);
+          } catch (error) {
+            councilBeside.abort();
+            await councilBeside.promise.catch(() => undefined);
+            throw error;
+          }
+          if (review.status !== "ready") {
+            councilBeside.abort();
+            await councilBeside.promise.catch(() => undefined);
+          } else {
+            const consulted = await councilBeside.settle();
+            const councilText = consulted.skipped ?? consulted.text;
+            councilSection = `\n## Council (consultative only)\n\n${councilText.length > 8000 ? `${councilText.slice(0, 8000)}\n[truncated]` : councilText}\n`;
+          }
+        } else {
+          review = harnessCommand(judgeArgs, 660_000);
+        }
         if (review.status !== "ready") {
           externalRun("settle", { ...request, state: "failed" });
           break;
         }
-        writeFileSync(handoff, "Independent review recorded by AI Harness.\n", { mode: 0o600 });
+        writeFileSync(handoff, `Independent review recorded by AI Harness.\n${councilSection}`, { mode: 0o600 });
         externalRun("settle", { ...request, state: "done", handoff });
         externalRun("verify", { id: run.id, stage: stage.role });
       } else {
