@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import { printable, singleLine } from "./printable.js";
 
@@ -14,6 +14,7 @@ export interface RunOptions {
 
 export interface RunResult {
   exitCode: number | null;
+  signal?: string | null;
   timedOut: boolean;
   aborted: boolean;
   output: string;
@@ -28,6 +29,7 @@ export type ProveDependencies = "setup_command" | "node_modules_symlink" | "none
 
 export interface ProveRun {
   exitCode: number | null;
+  signal: string | null;
   durationMs: number;
   timedOut: boolean;
   outputTail: string;
@@ -44,7 +46,6 @@ export interface ProveReport {
   withoutSource?: ProveRun;
   withSource?: ProveRun;
   worktreeRemoved: boolean;
-  branchRemoved: boolean;
   cleanupError?: string;
 }
 
@@ -64,11 +65,19 @@ export const MAX_PROVE_TIMEOUT_MS = 3_600_000;
 const OUTPUT_TAIL_CHARS = 4000;
 const CAPTURE_CHARS = 64 * 1024;
 const EXIT_GRACE_MS = 1000;
+const GIT_CALL_TIMEOUT_MS = 120_000;
+const INHERITED_GIT_VARIABLES = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"];
 
-const TEST_PATH = /(^|\/)(tests?|__tests__)\/|\.(test|spec)\.[^/]+$/;
+const TEST_PATH = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[^/]+$|_test\.[^/]+$|(^|\/)test_[^/]+\.py$/;
 
 export function isTestPath(path: string, explicit: ReadonlySet<string> = new Set()): boolean {
   return explicit.has(path) || TEST_PATH.test(path);
+}
+
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  for (const name of INHERITED_GIT_VARIABLES) delete env[name];
+  return env;
 }
 
 function tailOf(text: string): string {
@@ -123,33 +132,32 @@ export const defaultRun: RunFn = (argv, options) =>
       killGroup();
     };
     options.signal?.addEventListener("abort", onAbort, { once: true });
-    const finish = (code: number | null) => {
+    const finish = (code: number | null, signal: string | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (graceTimer) clearTimeout(graceTimer);
       options.signal?.removeEventListener("abort", onAbort);
-      done({ exitCode: code, timedOut, aborted, output: output.slice(-CAPTURE_CHARS), ...(spawnError ? { error: spawnError } : {}) });
+      killGroup();
+      done({ exitCode: code, signal, timedOut, aborted, output: output.slice(-CAPTURE_CHARS), ...(spawnError ? { error: spawnError } : {}) });
     };
     child.on("error", (error) => {
       spawnError = error.message;
-      finish(null);
+      finish(null, null);
     });
-    child.on("exit", (code) => {
-      graceTimer = setTimeout(() => {
-        killGroup();
-        finish(code);
-      }, EXIT_GRACE_MS);
+    child.on("exit", (code, signal) => {
+      graceTimer = setTimeout(() => finish(code, signal), EXIT_GRACE_MS);
     });
-    child.on("close", (code) => finish(code));
+    child.on("close", (code, signal) => finish(code, signal));
   });
 
-function git(cwd: string, args: string[], extraConfig: string[] = []): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync("git", [...extraConfig.flatMap((entry) => ["-c", entry]), ...args], {
+function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
+  const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
-    env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+    timeout: GIT_CALL_TIMEOUT_MS,
+    env: { ...cleanEnv(), GIT_OPTIONAL_LOCKS: "0" },
   });
   return { ok: result.status === 0 && !result.error, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
@@ -163,41 +171,82 @@ function brief(text: string): string {
 }
 
 function safeRelative(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  if (!normalized || isAbsolute(normalized) || normalized.split("/").some((part) => part === ".." || part === "")) throw new Error(`unsafe_path: ${brief(path)}`);
-  return normalized;
+  if (!path || isAbsolute(path) || path.split("/").some((part) => part === ".." || part === "." || part === "")) throw new Error(`unsafe_path: ${brief(path)}`);
+  return path;
+}
+
+function lstatOrNull(path: string) {
+  try {
+    return lstatSync(path);
+  } catch {
+    return null;
+  }
+}
+
+function removeEntry(path: string): void {
+  const stat = lstatOrNull(path);
+  if (!stat) return;
+  if (stat.isDirectory()) rmSync(path, { recursive: true, force: true });
+  else unlinkSync(path);
+}
+
+function ensureDirectory(path: string): void {
+  const stat = lstatOrNull(path);
+  if (stat?.isDirectory()) return;
+  if (stat) unlinkSync(path);
+  mkdirSync(path);
+}
+
+function containedParent(realRoot: string, parent: string, rel: string): boolean {
+  let real: string;
+  try {
+    real = realpathSync(parent);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
+  }
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) throw new Error(`unsafe_path: ${brief(rel)} resolves outside the worktree`);
+  return true;
 }
 
 function applyFiles(root: string, worktree: string, files: readonly string[]): void {
+  const realRoot = realpathSync(worktree);
   for (const file of files) {
     const rel = safeRelative(file);
+    const parts = rel.split("/");
     const source = join(root, rel);
     const target = join(worktree, rel);
-    const inside = relative(worktree, resolve(target));
-    if (inside.startsWith("..") || isAbsolute(inside)) throw new Error(`unsafe_path: ${brief(file)}`);
-    let stat;
-    try {
-      stat = lstatSync(source);
-    } catch {
-      rmSync(target, { force: true, recursive: true });
+    const sourceStat = lstatOrNull(source);
+    if (!sourceStat) {
+      if (containedParent(realRoot, dirname(target), rel)) removeEntry(target);
       continue;
     }
-    if (stat.isDirectory()) continue;
-    mkdirSync(dirname(target), { recursive: true });
-    rmSync(target, { force: true, recursive: true });
-    if (stat.isSymbolicLink()) symlinkSync(readlinkSync(source), target);
+    let current = worktree;
+    for (const part of parts.slice(0, -1)) {
+      current = join(current, part);
+      ensureDirectory(current);
+    }
+    containedParent(realRoot, dirname(target), rel);
+    if (sourceStat.isDirectory()) {
+      ensureDirectory(target);
+      continue;
+    }
+    removeEntry(target);
+    if (sourceStat.isSymbolicLink()) symlinkSync(readlinkSync(source), target);
     else copyFileSync(source, target);
   }
 }
 
 function toRun(result: RunResult): ProveRun {
-  return { exitCode: result.exitCode, durationMs: result.durationMs, timedOut: result.timedOut, outputTail: tailOf(result.output) };
+  return { exitCode: result.exitCode, signal: result.signal ?? null, durationMs: result.durationMs, timedOut: result.timedOut, outputTail: tailOf(result.output) };
 }
 
 function infraReason(stage: string, result: RunResult): string | null {
   if (result.aborted) return "aborted";
   if (result.timedOut) return `${stage}_timeout`;
   if (result.error) return `${stage}_not_runnable: ${brief(result.error)}`;
+  if (result.exitCode === null) return `${stage}_killed${result.signal ? `: ${result.signal}` : ""}`;
   return null;
 }
 
@@ -229,6 +278,10 @@ interface ChangeSet {
   files: string[];
 }
 
+function ignoredPath(path: string): boolean {
+  return path.endsWith("/") || path.split("/").some((part) => part === "node_modules" || part.toLowerCase() === ".git");
+}
+
 function computeChangeSet(cwd: string, baseRef: string | undefined): ChangeSet {
   const top = git(cwd, ["rev-parse", "--show-toplevel"]);
   const root = top.stdout.trim();
@@ -250,7 +303,7 @@ function computeChangeSet(cwd: string, baseRef: string | undefined): ChangeSet {
   if (!tracked.ok) throw new Error(`git_failed: git diff did not finish: ${brief(tracked.stderr)}`);
   const untracked = git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--full-name", "--", ":/"]);
   if (!untracked.ok) throw new Error(`git_failed: git ls-files did not finish: ${brief(untracked.stderr)}`);
-  const files = [...new Set([...nulList(tracked.stdout), ...nulList(untracked.stdout)])].sort();
+  const files = [...new Set([...nulList(tracked.stdout), ...nulList(untracked.stdout)])].filter((file) => !ignoredPath(file)).sort();
   return { root, subdir: prefix, baseSha, files };
 }
 
@@ -259,11 +312,25 @@ function worktreeListed(root: string, path: string): boolean {
   return listing.stdout.split("\n").some((line) => line === `worktree ${path}`);
 }
 
-function branchExists(root: string, branch: string): boolean {
-  return git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).ok;
+function removeOwnAdminEntry(root: string, path: string): void {
+  const common = git(root, ["rev-parse", "--git-common-dir"]).stdout.trim();
+  if (!common) return;
+  const admin = join(resolve(root, common), "worktrees");
+  let names: string[];
+  try {
+    names = readdirSync(admin);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    try {
+      if (readFileSync(join(admin, name, "gitdir"), "utf8").trim() === join(path, ".git")) rmSync(join(admin, name), { recursive: true, force: true });
+    } catch {
+    }
+  }
 }
 
-function removeWorktree(root: string, path: string, branch: string, links: readonly string[]): { worktreeRemoved: boolean; branchRemoved: boolean; error?: string } {
+function removeWorktree(root: string, path: string, links: readonly string[]): { worktreeRemoved: boolean; error?: string } {
   const errors: string[] = [];
   for (const link of links) {
     try {
@@ -280,30 +347,26 @@ function removeWorktree(root: string, path: string, branch: string, links: reado
         errors.push(`rm: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
-    git(root, ["worktree", "prune"]);
+    if (worktreeListed(root, path)) removeOwnAdminEntry(root, path);
   }
-  if (branchExists(root, branch)) git(root, ["branch", "-D", branch]);
   const worktreeRemoved = !existsSync(path) && !worktreeListed(root, path);
-  const branchRemoved = !branchExists(root, branch);
   if (!worktreeRemoved) errors.push(`worktree still present: ${brief(path)}`);
-  if (!branchRemoved) errors.push(`branch still present: ${brief(branch)}`);
-  return { worktreeRemoved, branchRemoved, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) };
+  return { worktreeRemoved, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) };
 }
 
-function freshWorkspace(root: string): { id: string; path: string; branch: string } {
+function freshWorkspace(root: string): { path: string } {
   const parent = join(resolveStateDir(), "prove");
   mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const realParent = realpathSync(parent);
   for (let attempt = 0; attempt < 8; attempt++) {
-    const id = `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
-    const path = join(parent, id);
-    const branch = `herdr-jev-prove-${id}`;
-    if (!existsSync(path) && !worktreeListed(root, path) && !branchExists(root, branch)) return { id, path, branch };
+    const path = join(realParent, `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`);
+    if (!existsSync(path) && !worktreeListed(root, path)) return { path };
   }
   throw new Error("worktree_path_unavailable: could not find an unused worktree path");
 }
 
 function failed(partial: Partial<ProveReport> & { reason: string }): ProveReport {
-  return { verdict: "error", base: null, baseRef: null, testFiles: [], sourceFiles: [], dependencies: "none", worktreeRemoved: true, branchRemoved: true, ...partial };
+  return { verdict: "error", base: null, baseRef: null, testFiles: [], sourceFiles: [], dependencies: "none", worktreeRemoved: true, ...partial };
 }
 
 export async function runProve(opts: ProveOptions): Promise<ProveReport> {
@@ -319,29 +382,27 @@ export async function runProve(opts: ProveOptions): Promise<ProveReport> {
   } catch (error) {
     return failed({ reason: error instanceof Error ? error.message : String(error) });
   }
-  const explicit = new Set((opts.testFiles ?? []).map((file) => file.replace(/\\/g, "/").replace(/^\.\//, "")));
+  const explicit = new Set((opts.testFiles ?? []).map((file) => file.replace(/^\.\//, "")));
   const testFiles = changes.files.filter((file) => isTestPath(file, explicit));
   const sourceFiles = changes.files.filter((file) => !isTestPath(file, explicit));
   const common = { base: changes.baseSha, baseRef: opts.base ?? null, testFiles, sourceFiles };
-  if (testFiles.length === 0) return { verdict: "no_tests", reason: "no changed test files", ...common, dependencies: "none", worktreeRemoved: true, branchRemoved: true };
+  if (testFiles.length === 0) return { verdict: "no_tests", reason: "no changed test files", ...common, dependencies: "none", worktreeRemoved: true };
 
-  let workspace: { id: string; path: string; branch: string };
+  let workspace: { path: string };
   try {
     workspace = freshWorkspace(changes.root);
   } catch (error) {
     return failed({ ...common, reason: error instanceof Error ? error.message : String(error) });
   }
-  const { path, branch } = workspace;
   const links: string[] = [];
   let report: ProveReport;
   try {
-    report = await prove({ ...opts, run, timeoutMs }, changes, workspace, common, links);
+    report = await prove({ ...opts, run, timeoutMs }, changes, workspace.path, common, links);
   } catch (error) {
     report = failed({ ...common, reason: error instanceof Error ? error.message : String(error) });
   }
-  const cleanup = removeWorktree(changes.root, path, branch, links);
+  const cleanup = removeWorktree(changes.root, workspace.path, links);
   report.worktreeRemoved = cleanup.worktreeRemoved;
-  report.branchRemoved = cleanup.branchRemoved;
   if (cleanup.error) report.cleanupError = cleanup.error;
   return report;
 }
@@ -349,21 +410,27 @@ export async function runProve(opts: ProveOptions): Promise<ProveReport> {
 async function prove(
   opts: ProveOptions & { timeoutMs: number; run: RunFn },
   changes: ChangeSet,
-  workspace: { path: string; branch: string },
+  path: string,
   common: Pick<ProveReport, "base" | "baseRef" | "testFiles" | "sourceFiles">,
   links: string[],
 ): Promise<ProveReport> {
-  const { path, branch } = workspace;
-  const base = { ...common, worktreeRemoved: false, branchRemoved: false };
-  const add = git(changes.root, ["worktree", "add", "-b", branch, path, changes.baseSha], ["core.hooksPath=/dev/null"]);
-  if (!add.ok) return { verdict: "error", reason: `worktree_add_failed: ${brief(add.stderr)}`, dependencies: "none", ...base };
-  if (opts.signal?.aborted) return { verdict: "error", reason: "aborted", dependencies: "none", ...base };
+  const base = { ...common, worktreeRemoved: false };
+  const env = cleanEnv();
+  const add = await defaultRun(["git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", path, changes.baseSha], {
+    cwd: changes.root,
+    timeoutMs: opts.timeoutMs,
+    signal: opts.signal,
+    env: { ...env, GIT_OPTIONAL_LOCKS: "0" },
+  });
+  if (add.aborted) return { verdict: "error", reason: "aborted", dependencies: "none", ...base };
+  if (add.timedOut) return { verdict: "error", reason: "worktree_add_timeout", dependencies: "none", ...base };
+  if (add.exitCode !== 0) return { verdict: "error", reason: `worktree_add_failed: ${brief(add.output)}`, dependencies: "none", ...base };
 
   const runIn = join(path, changes.subdir);
-  const env = process.env;
   let dependencies: ProveDependencies = "none";
   if (opts.setupCommand) {
     dependencies = "setup_command";
+    if (!existsSync(runIn)) return { verdict: "error", reason: `setup_cwd_missing: ${brief(changes.subdir)} does not exist at the base commit; run from the repository root or a directory present at the base`, dependencies, ...base };
     const setup = await opts.run(opts.setupCommand, { cwd: runIn, timeoutMs: opts.timeoutMs, signal: opts.signal, env });
     const infra = infraReason("setup", setup);
     if (infra) return { verdict: "error", reason: infra, dependencies, ...base };
@@ -371,7 +438,7 @@ async function prove(
   } else {
     const modules = join(changes.root, "node_modules");
     const target = join(path, "node_modules");
-    if (existsSync(modules) && !existsSync(target)) {
+    if (existsSync(modules) && !lstatOrNull(target)) {
       symlinkSync(modules, target);
       links.push(target);
       dependencies = "node_modules_symlink";
@@ -379,6 +446,7 @@ async function prove(
   }
 
   applyFiles(changes.root, path, common.testFiles);
+  if (!existsSync(runIn)) return { verdict: "error", reason: `test_cwd_missing: ${brief(changes.subdir)} does not exist with only the test files applied; run from the repository root`, dependencies, ...base };
   const first = await opts.run(opts.testCommand, { cwd: runIn, timeoutMs: opts.timeoutMs, signal: opts.signal, env });
   const withoutSource = toRun(first);
   const firstInfra = infraReason("test", first);
@@ -397,7 +465,7 @@ async function prove(
 
 function describeRun(label: string, run: ProveRun | undefined): string[] {
   if (!run) return [];
-  const lines = [`${label}: exit ${run.exitCode === null ? "none" : run.exitCode}${run.timedOut ? " (timed out)" : ""} in ${run.durationMs} ms`];
+  const lines = [`${label}: exit ${run.exitCode === null ? `none${run.signal ? ` (${run.signal})` : ""}` : run.exitCode}${run.timedOut ? " (timed out)" : ""} in ${run.durationMs} ms`];
   const tail = run.outputTail.trim();
   if (tail) lines.push(...tail.split("\n").slice(-12).map((line) => `  ${line}`));
   return lines;

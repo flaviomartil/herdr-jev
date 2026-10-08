@@ -476,12 +476,22 @@ A scope the Harness reports as `pending` with reason `timeout` is judged once mo
 ### prove
 
 ```sh
-herdr-jev prove [--base <ref>] [--test-command-json <path>] [--setup-command-json <path>] [--timeout <ms>] [--json]
+herdr-jev prove [--base <ref>] [--test-command-json <path>] [--setup-command-json <path>] [--test-file <path>]... [--timeout <ms>] [--json]
 ```
 
-Shows that the tests changed by a diff fail without the source change and pass with it. The change set is the working tree and untracked files against `HEAD`, or against the merge base of `--base <ref>` and `HEAD`. Changed files under `tests/`, `test/`, `__tests__/` or named `*.test.*` or `*.spec.*` are the tests; every other changed file is source. The working tree is never modified: the command creates a throwaway Git worktree and a temporary branch at the base commit under `<stateDir>/prove/`, applies only the test files and runs the test command, which must fail, then applies the source files and runs it again, which must pass. The worktree and branch are removed on every outcome, including timeout, error and interruption (the command process group is killed on timeout).
+Shows that the tests changed by a diff fail without the source change and pass with it. The change set is the working tree and untracked files against `HEAD`, or against the merge base of `--base <ref>` and `HEAD`. Changed files under `tests/`, `test/`, `__tests__/` or `spec/`, or named `*.test.*`, `*.spec.*`, `*_test.*` or `test_*.py`, are the tests; `--test-file` (repeatable, repository-relative) adds more. Every other changed file is source. Paths under any `node_modules/`, untracked nested repositories and `.git` entries are left out of the change set.
 
-The test command is a JSON argv array from `--test-command-json`, or the repository test command that `review` detects. Without `--setup-command-json` the `node_modules` of the repository is symlinked into the worktree when it exists; with it, the command runs once in the worktree before the first test run. `--timeout` (default 600000) bounds each command. Verdicts: `proven`, `not_proven` (the tests pass without the source change), `broken` (they fail with the full change), `no_tests` (no changed test file, nothing is run) and `error` (setup problem, timeout or interruption, with a reason). The report has both exit codes, durations and a bounded tail of each output, and the exit code is 0 only for `proven`.
+The command does not revert anything in your working tree. It creates a throwaway detached Git worktree at the base commit under `<stateDir>/prove/` (no temporary branch, Git hooks disabled for its Git calls, inherited `GIT_INDEX_FILE`, `GIT_DIR` and similar variables removed), applies only the test files and runs the test command, which must fail, then applies the source files and runs it again, which must pass. Files are written only inside the worktree, never through a symlink that leaves it. The worktree is removed on every outcome, including timeout, error and interruption (the process group of each command is killed on timeout and when the command ends). Other worktrees of the repository are not touched.
+
+The test command is a JSON argv array from `--test-command-json`, or the repository test command that `review` detects. Without `--setup-command-json`, the `node_modules` of the repository root is symlinked into the worktree when it exists, so a test command that writes under `node_modules/` changes the real directory. With it, the command runs once in the worktree, at the base commit, before the first test run, and no link is made. `--timeout` (default 600000) bounds each command. Verdicts: `proven`, `not_proven` (the tests pass without the source change), `broken` (they fail with the full change), `no_tests` (no changed test file, nothing is run) and `error` (setup problem, timeout, a command killed by a signal, or interruption, with a reason). The report has both exit codes, the signal if any, durations and a bounded tail of each output, and the exit code is 0 only for `proven`.
+
+Limits of the proof:
+
+- Any non-zero exit counts as red, including a compile error or a missing import of a module that only the source change adds.
+- The verdict is about the command, not about whether the changed test files ran. With a whole-suite command, an unrelated test that the diff happens to fix also yields `proven`, and a vacuous test that only imports a new module is `proven`. Pass a command that runs just the changed tests when that matters.
+- The setup command runs once, at the base commit, and is not repeated after the source files are applied, so dependencies added by the diff are not installed for the second run.
+- Only the root `node_modules` is linked. Workspace packages with their own `node_modules`, such as a pnpm monorepo, need `--setup-command-json`.
+- The directory you run from must exist at the base commit when a setup command is used.
 
 ### Models, quota and companions
 

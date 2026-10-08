@@ -28,8 +28,7 @@ import { resolveStageSpec } from "./pipelines/matrix.js";
 import { resolveRoleMatrix } from "./pipelines/roles.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
 import { checkHarnessStatus, externalRun, harnessCommand, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
-import { formatReviewReport, runReview } from "./harness/review.js";
-import { detectVerifyCommand } from "./harness/review.js";
+import { detectVerifyCommand, formatReviewReport, runReview } from "./harness/review.js";
 import { DEFAULT_PROVE_TIMEOUT_MS, formatProveReport, readCommandJson, runProve } from "./harness/prove.js";
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
 import { resolveHerdrContext } from "./herdr/context.js";
@@ -603,13 +602,14 @@ program
   .option("--base <ref>", "Compare against the merge base of this ref and HEAD; defaults to HEAD plus the working tree")
   .option("--test-command-json <path>", "JSON argv file for the test command; defaults to the repository test script")
   .option("--setup-command-json <path>", "JSON argv file run once in the worktree before the first test run; without it node_modules is symlinked when present")
+  .option("--test-file <path>", "Repository-relative path to treat as a test file besides the built-in conventions; repeatable", (value: string, previous: string[]) => [...previous, value], [] as string[])
   .option("--timeout <ms>", "Deadline for each command", String(DEFAULT_PROVE_TIMEOUT_MS))
   .option("--json", "Output the full report as JSON")
-  .action(async (options: { base?: string; testCommandJson?: string; setupCommandJson?: string; timeout: string; json?: boolean }) => {
+  .action(async (options: { base?: string; testCommandJson?: string; setupCommandJson?: string; testFile: string[]; timeout: string; json?: boolean }) => {
     const controller = new AbortController();
     const abort = () => controller.abort();
     const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-    for (const name of signals) process.once(name, abort);
+    for (const name of signals) process.on(name, abort);
     try {
       const start = process.cwd();
       const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8" });
@@ -617,7 +617,7 @@ program
       const testCommand = options.testCommandJson ? readCommandJson(options.testCommandJson, "test_command") : detectVerifyCommand(cwd);
       if (!testCommand) throw new Error("no_test_command: pass --test-command-json or add a test script to package.json");
       const setupCommand = options.setupCommandJson ? readCommandJson(options.setupCommandJson, "setup_command") : undefined;
-      const report = await runProve({ cwd: start, base: options.base, testCommand, setupCommand, timeoutMs: Number(options.timeout), signal: controller.signal });
+      const report = await runProve({ cwd: start, base: options.base, testCommand, setupCommand, testFiles: options.testFile, timeoutMs: Number(options.timeout), signal: controller.signal });
       console.log(options.json ? JSON.stringify(report, null, 2) : formatProveReport(report));
       if (report.verdict !== "proven") process.exitCode = 1;
     } catch (error) {
