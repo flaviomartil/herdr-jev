@@ -754,6 +754,26 @@ A classification that fails or takes longer than three seconds falls back to the
 
 ---
 
+## Council synthesis
+
+`src/council/synth.ts` merges the findings of several review CLIs into agreements, disagreements, unique findings and notes, scored with TypeSafe Jev in two rounds. `src/council/format.ts` renders the result as plain text that opens with the evidence rule: each finding is a candidate, not a fact.
+
+Finding text is redacted by `src/council/text.ts` before it reaches Jev or the formatted text. The redactor replaces credential values only: known token prefixes, JWTs, PEM blocks, URL userinfo, `Basic` and `Bearer` credentials, values assigned to secret-named keys or flags, and long hex or mixed-case alphanumeric runs. Paths only get the token-prefix shapes, so names like `src/auth/token.ts:42` are untouched.
+
+Accepted residuals, which the redactor does not remove:
+
+- short lowercase values such as `password: hunter2`
+- a bare AWS secret access key in prose
+- a Slack webhook path
+- bare alphanumeric runs that look like words, including all-lowercase runs and UUIDs
+- a token split by a space or a newline
+- letters-only unquoted values of any length, such as `DB_PASSWORD=SuperSecretPassword`
+- `mysql -p<password>` with the password attached to the flag
+- a Bearer token under 16 characters or without a digit
+- a URL password that contains `@`
+- keys longer than 80 characters
+- letters-and-dots values such as `token=abc.def.ghi`
+
 ## Testing
 
 ```sh
