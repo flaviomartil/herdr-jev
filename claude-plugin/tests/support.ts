@@ -161,6 +161,10 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
   })
   on('tool.call', () => ({ result: 'ok' }))
   on('session.cwd', () => {
+    const box = globalThis as { __cwd?: string; __cwdNow?: string }
+    return { value: box.__cwdNow ?? box.__cwd ?? CWD }
+  })
+  on('session.root', () => {
     const box = globalThis as { __cwd?: string; __cwdCalls?: number }
     box.__cwdCalls = (box.__cwdCalls ?? 0) + 1
     return { value: box.__cwd ?? CWD }

@@ -102,6 +102,11 @@ const MIXED = pattern(
   `(?<!${LEFT}(?:no|0|zero|without|none|nothing|not|never|sem|nenhum|nenhuma|nada|n[aã]o)(?:\\s+[\\p{L}\\p{N}_-]+){0,2}\\s+)${LEFT}(?:fails?|failed|falh(?:a|am|ou|aram)|(?:[1-9]\\d*|one|two|three|four|five|several|some|many|um|uma|dois|duas|tr[eê]s|alguns|v[aá]rios)\\s+(?:[\\p{L}_-]+\\s+)?(?:errors?|failures?|erros?|falhas?))${RIGHT}`,
 )
 
+const FIXED = pattern(
+  `${LEFT}(?:fix(?:ed|es|ing)?|resolved|resolving|resolves|gone|corrigi|corrigid[oa]s?|resolvi|resolvid[oa]s?)${RIGHT}`,
+)
+const UNRESOLVED = pattern(`${LEFT}(?:still|ainda|remain|remains|remaining|restam?)${RIGHT}`)
+
 const NEAR_WORDS = 4
 
 const clauseBefore = (sentence: string, index: number) => {
@@ -143,7 +148,9 @@ export function detectClaims(answer: string): Claim[] {
       const match = regex.exec(sentence)
       if (match === null) continue
       if (REPORTED.test(sentence.slice(0, match.index))) continue
-      if (MIXED.test(sentence.slice(match.index + match[0].length)) || MIXED.test(sentence.slice(0, match.index))) continue
+      const before = sentence.slice(0, match.index)
+      if (MIXED.test(sentence.slice(match.index + match[0].length))) continue
+      if (MIXED.test(before) && (!FIXED.test(before) || UNRESOLVED.test(before))) continue
       const clause = clauseBefore(sentence, match.index)
       if (CONDITION.test(`${clause} ${match[0]}`)) continue
       if (NEGATION.test(`${nearBefore(clause)} ${match[0]}`)) continue
@@ -155,8 +162,17 @@ export function detectClaims(answer: string): Claim[] {
 
 const SEPARATOR = /(\|\||&&|\|&|\||;|\n)/
 
+const ELSEWHERE = /^(?:(?:\/tmp|\/var\/tmp|\/dev)(?:\/|$)|\$[A-Za-z_{])/
+
 const stripQuoted = (command: string) =>
-  command.replace(/'[^']*'|"[^"]*"/g, '""').replace(/(^|\s)#.*$/gm, '$1')
+  command
+    .replace(/'([^']*)'|"([^"]*)"/g, (_whole, single: string | undefined, double: string | undefined) =>
+      ELSEWHERE.test(single ?? double ?? '') ? '/tmp/""' : '""',
+    )
+    .replace(/(^|\s)#.*$/gm, '$1')
+
+export const COMMAND_SIZE_LIMIT = 64 * 1024
+const UNWRAP_DEPTH = 16
 
 const WORD_PREFIX = /^(?:exec|time|command(?!\s+-[vV])|if|then|do|while|until|else|rtk(?:\s+-u)?(?:\s+(?:test|err|proxy|summary))?)\s+/
 const GROUPING = /^[({!]+\s*/
@@ -220,8 +236,10 @@ function unwrapOnce(text: string): string {
 type Segment = { program: string; args: string[]; text: string }
 
 function segmentOf(raw: string): Segment {
-  let text = raw.trim().replace(/[)}`\s]+$/, '')
-  for (let round = 0; round < 32; round += 1) {
+  let end = raw.length
+  while (end > 0 && /[)}`\s]/.test(raw[end - 1] ?? '')) end -= 1
+  let text = raw.slice(0, end).trim()
+  for (let round = 0; round < UNWRAP_DEPTH; round += 1) {
     const next = unwrapOnce(text).trim()
     if (next === text) break
     text = next
@@ -266,6 +284,7 @@ function dropHeredocs(command: string): string {
 }
 
 function segmentsOf(command: string): Segment[] {
+  if (command.length > COMMAND_SIZE_LIMIT) return []
   return stripQuoted(unwrapShells(dropHeredocs(command)))
     .split(SEPARATOR)
     .filter((_, index) => index % 2 === 0)
@@ -412,7 +431,7 @@ function gitMutates(args: readonly string[], cwd: string | undefined): boolean {
   }
 }
 
-function segmentMutates(segment: Segment, cwd: string | undefined): boolean {
+function segmentMutates(segment: Segment, cwd: string | undefined, depth = 0): boolean {
   const { program, args, text } = segment
   if (program === 'test' || program === '[' || program === '[[') return false
   for (const match of text.matchAll(REDIRECT)) {
@@ -424,7 +443,7 @@ function segmentMutates(segment: Segment, cwd: string | undefined): boolean {
   switch (program) {
     case 'xargs': {
       const start = args.findIndex(arg => !arg.startsWith('-'))
-      return start >= 0 && segmentMutates(segmentOf(args.slice(start).join(' ')), cwd)
+      return depth < UNWRAP_DEPTH && start >= 0 && segmentMutates(segmentOf(args.slice(start).join(' ')), cwd, depth + 1)
     }
     case 'git':
       return gitMutates(args, cwd)
@@ -547,7 +566,7 @@ const AIMED_ELSEWHERE = /(?:^|\s)-C(?:\s|$)/
 async function mutates($: EngineInterface, command: string, isReadOnly: boolean): Promise<boolean> {
   if (!isMutatingCommand(command, isReadOnly)) return false
   if (!AIMED_ELSEWHERE.test(command)) return true
-  return isMutatingCommand(command, isReadOnly, await $.session.cwd())
+  return isMutatingCommand(command, isReadOnly, await $.session.root())
 }
 
 type RecordInput = { tool: string; agentId?: string } & Record<string, unknown>
@@ -560,7 +579,7 @@ async function record(
   const agentId = typeof input.agentId === 'string' ? input.agentId : undefined
   if (EDIT_TOOLS.has(input.tool)) {
     if (ran.isError === true) return
-    const cwd = await $.session.cwd()
+    const cwd = await $.session.root()
     const path = String(input.file_path ?? input.notebook_path ?? '')
     if (!isTracked(path, cwd)) return
     await update($, logAtom, entries => appendEntry(entries ?? [], { type: 'edit', path, ...(agentId === undefined ? {} : { agentId }) }))
