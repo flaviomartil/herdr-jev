@@ -98,6 +98,20 @@ export type ScopeState = {
   note: string | null
 }
 
+export type ClaimKind = 'test' | 'lint' | 'build' | 'ci' | 'verified'
+
+export type ClaimCheck = 'test' | 'lint' | 'build' | 'ci' | 'push'
+
+export type ClaimEntry =
+  | { seq: number; type: 'edit'; path: string }
+  | { seq: number; type: 'run'; checks: ClaimCheck[]; command: string; isOk: boolean; isInterrupted: boolean }
+
+export type ClaimWarning = {
+  kind: ClaimKind
+  quote: string
+  reason: string
+}
+
 declare module 'claude-code' {
   interface PluginState {
     harness: {
@@ -113,6 +127,8 @@ declare module 'claude-code' {
       isExpanded: boolean
       folds: Record<string, boolean>
       scope: ScopeState
+      claimLog: ClaimEntry[]
+      claimWarnings: ClaimWarning[]
     }
   }
 }
