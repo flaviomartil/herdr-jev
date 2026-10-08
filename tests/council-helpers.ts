@@ -41,6 +41,7 @@ export interface Call {
   cwd: string;
   stdin?: string;
   lifetimeMs?: number;
+  repoRoots?: string[];
   timeoutCommand?: string | null;
   killed: boolean;
 }
@@ -67,7 +68,7 @@ export function fakeSpawn(handlers: Record<string, Handler>, options: FakeSpawnO
   const installed = options.installed ?? Object.keys(handlers);
   const calls: Call[] = [];
   const spawn: SpawnFn = (argv: readonly string[], spawnOptions: SpawnOptions): SpawnedProcess => {
-    const call: Call = { argv: [...argv], cwd: spawnOptions.cwd, stdin: spawnOptions.stdin, lifetimeMs: spawnOptions.lifetimeMs, timeoutCommand: spawnOptions.timeoutCommand, killed: false };
+    const call: Call = { argv: [...argv], cwd: spawnOptions.cwd, stdin: spawnOptions.stdin, lifetimeMs: spawnOptions.lifetimeMs, repoRoots: spawnOptions.repoRoots, timeoutCommand: spawnOptions.timeoutCommand, killed: false };
     calls.push(call);
     const bin = argv[0];
     let release: (output: ProcessOutput) => void = () => {};
