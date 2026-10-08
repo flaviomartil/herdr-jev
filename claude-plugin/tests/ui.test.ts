@@ -19,7 +19,7 @@ test('the band falls through to the engine while there is no plan', { options: {
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   for (const surface of SURFACES) {
     const ui = await $.ui.mount({ plugin: 'harness', surface, component: 'AbovePrompt', props: BAND_PROPS })
-    expect(await ui.find({ text: 'engine band' })).toBeDefined()
+    expect(await ui.find({ type: 'engine' })).toBeDefined()
     await ui.unmount()
   }
 })
@@ -63,7 +63,7 @@ test('the band is one borderless row with toggle, glyph, title, filling bar, cou
     await ui.unmount()
 
     const survey = await bandUi($, surface, { ...BAND_PROPS, hasSurvey: true })
-    expect(await survey.find({ text: 'engine band' })).toBeDefined()
+    expect(await survey.find({ type: 'engine' })).toBeDefined()
     await survey.unmount()
   }
 
@@ -234,7 +234,7 @@ test('Hide hides the band and Plan opens the pane', { options: { autoRun: false 
 
   const ui = await $.ui.mount({ plugin: 'harness', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
   await ui.press({ key: 'hide' })
-  expect(await ui.find({ text: 'engine band' })).toBeDefined()
+  expect(await ui.find({ type: 'engine' })).toBeDefined()
   await ui.unmount()
 })
 
@@ -272,7 +272,7 @@ test('the band shows approved with harness review pending, then all verified aft
   await seen.clock.advance(19000)
   expect(await band.find({ type: 'Text', text: 'Done' })).toBeDefined()
   await seen.clock.advance(2000)
-  expect(await band.find({ text: 'engine band' })).toBeDefined()
+  expect(await band.find({ type: 'engine' })).toBeDefined()
   await band.unmount()
 })
 
