@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import { printable, singleLine } from "./printable.js";
 
@@ -341,6 +341,8 @@ function computeChangeSet(cwd: string, baseRef: string | undefined): ChangeSet {
 interface Meta {
   startedAt: number;
   timeoutMs: number;
+  owner?: number;
+  ownerStart?: string;
   pid?: number;
   argv?: string[];
 }
@@ -366,11 +368,63 @@ function readMeta(path: string): Meta | null {
   }
 }
 
-function belongsToCommand(pid: number, argv: readonly string[]): boolean {
-  const result = spawnSync("ps", ["-ww", "-o", "pgid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 5000 });
-  if (result.status !== 0 || result.error) return false;
-  const match = /^\s*(\d+)\s(.*)$/.exec((result.stdout ?? "").replace(/\n+$/, ""));
-  return Boolean(match) && Number(match![1]) === pid && match![2] === argv.join(" ");
+export function readProcessStat(pid: number): { pgrp: number; start: string } | null {
+  try {
+    const text = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
+    const pgrp = Number(fields[2]);
+    const start = fields[19];
+    if (!Number.isInteger(pgrp) || !start) return null;
+    return { pgrp, start };
+  } catch {
+    return null;
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function currentUid(): number | null {
+  return typeof process.getuid === "function" ? process.getuid() : null;
+}
+
+function ownerIsLive(meta: Meta): boolean {
+  const owner = meta.owner;
+  if (typeof owner !== "number" || !Number.isInteger(owner) || owner <= 1 || !processAlive(owner)) return false;
+  if (meta.ownerStart === undefined) return true;
+  return readProcessStat(owner)?.start === meta.ownerStart;
+}
+
+function killableOrphan(pid: unknown, dir: string): pid is number {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 1) return false;
+  const uid = currentUid();
+  if (uid === null) return false;
+  try {
+    if (statSync(`/proc/${pid}`).uid !== uid) return false;
+    const stat = readProcessStat(pid);
+    if (!stat || stat.pgrp !== pid) return false;
+    const cwd = readlinkSync(`/proc/${pid}/cwd`);
+    const real = realpathSync(dir);
+    return cwd === real || cwd.startsWith(real + sep);
+  } catch {
+    return false;
+  }
+}
+
+function trustedFile(path: string, directory: boolean): boolean {
+  const stat = lstatOrNull(path);
+  if (!stat) return false;
+  const uid = currentUid();
+  if (uid !== null && stat.uid !== uid) return false;
+  if (stat.isSymbolicLink()) return false;
+  if (directory ? !stat.isDirectory() : !stat.isFile()) return false;
+  return (stat.mode & 0o022) === 0;
 }
 
 function sweepStale(parent: string): void {
@@ -384,20 +438,18 @@ function sweepStale(parent: string): void {
   for (const id of ids) {
     try {
       const dir = join(parent, id);
-      const meta = readMeta(dir);
+      const uid = currentUid();
+      const dirStat = lstatOrNull(dir);
+      if (dirStat && uid !== null && dirStat.uid !== uid) continue;
+      const meta = trustedFile(metaPath(dir), false) ? readMeta(dir) : null;
       let startedAt = meta?.startedAt;
-      if (startedAt === undefined) {
-        try {
-          startedAt = statSync(dir).mtimeMs;
-        } catch {
-          startedAt = 0;
-        }
-      }
+      if (startedAt === undefined) startedAt = dirStat?.mtimeMs ?? 0;
       const threshold = Math.max(STALE_FLOOR_MS, 3 * (meta?.timeoutMs ?? DEFAULT_PROVE_TIMEOUT_MS));
       if (Date.now() - startedAt < threshold) continue;
-      if (meta?.pid && meta.argv && belongsToCommand(meta.pid, meta.argv)) {
+      if (meta && ownerIsLive(meta)) continue;
+      if (meta && dirStat && killableOrphan(meta.pid, dir)) {
         try {
-          process.kill(-meta.pid, "SIGKILL");
+          process.kill(-meta.pid!, "SIGKILL");
         } catch {
         }
       }
@@ -423,6 +475,10 @@ function removeWorkspace(path: string): { workspaceRemoved: boolean; error?: str
 function freshWorkspace(): { path: string } {
   const parent = join(resolveStateDir(), "prove");
   mkdirSync(parent, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(parent, 0o700);
+  } catch {
+  }
   sweepStale(parent);
   const realParent = realpathSync(parent);
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -430,6 +486,18 @@ function freshWorkspace(): { path: string } {
     if (!existsSync(path)) return { path };
   }
   throw new Error("workspace_path_unavailable: could not find an unused workspace path");
+}
+
+function resolveExplicit(file: string, changes: ChangeSet, known: ReadonlySet<string>): string | null {
+  const candidates: string[] = [];
+  if (isAbsolute(file)) {
+    const rel = relative(changes.root, file).split(sep).join("/");
+    if (rel && !rel.startsWith("..")) candidates.push(rel);
+  } else {
+    candidates.push(posix.normalize(posix.join(changes.subdir, file)), posix.normalize(file));
+  }
+  for (const candidate of candidates) if (known.has(candidate)) return candidate;
+  return null;
 }
 
 function failed(partial: Partial<ProveReport> & { reason: string }): ProveReport {
@@ -449,7 +517,15 @@ export async function runProve(opts: ProveOptions): Promise<ProveReport> {
   } catch (error) {
     return failed({ reason: error instanceof Error ? error.message : String(error) });
   }
-  const explicit = new Set((opts.testFiles ?? []).map((file) => file.replace(/^\.\//, "")));
+  const known = new Set(changes.files);
+  const explicit = new Set<string>();
+  const unknown: string[] = [];
+  for (const file of opts.testFiles ?? []) {
+    const resolved = resolveExplicit(file, changes, known);
+    if (resolved === null) unknown.push(file);
+    else explicit.add(resolved);
+  }
+  if (unknown.length > 0) return failed({ reason: `test_file_not_in_change_set: ${unknown.slice(0, 5).map(brief).join(", ")} is not a changed file; --test-file takes a path relative to the directory you run from, or to the repository root, of a file that changed` });
   const testFiles = changes.files.filter((file) => isTestPath(file, explicit));
   const sourceFiles = changes.files.filter((file) => !isTestPath(file, explicit));
   const common = { base: changes.baseSha, baseRef: opts.base ?? null, testFiles, sourceFiles, skippedPaths: changes.skipped.slice(0, SKIPPED_LISTED), skippedCount: changes.skipped.length };
@@ -462,7 +538,7 @@ export async function runProve(opts: ProveOptions): Promise<ProveReport> {
   } catch (error) {
     return failed({ ...common, reason: error instanceof Error ? error.message : String(error) });
   }
-  const meta: Meta = { startedAt: Date.now(), timeoutMs };
+  const meta: Meta = { startedAt: Date.now(), timeoutMs, owner: process.pid, ownerStart: readProcessStat(process.pid)?.start };
   writeMeta(workspace.path, meta);
   let report: ProveReport;
   try {
@@ -530,6 +606,8 @@ async function prove(
     const modules = join(changes.root, "node_modules");
     const target = join(path, "node_modules");
     if (existsSync(modules) && !lstatOrNull(target)) {
+      const underLink = [...common.testFiles, ...common.sourceFiles].filter((file) => file.startsWith("node_modules/"));
+      if (underLink.length > 0) return { verdict: "error", reason: `tracked_file_under_linked_node_modules: ${underLink.slice(0, 5).map(brief).join(", ")} changed under the root node_modules that is linked from your checkout; pass --setup-command-json to use a copy of its own`, dependencies, ...base };
       symlinkSync(modules, target);
       dependencies = "node_modules_symlink";
     }

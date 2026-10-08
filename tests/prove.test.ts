@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { formatProveReport, isTestPath, MAX_PROVE_TIMEOUT_MS, readCommandJson, runProve } from "../src/harness/prove.js";
+import { formatProveReport, isTestPath, MAX_PROVE_TIMEOUT_MS, readCommandJson, readProcessStat, runProve } from "../src/harness/prove.js";
 import { createTempHome } from "./helpers.js";
 
 let repo: string;
@@ -659,6 +659,79 @@ describe("runProve isolated copy", () => {
     expectClean(report);
   });
 
+  it("does not inherit hooks from a global template directory into the copy", async () => {
+    const dir = tempDir("herdr-jev-prove-template-");
+    mkdirSync(join(dir, "template", "hooks"), { recursive: true });
+    const log = join(dir, "hooks.log");
+    for (const hook of ["pre-commit", "commit-msg", "post-commit"]) {
+      const file = join(dir, "template", "hooks", hook);
+      writeFileSync(file, `#!/bin/sh\necho ${hook} >> "${log}"\n`);
+      chmodSync(file, 0o755);
+    }
+    const config = join(dir, "gitconfig");
+    writeFileSync(config, `[init]\n\ttemplateDir = ${join(dir, "template")}\n`);
+    write("src/value.txt", "2");
+    write("tests/check.sh", `git -c user.name=x -c user.email=x@example.invalid commit -q --allow-empty -m t\n${check("2")}`);
+    const report = await withEnv({ GIT_CONFIG_GLOBAL: config }, () => runProve({ cwd: repo, testCommand: TEST_COMMAND }));
+    expect(report.verdict).toBe("proven");
+    expect(existsSync(log)).toBe(false);
+    expectClean(report);
+  });
+
+  it("does not run a configured fsmonitor hook", async () => {
+    const dir = tempDir("herdr-jev-prove-fsmonitor-");
+    const log = join(dir, "fsmonitor.log");
+    const hook = join(dir, "hook.sh");
+    writeFileSync(hook, `#!/bin/sh\necho called >> "${log}"\nprintf '\\0'\n`);
+    chmodSync(hook, 0o755);
+    const config = join(dir, "gitconfig");
+    writeFileSync(config, `[core]\n\tfsmonitor = ${hook}\n`);
+    write("src/value.txt", "2");
+    write("tests/check.sh", check("2"));
+    const report = await withEnv({ GIT_CONFIG_GLOBAL: config }, () => runProve({ cwd: repo, testCommand: TEST_COMMAND }));
+    expect(report.verdict).toBe("proven");
+    expect(existsSync(log)).toBe(false);
+    expectClean(report);
+  });
+
+  it("refuses a tracked file changed under the linked root node_modules", async () => {
+    mkdirSync(join(repo, "node_modules"));
+    writeFileSync(join(repo, "node_modules", "marker"), "m");
+    write("node_modules/fx/data.txt", "tracked");
+    git(repo, "add", "-f", "node_modules/fx/data.txt");
+    write("src/value.txt", "2");
+    write("tests/check.sh", check("2"));
+    const before = hashTree(join(repo, "node_modules"));
+    const report = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
+    expect(report.verdict).toBe("error");
+    expect(report.reason).toContain("tracked_file_under_linked_node_modules");
+    expect(report.reason).toContain("node_modules/fx/data.txt");
+    expect(hashTree(join(repo, "node_modules"))).toEqual(before);
+    expectClean(report);
+    const withSetup = await runProve({ cwd: repo, testCommand: TEST_COMMAND, setupCommand: ["true"] });
+    expect(withSetup.verdict).toBe("proven");
+    expectClean(withSetup);
+  });
+
+  it("rejects explicit test files that are not in the change set and resolves them against the run directory", async () => {
+    mkdirSync(join(repo, "pkg", "checks"), { recursive: true });
+    write("pkg/checks/value.sh", "exit 0\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "pkg");
+    write("pkg/checks/value.sh", "exit 0\n# changed\n");
+    write("tests/other.sh", "exit 0\n");
+    const typo = await runProve({ cwd: repo, testCommand: ["true"], testFiles: ["pkg/checks/valeu.sh"] });
+    expect(typo.verdict).toBe("error");
+    expect(typo.reason).toContain("test_file_not_in_change_set");
+    expectClean(typo);
+    const fromSub = await runProve({ cwd: join(repo, "pkg"), testCommand: ["true"], testFiles: ["checks/value.sh"] });
+    expect(fromSub.testFiles).toContain("pkg/checks/value.sh");
+    const viaRoot = await runProve({ cwd: join(repo, "pkg"), testCommand: ["true"], testFiles: ["pkg/checks/value.sh"] });
+    expect(viaRoot.testFiles).toContain("pkg/checks/value.sh");
+    const outside = await runProve({ cwd: repo, testCommand: ["true"], testFiles: ["../escape.sh"] });
+    expect(outside.reason).toContain("test_file_not_in_change_set");
+  });
+
   it("runs two proofs on the same repository in parallel", async () => {
     const before = git(repo, "worktree", "list", "--porcelain");
     write("src/value.txt", "2");
@@ -718,50 +791,165 @@ describe("runProve isolated copy", () => {
 });
 
 describe("runProve stale workspace sweep", () => {
-  it("removes old workspaces and kills their recorded command, and leaves fresh and unrelated ones", async () => {
-    const parent = join(process.env.HERDR_JEV_STATE_DIR!, "prove");
+  const hours = 3_600_000;
+  let parent: string;
+  let children: Array<ReturnType<typeof spawn>>;
+
+  beforeEach(() => {
+    parent = join(process.env.HERDR_JEV_STATE_DIR!, "prove");
     mkdirSync(parent, { recursive: true });
-    const hours = 3_600_000;
-    const orphan = spawn("sleep", ["31"], { detached: true, stdio: "ignore" });
-    const unrelated = spawn("sleep", ["32"], { detached: true, stdio: "ignore" });
-    orphan.unref();
-    unrelated.unref();
-    try {
-      const entry = (name: string, meta: Record<string, unknown>) => {
-        mkdirSync(join(parent, name));
-        writeFileSync(join(parent, name, "file"), "x");
-        writeFileSync(join(parent, `${name}.meta.json`), JSON.stringify(meta));
-      };
-      entry("old-stale", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: orphan.pid, argv: ["sleep", "31"] });
-      entry("old-reused-pid", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: unrelated.pid, argv: ["sleep", "99"] });
-      entry("fresh-live", { startedAt: Date.now() - hours, timeoutMs: 600000 });
-      write("src/value.txt", "2");
-      write("tests/check.sh", check("2"));
-      const report = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
-      expect(report.verdict).toBe("proven");
-      expect(existsSync(join(parent, "old-stale"))).toBe(false);
-      expect(existsSync(join(parent, "old-stale.meta.json"))).toBe(false);
-      expect(existsSync(join(parent, "old-reused-pid"))).toBe(false);
-      expect(existsSync(join(parent, "fresh-live", "file"))).toBe(true);
-      expect(existsSync(join(parent, "fresh-live.meta.json"))).toBe(true);
-      await expectDead(orphan.pid!);
-      expect(() => process.kill(unrelated.pid!, 0)).not.toThrow();
-      rmSync(join(parent, "fresh-live"), { recursive: true, force: true });
-      rmSync(join(parent, "fresh-live.meta.json"), { force: true });
-      expectClean(report);
-    } finally {
-      for (const child of [orphan, unrelated]) {
-        try {
-          process.kill(-child.pid!, "SIGKILL");
-        } catch {
-        }
+    children = [];
+  });
+
+  afterEach(() => {
+    for (const child of children) {
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
       }
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+    }
+    for (const name of readdirSync(parent)) rmSync(join(parent, name), { recursive: true, force: true });
+  });
+
+  function orphan(seconds: string, cwd: string, detached = true) {
+    const child = spawn("sleep", [seconds], { cwd, detached, stdio: "ignore" });
+    child.unref();
+    children.push(child);
+    return child;
+  }
+
+  function entry(name: string, meta: Record<string, unknown>): string {
+    const dir = join(parent, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "file"), "x");
+    writeFileSync(join(parent, `${name}.meta.json`), JSON.stringify(meta), { mode: 0o600 });
+    return dir;
+  }
+
+  function writeMetaFile(name: string, meta: Record<string, unknown>) {
+    writeFileSync(join(parent, `${name}.meta.json`), JSON.stringify(meta), { mode: 0o600 });
+  }
+
+  async function sweepRun() {
+    write("src/value.txt", "2");
+    write("tests/check.sh", check("2"));
+    const report = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
+    expect(report.verdict).toBe("proven");
+    return report;
+  }
+
+  it("removes an old copy and kills the orphan that runs inside it", async () => {
+    const dir = entry("old-stale", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000 });
+    const child = orphan("31", dir);
+    writeMetaFile("old-stale", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: child.pid, argv: ["sh", "tests/run.sh"] });
+    const report = await sweepRun();
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(join(parent, "old-stale.meta.json"))).toBe(false);
+    await expectDead(child.pid!);
+    expectClean(report);
+  });
+
+  it("spares an unrelated process that has the recorded pid and command line but runs elsewhere", async () => {
+    const dir = entry("old-reused-pid", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000 });
+    const child = orphan("32", tmpdir());
+    writeMetaFile("old-reused-pid", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: child.pid, argv: ["sleep", "32"] });
+    const report = await sweepRun();
+    expect(existsSync(dir)).toBe(false);
+    expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    expectClean(report);
+  });
+
+  it("spares a process inside the copy that is not a process group leader", async () => {
+    const dir = entry("old-member", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000 });
+    const child = orphan("33", dir, false);
+    writeMetaFile("old-member", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: child.pid });
+    const report = await sweepRun();
+    expect(existsSync(dir)).toBe(false);
+    expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    expectClean(report);
+  });
+
+  it("refuses to kill pid 1 or a missing pid and still removes the copy", async () => {
+    const one = entry("old-init", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: 1 });
+    const gone = entry("old-gone", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: 2147483000 });
+    const report = await sweepRun();
+    expect(existsSync(one)).toBe(false);
+    expect(existsSync(gone)).toBe(false);
+    expectClean(report);
+  });
+
+  it("spares a copy whose owner run is still alive, however old the record is", async () => {
+    const owner = orphan("34", tmpdir());
+    const start = readProcessStat(owner.pid!)?.start;
+    const dir = entry("old-live", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, owner: owner.pid, ownerStart: start });
+    const running = orphan("35", dir);
+    writeMetaFile("old-live", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, owner: owner.pid, ownerStart: start, pid: running.pid });
+    try {
+      await sweepRun();
+      expect(existsSync(join(dir, "file"))).toBe(true);
+      expect(() => process.kill(running.pid!, 0)).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(join(parent, "old-live.meta.json"), { force: true });
     }
   });
 
-  it("records metadata next to the workspace while it runs", async () => {
+  it("sweeps a copy whose owner pid now belongs to a different process", async () => {
+    const owner = orphan("36", tmpdir());
+    const dir = entry("old-reused-owner", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000, owner: owner.pid, ownerStart: "1" });
+    const report = await sweepRun();
+    expect(existsSync(dir)).toBe(false);
+    expect(() => process.kill(owner.pid!, 0)).not.toThrow();
+    expectClean(report);
+  });
+
+  it("keeps a fresh copy and uses the longer of 2 hours and three timeouts", async () => {
+    const fresh = entry("fresh", { startedAt: Date.now() - hours, timeoutMs: 600000 });
+    const longTimeout = entry("long-timeout", { startedAt: Date.now() - 3 * hours, timeoutMs: 2 * hours });
+    try {
+      const report = await sweepRun();
+      expect(existsSync(join(fresh, "file"))).toBe(true);
+      expect(existsSync(join(longTimeout, "file"))).toBe(true);
+      expect(report.workspaceRemoved).toBe(true);
+    } finally {
+      for (const name of ["fresh", "long-timeout"]) {
+        rmSync(join(parent, name), { recursive: true, force: true });
+        rmSync(join(parent, `${name}.meta.json`), { force: true });
+      }
+    }
+    expect(leftovers()).toEqual([]);
+  });
+
+  it("ignores a metadata file that other users can write", async () => {
+    const dir = entry("old-writable", { startedAt: Date.now() - 10 * hours, timeoutMs: 600000 });
+    const child = orphan("37", dir);
+    const metaFile = join(parent, "old-writable.meta.json");
+    writeFileSync(metaFile, JSON.stringify({ startedAt: Date.now() - 10 * hours, timeoutMs: 600000, pid: child.pid }));
+    chmodSync(metaFile, 0o666);
+    const old = new Date(Date.now() - 10 * hours);
+    utimesSync(dir, old, old);
+    const report = await sweepRun();
+    expect(existsSync(dir)).toBe(false);
+    expect(() => process.kill(child.pid!, 0)).not.toThrow();
+    expectClean(report);
+  });
+
+  it("creates the state directory private to the user", async () => {
+    rmSync(parent, { recursive: true, force: true });
+    mkdirSync(parent, { mode: 0o777 });
+    chmodSync(parent, 0o777);
+    const report = await sweepRun();
+    expect(lstatSync(parent).mode & 0o077).toBe(0);
+    expectClean(report);
+  });
+
+  it("records the owner and the running command in the metadata next to the workspace", async () => {
     write("src/value.txt", "2");
-    write("tests/check.sh", `ls ../*.meta.json >/dev/null 2>&1 && ${check("2")}`);
+    write("tests/check.sh", `grep -q "\\"pid\\":$$" ../*.meta.json && grep -q "\\"owner\\":${process.pid}" ../*.meta.json && ${check("2")}`);
     const report = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
     expect(report.verdict).toBe("proven");
     expectClean(report);
@@ -809,12 +997,13 @@ describe("runProve symlink replacements", () => {
   it("handles a directory replaced by an absolute symlink without touching the target", async () => {
     const external = tempDir("herdr-jev-prove-linktarget-");
     writeFileSync(join(external, "data.txt"), "external");
+    writeFileSync(join(external, "inner.txt"), "external inner");
     write("src/thing/inner.txt", "inner");
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "dir");
     rmSync(join(repo, "src", "thing"), { recursive: true });
     symlinkSync(external, join(repo, "src", "thing"));
-    write("tests/check.sh", "[ -L src/thing ] && [ ! -e src/thing/inner.txt ]\n");
+    write("tests/check.sh", "[ -L src/thing ]\n");
     const before = hashTree(external);
     const report = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
     expect(report.verdict).toBe("proven");
@@ -823,12 +1012,13 @@ describe("runProve symlink replacements", () => {
   });
 
   it("handles a directory replaced by a relative symlink", async () => {
+    write("shared/inner.txt", "shared inner");
     write("src/thing/inner.txt", "inner");
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "dir");
     rmSync(join(repo, "src", "thing"), { recursive: true });
     symlinkSync("../shared", join(repo, "src", "thing"));
-    write("tests/check.sh", "[ -L src/thing ] && [ ! -e src/thing/inner.txt ]\n");
+    write("tests/check.sh", "[ -L src/thing ]\n");
     const report = await runProve({ cwd: repo, testCommand: TEST_COMMAND });
     expect(report.verdict).toBe("proven");
     expectClean(report);
@@ -1034,17 +1224,42 @@ describe("herdr-jev prove command", () => {
   });
 
   it("runs an auto-detected test command at the repository root even from a subdirectory", () => {
-    write("package.json", JSON.stringify({ scripts: { test: "sh tests/root-check.sh" } }));
-    write("bun.lock", "");
+    write("package.json", JSON.stringify({ scripts: { test: "bun test" } }));
     write("pkg/.keep", "");
-    write("tests/root-check.sh", `[ -f package.json ] && ${check("1")}`);
+    write("src/value.ts", "export const value = 1;\n");
+    write("tests/value.test.ts", 'import { expect, test } from "bun:test";\nimport { value } from "../src/value.ts";\ntest("v", () => expect(value).toBe(1));\n');
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "root project");
-    write("src/value.txt", "2");
-    write("tests/root-check.sh", `[ -f package.json ] && ${check("2")}`);
+    write("src/value.ts", "export const value = 2;\n");
+    write("tests/value.test.ts", 'import { expect, test } from "bun:test";\nimport { value } from "../src/value.ts";\ntest("v", () => expect(value).toBe(2));\n');
     const result = runCli(["--json"], join(repo, "pkg"));
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout).verdict).toBe("proven");
+    expectClean({ workspaceRemoved: true });
+  });
+
+  it("resolves --test-file against the current directory and rejects files that did not change", () => {
+    write("pkg/checks/value.sh", "[ \"$(cat ../src/value.txt)\" = 2 ]\n");
+    write("tests/other.sh", "exit 0\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "pkg");
+    write("src/value.txt", "2");
+    write("pkg/checks/value.sh", "[ \"$(cat ../src/value.txt)\" = 2 ]\n# changed\n");
+    write("tests/other.sh", "exit 0\n# changed\n");
+    const commandFile = join(tempDir("herdr-jev-prove-cmd-"), "cmd.json");
+    writeFileSync(commandFile, JSON.stringify(["sh", "pkg/checks/value.sh"]));
+    const fromSub = runCli(["--test-command-json", commandFile, "--test-file", "checks/value.sh", "--json"], join(repo, "pkg"));
+    const sub = JSON.parse(fromSub.stdout);
+    expect(sub.testFiles).toContain("pkg/checks/value.sh");
+    expect(sub.sourceFiles).toEqual(["src/value.txt"]);
+    const fromRoot = runCli(["--test-command-json", commandFile, "--test-file", "pkg/checks/value.sh", "--json"]);
+    expect(JSON.parse(fromRoot.stdout).testFiles).toContain("pkg/checks/value.sh");
+    const typo = runCli(["--test-command-json", commandFile, "--test-file", "checks/valeu.sh", "--json"], join(repo, "pkg"));
+    expect(typo.status).toBe(1);
+    expect(JSON.parse(typo.stdout).reason).toContain("test_file_not_in_change_set");
+    const typoRoot = runCli(["--test-command-json", commandFile, "--test-file", "pkg/checks/valeu.sh", "--json"]);
+    expect(typoRoot.status).toBe(1);
+    expect(JSON.parse(typoRoot.stdout).reason).toContain("test_file_not_in_change_set");
     expectClean({ workspaceRemoved: true });
   });
 });
