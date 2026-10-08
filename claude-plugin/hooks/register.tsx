@@ -1,7 +1,9 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, PluginOptions, Register } from 'claude-code'
+import type { Elements, EngineInterface, PluginOptions, Register, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 import type {
+  HarnessCost,
+  HarnessExternalRow,
   ScopeState,
   HarnessHumanAsk,
   HarnessPlan,
@@ -59,6 +61,23 @@ import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
 import type { Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
 import {
+  addCost,
+  costText,
+  deriveExternal,
+  externalModel,
+  isReviewerResult,
+  lastLineOf,
+  orderedExternal,
+  pruneExternal,
+  recordOf,
+  REVIEWER_RULE,
+  runningExternal,
+  stopExternal,
+  usageOf,
+  usageParts,
+} from './visual'
+import type { UsagePart } from './visual'
+import {
   agentReason,
   DEFAULT_AGENTS,
   DEFAULT_SKILLS,
@@ -103,6 +122,9 @@ const isExpandedAtom = atom({ plugin: 'harness', key: 'isExpanded' } as const, f
 const foldsAtom = atom({ plugin: 'harness', key: 'folds' } as const, {})
 const reviewIdsAtom = atom({ plugin: 'harness', key: 'reviewIds' } as const, {})
 const scopeAtom = atom({ plugin: 'harness', key: 'scope' } as const, EMPTY_SCOPE as ScopeState)
+const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
+const externalAtom = atom({ plugin: 'harness', key: 'external' } as const, {})
+const costsAtom = atom({ plugin: 'harness', key: 'costs' } as const, {})
 
 const PANE_ID = 'harness'
 
@@ -255,6 +277,75 @@ async function registerCodexAgent($: EngineInterface, external: External, option
   if (external.progressTool === '') return
   await $.agent.register(agentSpec(external.progressTool))
   external.agentRegistered = true
+}
+
+async function syncExternal(
+  $: EngineInterface,
+  ports: Ports,
+  agentId: string,
+  startedAt: number,
+  blocks: ReadonlyMap<number, string>,
+): Promise<void> {
+  const state = await ports.loadState(agentId)
+  if (state === null) return
+  const order = [...blocks.keys()].sort((a, b) => a - b)
+  const streamed = state.run === null ? order.slice(0, -1) : order
+  const line = lastLineOf(streamed.map(index => blocks.get(index) ?? '').join('\n'))
+  const now = await $.clock.now()
+  const prev = (await read($, externalAtom))[agentId]
+  const row = deriveExternal(prev, agentId, state, startedAt, now, line)
+  if (row === null) return
+  await update($, externalAtom, rows => pruneExternal({ ...rows, [agentId]: row }))
+}
+
+async function* watchStep(
+  $: EngineInterface,
+  agentId: string,
+  ports: Ports | null,
+  source: AsyncGenerator<TurnStepChunk, TurnStepResult>,
+): AsyncGenerator<TurnStepChunk, TurnStepResult> {
+  let startedAt = 0
+  try {
+    startedAt = await $.clock.now()
+  } catch {
+    startedAt = 0
+  }
+  const blocks = new Map<number, string>()
+  let isDone = false
+  try {
+    for (;;) {
+      const step = await source.next()
+      if (step.done) {
+        isDone = true
+        return step.value
+      }
+      const chunk = step.value
+      if (ports !== null && (chunk.kind === 'text' || chunk.kind === 'thinking')) {
+        blocks.set(chunk.index, `${blocks.get(chunk.index) ?? ''}${chunk.text}`)
+      }
+      if (chunk.kind === 'stop' && chunk.usage !== null) {
+        const used = chunk.usage
+        await attempt('worker cost', $, () =>
+          update($, costsAtom, costs => ({ ...costs, [agentId]: addCost(costs[agentId], used) })),
+        )
+      }
+      yield chunk
+    }
+  } finally {
+    if (!isDone) await source.return(undefined as never).catch(() => undefined)
+    if (ports !== null) await attempt('external row', $, () => syncExternal($, ports, agentId, startedAt, blocks))
+  }
+}
+
+async function liveUsage($: EngineInterface) {
+  const stored = await read($, usageAtom)
+  if (stored !== null) return stored
+  try {
+    const now = await $.session.usage()
+    return usageOf(now.context, now.rateLimits)
+  } catch {
+    return null
+  }
 }
 
 async function save($: EngineInterface, cwd: string): Promise<void> {
@@ -956,6 +1047,19 @@ async function statusText($: EngineInterface): Promise<string> {
   return lines.join('\n')
 }
 
+async function takeReviewerRule($: EngineInterface, ruled: Set<string>): Promise<boolean> {
+  const plan = await read($, planAtom)
+  let fresh = false
+  for (const task of plan?.tasks ?? []) {
+    if (task.reviewAgentId === undefined || task.state === 'review') continue
+    const key = `agent:${task.reviewAgentId}`
+    if (ruled.has(key)) continue
+    ruled.add(key)
+    fresh = true
+  }
+  return fresh
+}
+
 async function hideWhenVerified($: EngineInterface): Promise<void> {
   const plan = await read($, planAtom)
   if (plan !== null && isAllVerified(plan)) await update($, isHiddenAtom, () => true)
@@ -1140,6 +1244,78 @@ function bandNote(word: string, failedTitle: string | null, isReviewing: boolean
   return ''
 }
 
+const EXTERNAL_ROWS = 6
+
+function workersText(native: number, external: number): string {
+  return `${native} native · ${external} external`
+}
+
+function usageRow(kit: Pick<Kit, 'Box' | 'Text'>, parts: readonly UsagePart[]) {
+  const { Box, Text } = kit
+  if (parts.length === 0) return null
+  return (
+    <Box key="usage" flexDirection="row" columnGap={2}>
+      {parts.map(part => (
+        <Text key={part.key} {...hueProps(part.hue)} wrap="truncate-end">
+          {part.text}
+        </Text>
+      ))}
+    </Box>
+  )
+}
+
+function externalDetail(row: HarnessExternalRow): string[] {
+  if (row.status === 'running') return [row.lastLine === '' ? 'starting' : row.lastLine]
+  if (row.status === 'failed') return [row.note ?? (row.lastLine === '' ? 'failed' : row.lastLine)]
+  return [
+    ...(row.patch === undefined ? [] : [`patch ${row.patch}`]),
+    ...(row.stat === undefined ? [] : [row.stat]),
+    ...(row.note === undefined ? [] : [row.note]),
+  ]
+}
+
+function externalSection(
+  kit: Pick<Kit, 'Box' | 'Text'>,
+  rows: readonly HarnessExternalRow[],
+  costs: Record<string, HarnessCost>,
+  now: number,
+  columns: number,
+) {
+  const { Box, Text } = kit
+  if (rows.length === 0) return null
+  const room = Math.max(10, columns - MARK_WIDTH - 4)
+  return (
+    <Box key="section-external" flexDirection="column" marginTop={1}>
+      <Box key="heading-external" flexDirection="row" columnGap={1}>
+        <Text bold>External</Text>
+        <Text dimColor>{String(rows.length)}</Text>
+      </Box>
+      {rows.slice(0, EXTERNAL_ROWS).map(row => {
+        const mark = ROW_MARK[row.status === 'running' ? 'running' : row.status === 'done' ? 'done' : 'failed']
+        const spent = duration((row.endedAt ?? now) - row.startedAt)
+        const cost = costText(costs[row.agentId])
+        return (
+          <Box key={`ext-${row.agentId}`} flexDirection="column">
+            <Box flexDirection="row" columnGap={1}>
+              <Text {...hueProps(mark.hue)}>{mark.glyph}</Text>
+              <Text wrap="truncate-end">{`${row.client} · ${externalModel(row)}`}</Text>
+              <Text dimColor>{spent}</Text>
+              <Box flexGrow={1} />
+              {cost.length > 0 && <Text dimColor wrap="truncate-end">{cost}</Text>}
+            </Box>
+            {externalDetail(row).map((line, index) => (
+              <Box key={`ext-${row.agentId}-${index}`} paddingLeft={MARK_WIDTH + 1}>
+                <Text dimColor wrap="truncate-end">{fit(line, room)}</Text>
+              </Box>
+            ))}
+          </Box>
+        )
+      })}
+      {rows.length > EXTERNAL_ROWS && <Text dimColor>{`+${rows.length - EXTERNAL_ROWS} more`}</Text>}
+    </Box>
+  )
+}
+
 function pctHue(word: string): Hue {
   if (word === 'all verified') return 'success'
   if (word === 'needs you') return 'warning'
@@ -1152,6 +1328,7 @@ export const register: Register = (on, options) => {
   const external = createExternal(maxMinutesOf(options.codexMaxMinutes))
   const gate = createGate()
   const reviewed = new Set<string>()
+  const ruled = new Set<string>()
   const runtime: ScopeRuntime = { receipt: newReceipt(), pending: null, warned: new Set() }
 
   registerPrGate(on, options)
@@ -1236,10 +1413,13 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     const agentId = e.agentId
-    if (agentId === undefined || options.codex !== true) return yield* next(e)
+    if (agentId === undefined) return yield* next(e)
     const ports = externalPorts($)
-    if ((await externalRole(ports, external, agentId)) === 'other') return yield* next(e)
-    return yield* externalStep(ports, external, e, agentId, next.signal, () => next.budget.remainingMs)
+    const isExternal = options.codex === true && (await externalRole(ports, external, agentId)) === 'codex'
+    const source = isExternal
+      ? externalStep(ports, external, e, agentId, next.signal, () => next.budget.remainingMs)
+      : next(e)
+    return yield* watchStep($, agentId, isExternal ? ports : null, source)
   }).catch(async function* ($, e, next) {
     if (next.called || e.agentId === undefined || options.codex !== true) return yield* next(e)
     if ((await externalRole(externalPorts($), external, e.agentId)) === 'other') return yield* next(e)
@@ -1251,6 +1431,11 @@ export const register: Register = (on, options) => {
       await attempt('claims reset', $, async () => {
         await update($, claimWarningsAtom, () => [])
         await update($, claimLogAtom, () => [])
+      })
+      await attempt('visual reset', $, async () => {
+        await update($, externalAtom, () => ({}))
+        await update($, costsAtom, () => ({}))
+        await update($, usageAtom, () => null)
       })
     }
     if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
@@ -1357,9 +1542,29 @@ export const register: Register = (on, options) => {
     return { result: text }
   }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_run: failed, see the debug log.' }))
 
-  on('tool.call', { tool: TOOL_STATUS }, async $ => ({ result: await statusText($) })).catch(($, e, next) =>
-    next.called ? next(e) : { result: 'harness_status: failed, see the debug log.' },
-  )
+  on('tool.call', { tool: TOOL_STATUS }, async ($, e) => {
+    const result = await statusText($)
+    const fresh = e.agentId === undefined && (await takeReviewerRule($, ruled))
+    return fresh ? { result, context: [REVIEWER_RULE] } : { result }
+  }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_status: failed, see the debug log.' }))
+
+  on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (ran.deny !== undefined || ran.isError === true) return ran
+    if (!isReviewerResult(e, ran.result)) return ran
+    const id = recordOf(ran.result)?.agentId
+    const key = typeof id === 'string' ? `agent:${id}` : e.tool_use_id === undefined ? null : `call:${e.tool_use_id}`
+    if (key !== null) {
+      if (ruled.has(key)) return ran
+      ruled.add(key)
+    }
+    return { ...ran, context: [...(ran.context ?? []), REVIEWER_RULE] } as typeof ran
+  }).catch(($, e, next) => next(e))
+
+  on('session.measure', async ($, e, next) => {
+    await attempt('usage', $, () => update($, usageAtom, () => usageOf(e.context, e.rateLimits)))
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
     if (e.agentId !== undefined) {
@@ -1375,6 +1580,13 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('codex cleanup', $, () => cleanupAgent(externalPorts($), external, agentId))
+      await attempt('external stop', $, async () => {
+        const now = await $.clock.now()
+        await update($, externalAtom, rows => {
+          const row = rows[agentId]
+          return row === undefined || row.status !== 'running' ? rows : { ...rows, [agentId]: stopExternal(row, now) }
+        })
+      })
       await attempt('turn complete', $, async () => {
         const cwd = await $.session.cwd()
         const outcome = await onWorkerTurnComplete($, gate, { agentId, answer: e.answer, reason: e.reason }, cwd)
@@ -1393,7 +1605,22 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const plan = await read($, planAtom)
     const isHidden = await read($, isHiddenAtom)
-    if (e.props.hasSurvey || plan === null || isHidden) return next(e)
+    const running = runningExternal(await read($, externalAtom))
+    if (e.props.hasSurvey || isHidden) return next(e)
+    if (plan === null) {
+      if (running === 0) return next(e)
+      const rendered = await next(e)
+      const { Box, Text } = $.ui.resolve(e)
+      const native = Object.keys(await read($, workersAtom)).length
+      return (
+        <Box key="external" flexDirection="column">
+          {rendered}
+          <Box paddingX={1}>
+            <Text key="workers" dimColor>{workersText(native, running)}</Text>
+          </Box>
+        </Box>
+      )
+    }
 
     const asks = await read($, needsYouAtom)
     const isReviewing = await read($, isReviewRunningAtom)
@@ -1450,6 +1677,7 @@ export const register: Register = (on, options) => {
             {note.length > 0 && <Text bold {...hueProps(state.hue)}>{note}</Text>}
             {elapsed.length > 0 && <Text dimColor>{elapsed}</Text>}
             {counts.approved > 0 && <Text dimColor>{`approved ${counts.approved}`}</Text>}
+            {running > 0 && <Text key="workers" dimColor>{workersText(workers.length, running)}</Text>}
             {isDesktop && cover({ Box, Button }, 'cover', toggle)}
           </Box>
           <Box flexDirection="row" columnGap={1} flexShrink={0}>
@@ -1486,6 +1714,10 @@ export const register: Register = (on, options) => {
     const cwd = await $.session.cwd()
     const isDesktop = e.surface === 'desktop'
     const isNarrow = columns < 60
+    const costs = await read($, costsAtom)
+    const externalRows = orderedExternal(await read($, externalAtom))
+    const externalBlock = externalSection({ Box, Text }, externalRows, costs, now, columns)
+    const usageBlock = usageRow({ Box, Text }, usageParts(await liveUsage($)))
 
     const onRun = async () => {
       await attempt('run ready', $, async () => {
@@ -1521,6 +1753,8 @@ export const register: Register = (on, options) => {
             {runButton}
             {refreshButton}
           </Box>
+          {externalBlock}
+          {usageBlock !== null && <Box marginTop={1}>{usageBlock}</Box>}
         </Box>
       )
     }
@@ -1566,6 +1800,11 @@ export const register: Register = (on, options) => {
       </Box>
     )
 
+    const spentOf = (agentId: string): string => {
+      const text = costText(costs[agentId])
+      return text === '' ? '' : ` · ${text}`
+    }
+
     const sessionRow = (task: HarnessTask) => {
       const isOpen = folds[task.id] ?? task.state === 'running'
       const toggle = () => update($, foldsAtom, current => ({ ...current, [task.id]: !isOpen }))
@@ -1579,9 +1818,13 @@ export const register: Register = (on, options) => {
           kv(
             task,
             'worker',
-            `${row.agentId.slice(0, 8)} · ${row.lastTool ?? 'starting'} · ${Math.max(0, Math.round((now - row.startedAt) / 1000))}s`,
+            `${row.agentId.slice(0, 8)} · ${row.lastTool ?? 'starting'} · ${Math.max(0, Math.round((now - row.startedAt) / 1000))}s${spentOf(row.agentId)}`,
           ),
         ),
+        ...([[task.agentId, 'tokens'], [task.reviewAgentId, 'review tokens']] as const).flatMap(([id, label]) => {
+          const text = id === undefined || own.some(row => row.agentId === id) ? '' : costText(costs[id])
+          return text === '' ? [] : [kv(task, label, text)]
+        }),
         ...(live && task.lastTool !== undefined ? [kv(task, 'tool', task.lastTool)] : []),
         ...(task.deps.length > 0 ? [kv(task, 'deps', `after ${task.deps.join(', ')}`)] : []),
         ...(task.reason.length > 0 ? [kv(task, 'reason', task.reason)] : []),
@@ -1707,6 +1950,7 @@ export const register: Register = (on, options) => {
         {section('approved', 'Approved', approvedRows)}
         {section('queued', 'Queued', queuedRows)}
         {section('done', 'Done', doneRows)}
+        {externalBlock}
 
         {scopeMode(options) !== 'off' && (
           <Box flexDirection="column" marginTop={1}>
@@ -1746,6 +1990,7 @@ export const register: Register = (on, options) => {
           )}
           {reviewLine !== null && <Text dimColor wrap="truncate">{fit(reviewLine, columns)}</Text>}
           <Text dimColor wrap="truncate">{fit(footer, columns)}</Text>
+          {usageBlock}
         </Box>
       </Box>
     )

@@ -119,6 +119,41 @@ export type ClaimWarning = {
   reason: string
 }
 
+export type HarnessUsageLimit = {
+  kind: 'five_hour' | 'seven_day'
+  percentUsed: number
+}
+
+export type HarnessUsage = {
+  tokens: number | null
+  window: number | null
+  percent: number | null
+  limits: HarnessUsageLimit[]
+}
+
+export type HarnessExternalStatus = 'running' | 'done' | 'failed'
+
+export type HarnessExternalRow = {
+  agentId: string
+  client: string
+  model: string | null
+  status: HarnessExternalStatus
+  startedAt: number
+  endedAt?: number
+  lastLine: string
+  patch?: string
+  stat?: string
+  note?: string
+}
+
+export type HarnessCost = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  steps: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     harness: {
@@ -137,6 +172,9 @@ declare module 'claude-code' {
       claimLog: ClaimEntry[]
       claimWarnings: ClaimWarning[]
       reviewIds: Record<string, HarnessReviewIdentity>
+      usage: HarnessUsage | null
+      external: Record<string, HarnessExternalRow>
+      costs: Record<string, HarnessCost>
     }
   }
 }
