@@ -1,4 +1,4 @@
-import { place, plain, safe } from "./text.js";
+import { pathText, place, safe } from "./text.js";
 import type { CouncilItem, CouncilSummary } from "./synth-types.js";
 import type { CouncilFinding, CouncilMemberResult, CouncilRun } from "./types.js";
 
@@ -18,7 +18,11 @@ const DETAIL_MAX = 300;
 const MESSAGE_MAX = 600;
 
 function quote(text: string, max: number): string {
-  return JSON.stringify(plain(text, max));
+  return JSON.stringify(safe(text, max));
+}
+
+function quotePath(text: string, max: number): string {
+  return JSON.stringify(pathText(text, max));
 }
 
 function where(finding: CouncilFinding): string {
@@ -32,7 +36,7 @@ function score(item: CouncilItem): string {
 
 function formatItem(item: CouncilItem, alsoDetail: boolean): string[] {
   const unchecked = item.contradictionChecked === false ? " [contradiction check unavailable]" : "";
-  const head = `- ${score(item)} [${item.members.join(", ")}] ${quote(item.location, LOCATION_MAX)} ${quote(item.text, TITLE_MAX * 2)}${unchecked}`;
+  const head = `- ${score(item)} [${item.members.join(", ")}] ${quotePath(item.location, LOCATION_MAX)} ${quote(item.text, TITLE_MAX * 2)}${unchecked}`;
   const lines = [head];
   const [lead, ...rest] = item.findings;
   if (lead?.detail) lines.push(`    detail: ${quote(lead.detail, DETAIL_MAX)}`);
@@ -86,7 +90,7 @@ export function formatCouncilSummary(summary: CouncilSummary, run: CouncilRun): 
   );
 
   if (summary.messages.length) {
-    lines.push("", "Notes on this summary", ...summary.messages.map((m) => `- ${plain(m, MESSAGE_MAX)}`));
+    lines.push("", "Notes on this summary", ...summary.messages.map((m) => `- ${safe(m, MESSAGE_MAX)}`));
   }
 
   if (run.ran && run.note) lines.push("", `Run note: ${safe(run.note, MESSAGE_MAX)}`);

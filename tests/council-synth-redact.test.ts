@@ -150,7 +150,7 @@ describe("council synthesis keeps locations and ordinary text", () => {
 describe("council summary hardening", () => {
   test("unknown severities are kept and treated as medium", async () => {
     const jev = fakeJev();
-    const odd = { ...finding("odd", "codex"), severity: "critical" as never };
+    const odd = { ...finding("odd", "codex"), severity: "weird" as never };
     const none = { ...finding("none", "kimi", { path: "src/n.ts" }), severity: undefined as never };
     const summary = await synthesize([odd, none, finding("ok", "antigravity", { path: "src/o.ts" })], { jev });
     expect(summary.unique.map((u) => u.text).sort()).toEqual(["none", "odd", "ok"]);
@@ -248,7 +248,7 @@ describe("council summary hardening", () => {
 
   test("findings scored on reduced text are reported", async () => {
     const jev = fakeJev();
-    const big = finding("A", "codex", { detail: "d".repeat(300), path: `src/${"a".repeat(150)}.ts` });
+    const big = finding("A", "codex", { detail: "q".repeat(300), path: `src/${"a".repeat(150)}.ts` });
     const out = await synthesize([big], { jev, limits: { maxChars: 450 } });
     expect(jev.calls.length).toBeGreaterThan(0);
     for (const call of jev.calls) expect(call.chars).toBeLessThanOrEqual(450);

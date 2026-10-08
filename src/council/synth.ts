@@ -2,7 +2,7 @@ import { choice, noul } from "@typesafe-ai/sdk";
 import { routingAnswersStatus } from "../routing/questions.js";
 import { resolveTypeSafeApiKey } from "../triage/client.js";
 import { JevError, ResilientJevClient } from "../triage/jev-client.js";
-import { place, plain, safe } from "./text.js";
+import { place, plain, safe, safeBlock, pathText } from "./text.js";
 import type { CouncilFinding, CouncilMemberName } from "./types.js";
 import type {
   CouncilItem,
@@ -66,14 +66,35 @@ function resolveLimits(partial: SynthOptions["limits"]): SynthLimits {
   };
 }
 
+const SEVERITY_ALIASES: Record<string, CouncilFinding["severity"]> = {
+  high: "high",
+  critical: "high",
+  blocker: "high",
+  major: "high",
+  error: "high",
+  medium: "medium",
+  warning: "medium",
+  moderate: "medium",
+  low: "low",
+  minor: "low",
+  info: "low",
+  nit: "low",
+  suggestion: "low",
+};
+
+export function normalizeSeverity(value: unknown): CouncilFinding["severity"] {
+  if (typeof value !== "string") return "medium";
+  return SEVERITY_ALIASES[value.trim().toLowerCase()] ?? "medium";
+}
+
 function sanitize(finding: CouncilFinding): CouncilFinding {
-  const severity = SEVERITIES.includes(finding.severity) ? finding.severity : "medium";
+  const severity = normalizeSeverity(finding.severity);
   const out: CouncilFinding = {
     member: finding.member,
-    path: plain(finding.path, 500),
+    path: pathText(finding.path, 500),
     severity,
     title: safe(finding.title, 2000),
-    detail: safe(finding.detail, 4000),
+    detail: safeBlock(finding.detail, 4000),
   };
   if (typeof finding.line === "number" && Number.isFinite(finding.line)) out.line = finding.line;
   return out;

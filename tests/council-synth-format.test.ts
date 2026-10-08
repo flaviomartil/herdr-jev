@@ -110,7 +110,7 @@ describe("formatCouncilSummary", () => {
   test("secrets are redacted from the formatted text", async () => {
     const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
     const summary = await synthesize(
-      [finding(`leaks ${secret} in src/${secret}.ts`, "codex", { detail: `token ${secret}` })],
+      [finding(`leaks ${secret}`, "codex", { detail: `token ${secret}`, path: `src/${secret}.ts` })],
       { jev: fakeJev() },
     );
     const out = formatCouncilSummary(summary, {
