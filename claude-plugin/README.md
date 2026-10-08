@@ -56,9 +56,43 @@ Limites conhecidos (falsos negativos aceitos pela regra de não avisar na dúvid
 - `sh -c "..."` depois de `docker compose run`, `watch` e `php bin/console lint:*` não são reconhecidos como evidência.
 - O Bash de um subagente rodando em outro worktree conta como evidência do loop principal, porque o mod não sabe em qual árvore ele rodou.
 
+## PR gate
+
+Quando um Bash vai criar ou atualizar um pull request, o mod anexa ao resultado da ferramenta o status do review do harness. Só contexto para o modelo: nunca nega a chamada, nunca reescreve o comando e não toca no resultado do motor além de acrescentar uma linha. Se o resultado volta `deny` ou `isError`, nada é acrescentado.
+
+Ordem que mantém o `ready`: commitar, revisar, abrir o PR. O harness revalida o review contra o snapshot atual do git e, confirmado em teste contra o `ai-harness` real em um diretório de estado temporário, um review `ready` vira `pending_verification` quando o conteúdo revisado é commitado ou quando aparece um arquivo novo não rastreado; revisar depois do commit continua `ready` ao trocar branch, remoto ou config. Quem lê o status também apaga a linha `ready` (a leitura reinicia a verificação), por isso o mod guarda o status do review e a hora e sabe dizer `stale`.
+
+Qual identidade é lida. O `herdr-jev review` grava o resultado sob um `session` gerado (`jev-review-<hex>`) e usa a raiz do git como `cwd`; a própria sessão do Claude zera sua identidade a cada chamada de ferramenta que não é leitura (inclui `git commit`). Por isso o gate não consulta a sessão do Claude. O mod guarda `client`, `session`, `cwd`, status e hora de cada review, por raiz de repositório, de três origens: `/harness review`, o botão `Refresh review` e `autoReview`; e um `herdr-jev review` rodado pelo modelo em um Bash (com ou sem `--json`, também atrás de `rtk -u`, `timeout`, `env` etc.), lido do resultado da própria chamada (`Review session <id> (<client>) in <cwd>` e a última linha `Status: ...`, ou o relatório JSON). Uma execução que falhou ou cuja saída não pode ser lida não é guardada. O gate chama `ai-harness review-status --client <client> --session <session> --cwd <raiz>` com a identidade guardada para a raiz do repositório do PR.
+
+Onde fica. Em `harness.reviewIds` (estado do Claude Code, que sobrevive a um reload do código do mod e se perde com a sessão) e, como o plano, em `$.store` sob `reviewIds:<id da sessão>`: o gate lê o estado e, se ele estiver vazio, o `$.store`. Um review rodado em outro processo ou terminal fora da sessão, ou depois de a sessão mudar de id, não é encontrado; o gate não adivinha sessões. Um `herdr-jev review && gh pr create` na mesma linha lê o status antes de o review rodar.
+
+Status possíveis e o aviso:
+- `ready`: `Review status read before the PR command for <raiz>: ready.`
+- `stale`: havia um review `ready` guardado e o harness agora devolve `pending_verification`. O aviso diz a hora do último `ready`, que o checkout mudou (um commit ou um arquivo novo não rastreado conta) e a ordem commit, review, PR. Nunca diz que não há review.
+- `none`: o mod não tem review guardado para o repositório. Diz só isso e como produzir um: `herdr-jev review` em um shell (achado por este check) ou `/harness review`; se o PR é de outro checkout, nomeia o checkout e manda rodar `cd <raiz> && herdr-jev review` lá, porque `/harness review` revisa a pasta da sessão.
+- `pending_verification`, `pending_review`, `changes_required`: diz que não há review independente pronto e a ordem commit, review, PR.
+- `unknown`: só diz que o status não pôde ser lido.
+
+O que é detectado, só quando o shell de fato executaria. O comando é lido por um lexer de passagem única (aspas, `\` + quebra de linha, comentários, heredocs com vários marcadores por linha, `<<<`, `$(...)`, `$((...))` e `((...))`, crases, definições de função e atribuições de array, que não executam) e cada comando simples é analisado depois de pular atribuições de ambiente e wrappers (`env`, `sudo`, `timeout`, `nice`, `ionice`, `xargs`, `rtk`, `rtk -u`, `rtk proxy`, `command`, `exec`, `nohup`, `setsid`, `stdbuf`, `if`, `while !`, `then`, `do`):
+
+- GitHub: `gh pr create|new|edit|ready` (com `-R/--repo` antes ou depois de `pr`), `gh api` com método de escrita em `repos/<o>/<r>/pulls[/<n>]`, `curl`/`http`/`wget` de escrita em `https://api.github.com/repos/<o>/<r>/pulls[/<n>]` ou em um host Enterprise com `/api/v3/`.
+- Azure DevOps: `az repos pr create|update`; `curl`/`http`/`wget` de escrita em `.../_apis/git/repositories/<repo>/pullrequests[/<id>]`, ou numa base em variável (`${API_BASE}/git/repositories/${REPO}/pullrequests`, o formato do skill de PR do InvoiceCon). O casamento vale só para o operando URL (sem espaço, começando por `http(s)://` ou por uma variável), nunca para o valor de `-d`, `-H` ou item httpie; com host literal exige `/_apis/`. Escrita é `-X/--request POST|PATCH|PUT`, `--method`, ou dados (`-d`, `-d@arquivo`, `--data*`, `--json`, `-F`, `--post-data`, itens `chave=valor` do httpie; `chave==valor` é consulta) sem `-G`. GET nunca casa; comentários em `.../pullrequests/<id>/threads` também não.
+- Fora: `git push`, heredocs, texto entre aspas, comentários, `echo`, `--help`/`-h`, `--dry-run`, `gh pr ready --undo`, definição de função e `cmd=(gh pr create)`. `--web` conta como criação, de propósito.
+- Bitbucket fica de fora: não existe CLI `bb` aqui.
+
+Limites declarados, não seguidos: `bash -c '...'`, `sh -c`, `eval`, heredoc entregue a um shell, alias do `gh`, `az devops invoke`, `curl` com a URL montada em variável de comando, mutações GraphQL, a chamada de uma função de shell que contém o comando, expansão aritmética com mais de 512 caracteres.
+
+Diretório. Só um `cd <literal> &&` simples e inicial é seguido. Qualquer outra forma (`cd a; ...`, `cd a` em linha própria, `(cd a && ...)`, `pushd`, `cd` no meio da cadeia, `cd -P`, `cd --`, espaço escapado, `FOO=1 cd`, dois `cd`, `cd a || ...`, `cd $VAR`) dá status `unknown`, nunca o diretório da sessão. O diretório vira a raiz do git (`git rev-parse --show-toplevel`) e aparece no aviso. Também dá `unknown`: `--repo/-R` ou `--repository` que não bate com um remoto do checkout; um repositório vindo de variável (`${REPO}`: "repository comes from a variable"); `GH_REPO=` no comando; `gh pr create --head` ou `-H`; `gh pr edit|ready` com número, URL ou argumento posicional, `az repos pr update --id` e PATCH por REST, que miram um PR que pode não ser a mudança revisada aqui. `{owner}/{repo}` em `gh api` é este checkout. Qualquer falha de leitura (processo, JSON inválido, objeto sem `status`, status fora de `^[a-z_]{1,40}$`) vira `unknown` e o comando roda mesmo assim. Só o `null` de topo é `none`. A causa mostrada é uma frase fixa; nada de stderr é repetido.
+
+Atraso. A raiz do git e os remotos são lidos em paralelo, 2 s cada; o status tem 5 s. Pior caso: 7 s (2 s de git + 5 s de status), contra 15 s antes (três leituras em série de 5 s).
+
+Custo do detector: linear no tamanho do comando (lexer de passagem única; aninhamento de `$(` limitado a 48 níveis; a busca do fim de `((` olha no máximo 512 caracteres por ocorrência); o teste lê 400 KB entre aspas, 60 mil `<<`, 20 mil `$(` e 150 mil `((` em poucos segundos no total.
+
+`prGateAsk` (padrão `false`). Ligado, quando o status é conhecido e não é `ready` (`none`, `stale`, `pending_*`, `changes_required` perguntam; `unknown` e `ready` não), o hook `tool.check` troca um `allow` do motor por `{ decision: 'ask', reason }` (objeto limpo, sem `rule`/`hook`); um `deny` ou um `ask` do motor passam como vieram. A chamada fica marcada pelo `tool_use_id` enquanto o `tool.call` está em curso e é solta no `finally`. Coberto por teste: pergunta só para o id em curso, não para outro id nem sem id, não depois do retorno e nunca com a opção desligada. Não verificado sem uma sessão real: que o motor dispara `tool.check` dentro do `next(e)` com o mesmo `tool_use_id`; que em `dontAsk` ou headless um `ask` de hook é recusado, o que na prática vira `deny`; e o que `next(e)` devolve depois que a pessoa responde Não. Por isso fica desligado. Não existe modo `deny`.
+
 ## Créditos
 
-Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions), shimo4228/harness-scope (mecanismo do Scope) e pourya7/claude-code-mods anti-cheat (detecção de afirmações e classificação de evidência do Claims).
+Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions), shimo4228/harness-scope (mecanismo do Scope), pourya7/claude-code-mods anti-cheat (detecção de afirmações e classificação de evidência do Claims) e pourya7/claude-code-mods `co-op` (MIT, Copyright (c) 2026 Pourya: o tratamento de aspas, heredoc e substituição de comando, o prefixo de comando e o `cd` inicial do PR gate, reescritos aqui como lexer; ver `NOTICE`).
 
 ## Como carregar
 
@@ -139,6 +173,7 @@ O hook `tool.call` atribui as chamadas de ferramenta de um subagente ao worker p
 - `autoRun` (padrão `true`): `harness_plan` e cada tarefa liquidada iniciam sozinhos as tarefas prontas.
 - `scopeMode` (padrão `enforce`), `runbook` (vazio), `alwaysAllowSkills` e `alwaysAllowAgents`: ver a seção Scope.
 - `autoReview` (padrão `false`): dispara o review do harness uma vez quando tudo está `done` ou `approved` e há ao menos uma `approved`.
+- `prGateAsk` (padrão `false`): ver PR gate.
 
 ## Limites conhecidos
 
