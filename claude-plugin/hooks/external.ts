@@ -257,10 +257,11 @@ export type External = {
   maxMinutes: number
   tail: Promise<void>
   others: Set<string>
+  settled: Map<string, string>
 }
 
 export function createExternal(maxMinutes = 30): External {
-  return { progressTool: PROGRESS_TOOL, agentRegistered: false, maxMinutes, tail: Promise.resolve(), others: new Set() }
+  return { progressTool: PROGRESS_TOOL, agentRegistered: false, maxMinutes, tail: Promise.resolve(), others: new Set(), settled: new Map() }
 }
 
 export function maxMinutesOf(value: unknown): number {
@@ -746,6 +747,8 @@ export async function settleWorkspace(ports: Ports, ext: External, ws: Workspace
   return exclusive(ext, async () => {
     const kept = (why: string) =>
       `Could not build the patch (${clip(why, 200)}). The throwaway copy was kept at ${ws.dir}; nothing was applied to ${ws.repo}.`
+    const already = ext.settled.get(ws.dir)
+    if (already !== undefined) return already
     if (!insideRuns(ws)) return kept('the run directory is outside the state directory')
     const restored = await runSh(ports, SCRIPTS.copy, [ws.pristine, `${ws.work}/.git`])
     if (restored.exitCode !== 0) return kept('could not restore the pristine git directory')
@@ -755,7 +758,9 @@ export async function settleWorkspace(ports: Ports, ext: External, ws: Workspace
     if (!stat.ok) return kept(stat.err || 'git diff failed')
     if (stat.out === '') {
       await removeDir(ports, ws)
-      return 'Codex made no changes; the throwaway copy was removed.'
+      const none = 'Codex made no changes; the throwaway copy was removed.'
+      ext.settled.set(ws.dir, none)
+      return none
     }
     const made = await runSh(ports, SCRIPTS.mkdir, [ws.patch.slice(0, ws.patch.lastIndexOf('/'))])
     if (made.exitCode !== 0) return kept('could not create the patch directory')
@@ -766,13 +771,15 @@ export async function settleWorkspace(ports: Ports, ext: External, ws: Workspace
     )
     if (!patch.ok) return kept(patch.err || 'git diff --binary failed')
     await removeDir(ports, ws)
-    return [
+    const report = [
       `Patch (mode 0600): ${ws.patch}`,
       `Check it first with: git -C ${quote(ws.repo)} apply --stat --check ${quote(ws.patch)}`,
       `Then apply it with: git -C ${quote(ws.repo)} apply ${quote(ws.patch)}`,
       `The patch was computed against HEAD ${ws.head.slice(0, 7)}; uncommitted work was not in the copy and is excluded. It may add files and symlinks, so read the --stat output before applying. Nothing was applied to ${ws.repo}.`,
       `git diff --stat:\n${clip(stat.out, STAT_LIMIT)}`,
     ].join('\n')
+    ext.settled.set(ws.dir, report)
+    return report
   })
 }
 
