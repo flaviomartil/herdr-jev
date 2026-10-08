@@ -31,7 +31,7 @@ import {
 } from '../hooks/external'
 import type { AgentState, CodexEvent, External, Ports, RunInit, StateEnv } from '../hooks/external'
 import { EDIT, FAILED, READ } from './fixtures/codex'
-import { CWD, finish, wire } from './support'
+import { BAND_PROPS, CWD, finish, makePlan, PANE_PROPS, runTask, wire } from './support'
 import type { Seen } from './support'
 
 const PROGRESS = 'mcp__harness__codex_progress'
@@ -1192,4 +1192,243 @@ test('the launcher and kill scripts avoid constructs the system sh rejects', () 
   expect(SCRIPTS.start).toContain('setsid')
   expect(SCRIPTS.start).toContain('umask 077')
   expect(SCRIPTS.start).not.toContain('eval')
+})
+
+const paneOf = ($: Engine, columns = PANE_PROPS.bodyColumns) =>
+  $.ui.mount({ plugin: 'harness', surface: 'terminal', component: 'Pane', requestId: 'harness', props: { ...PANE_PROPS, bodyColumns: columns } })
+
+const bandOf = ($: Engine) =>
+  $.ui.mount({ plugin: 'harness', surface: 'terminal', component: 'AbovePrompt', props: BAND_PROPS })
+
+const linesFor = (events: object[]): string[] => events.map(event => JSON.stringify(event))
+
+const THREAD_LINE = { type: 'thread.started', thread_id: '01a118dc-ab47-7000-aaf3-6b7134d87795' }
+
+const message = (id: string, text: string) => ({ type: 'item.completed', item: { id, type: 'agent_message', text } })
+
+const IDLE = () => Array.from({ length: 80 }, () => [] as string[])
+
+const externalState = (seen: Seen) =>
+  (seen.state.get('harness.external') as Record<string, Record<string, unknown>> | undefined) ?? {}
+
+test('a running codex run is a pane row with client, unconfirmed model, elapsed time and the last streamed line', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...READ.slice(0, 5)], ...IDLE()]
+  await startEngine($)
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+
+  expect(externalState(seen)[agentId]).toMatchObject({ client: 'codex', model: null, status: 'running', lastLine: '▸ cat note.txt' })
+  const ui = await paneOf($)
+  expect(await ui.find({ type: 'Text', text: 'External' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'codex · unconfirmed' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: '▸ cat note.txt' }))?.props.dimColor).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /^\d+s$/ })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: '●' }))?.props.color).toBe('claude')
+  await ui.unmount()
+})
+
+test('the streamed line is stripped of control characters and trimmed to the pane width', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [
+    linesFor([
+      THREAD_LINE,
+      message('i1', 'working \u001b[31mred\u001b[0m\u0007 bell\r\u202e'),
+      message('i2', 'next'),
+    ]),
+    ...IDLE(),
+  ]
+  await startEngine($)
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+  expect(externalState(seen)[agentId]?.lastLine).toBe('working red bell')
+  const clean = await paneOf($)
+  expect(await clean.find({ type: 'Text', text: 'working red bell' })).toBeDefined()
+  await clean.unmount()
+
+  const long = 'x'.repeat(200)
+  const later = installEngineLines(fake, [message('i3', long), message('i4', 'tail')])
+  await engineStep($, seen, agentId, 1)
+  expect(later).toBe(2)
+  const narrow = await paneOf($, 40)
+  const trimmed = await narrow.find({ type: 'Text', text: /^x+…$/ })
+  expect(trimmed?.text.length).toBe(34)
+  await narrow.unmount()
+})
+
+function installEngineLines(fake: Fake, events: object[]): number {
+  fake.batches = [linesFor(events), ...IDLE()]
+  return events.length
+}
+
+test('a finished run shows the patch path and the diff stat summary and the elapsed time stops', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...EDIT]]
+  fake.stat = ' hello.txt | 1 +\n 1 file changed, 1 insertion(+)'
+  await startEngine($)
+  const { agentId = '' } = await spawnCodex($, 'Create hello.txt')
+  const done = await engineStep($, seen, agentId)
+  expect(done.result.stopReason).toBe('end_turn')
+
+  const row = externalState(seen)[agentId]
+  expect(row).toMatchObject({ status: 'done', model: null, stat: '1 file changed, 1 insertion(+)' })
+  expect(String(row?.patch)).toMatch(/^\/state\/codex-patches\/agent.*\.patch$/)
+  expect(row?.lastLine).toBe('▸ add /work/demo/cx2/hello.txt')
+  const ui = await paneOf($)
+  expect(await ui.find({ type: 'Text', text: 'codex · unconfirmed' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^patch \/state\/codex-patches\/agent.*\.patch$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '1 file changed, 1 insertion(+)' })).toBeDefined()
+  expect((await ui.find({ type: 'Text', text: '✓' }))?.props.color).toBe('success')
+  await ui.unmount()
+
+  await finish($, agentId, 'done')
+  await seen.clock.settle()
+  expect(seen.saved.has(`${SELF}${agentId}`)).toBe(false)
+  expect(externalState(seen)[agentId]).toMatchObject({ status: 'done' })
+  const shown = await paneOf($)
+  expect(await shown.find({ type: 'Text', text: '1 file changed, 1 insertion(+)' })).toBeDefined()
+  await shown.unmount()
+})
+
+test('the model is the one the run reports and the follow-up refusal never rewrites a finished row', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...READ]]
+  fake.rollout = JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-sol' } })
+  await startEngine($)
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+  expect(externalState(seen)[agentId]).toMatchObject({ status: 'done', model: 'gpt-6.1-sol', stat: 'no changes' })
+  const before = JSON.stringify(externalState(seen)[agentId])
+  await engineStep($, seen, agentId, 1)
+  expect(JSON.stringify(externalState(seen)[agentId])).toBe(before)
+  const ui = await paneOf($)
+  expect(await ui.find({ type: 'Text', text: 'codex · gpt-6.1-sol' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'no changes' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a refused or aborted run is a failed row and a turn that ends mid-run stops the row', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = IDLE()
+  await startEngine($)
+  const refused = await spawnCodex($, 'codex-model: bad model!\nRead note.txt')
+  await engineStep($, seen, refused.agentId ?? '')
+  expect(externalState(seen)[refused.agentId ?? '']).toMatchObject({ status: 'failed' })
+  expect(String(externalState(seen)[refused.agentId ?? '']?.note)).toContain('harness:codex did not run:')
+
+  const live = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, live.agentId ?? '')
+  expect(externalState(seen)[live.agentId ?? '']).toMatchObject({ status: 'running' })
+  await finish($, live.agentId ?? '', '', 'aborted')
+  await seen.clock.settle()
+  expect(externalState(seen)[live.agentId ?? '']).toMatchObject({ status: 'failed', note: 'stopped before it finished' })
+
+  const ui = await paneOf($)
+  expect(await ui.find({ type: 'Text', text: 'stopped before it finished' })).toBeDefined()
+  expect((await ui.findAll({ type: 'Text', text: /^!$/ })).every(one => one.props.color === 'error')).toBe(true)
+  await ui.unmount()
+})
+
+test('codex usage is counted per agent and shown on its row', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [
+    linesFor([
+      { ...THREAD_LINE, model: 'gpt-x' },
+      message('i1', 'ok'),
+      { type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 400, cache_write_input_tokens: 0, output_tokens: 49 } },
+    ]),
+  ]
+  await startEngine($)
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+  expect((seen.state.get('harness.costs') as Record<string, unknown>)[agentId]).toEqual({
+    input: 600,
+    output: 49,
+    cacheRead: 400,
+    cacheWrite: 0,
+    steps: 1,
+  })
+  const ui = await paneOf($)
+  expect(await ui.find({ type: 'Text', text: 'in 600 out 49 cache 400' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: 'codex · gpt-x' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the band counts running external workers beside the native ones, only when there are any, and claims still wraps it', { options: { codex: true, autoRun: false } }, async ($, on) => {
+  on('tool.call', { tool: 'Edit' }, () => ({ result: {} }))
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...READ.slice(0, 5)], ...IDLE()]
+  await startEngine($)
+  await makePlan($, { objective: 'Ship it', tasks: [{ title: 'Add parser' }] })
+
+  const none = await bandOf($)
+  expect(await none.find({ type: 'Text', text: 'Add parser' })).toBeDefined()
+  expect(await none.find({ type: 'Text', text: /\d+ native · \d+ external/ })).toBeUndefined()
+  await none.unmount()
+
+  await runTask($)
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+  await $.tool.call({ tool: 'Edit', file_path: `${CWD}/src/a.ts`, old_string: 'a', new_string: 'b' })
+  await $.turn.complete({ answer: 'All tests pass.', durationMs: 10, isAborted: false, turnId: 'turn-claims', reason: 'answer' })
+
+  const ui = await bandOf($)
+  expect((await ui.find({ type: 'Text', text: /\d+ native · \d+ external/ }))?.text).toBe('1 native · 1 external')
+  expect(await ui.find({ type: 'Text', text: 'Add parser' })).toBeDefined()
+  const claims = await ui.find({ type: 'Box', key: 'claims' })
+  expect(claims).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /unverified: "All tests pass"/ })).toBeDefined()
+  await ui.unmount()
+
+  await finish($, agentId, 'done', 'aborted')
+  await seen.clock.settle()
+  const after = await bandOf($)
+  expect(await after.find({ type: 'Text', text: /\d+ native · \d+ external/ })).toBeUndefined()
+  await after.unmount()
+})
+
+test('without a plan the band only adds the count line while an external worker runs', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...READ.slice(0, 5)], ...IDLE()]
+  await startEngine($)
+
+  const idle = await bandOf($)
+  expect(await idle.find({ type: 'engine' })).toBeDefined()
+  expect(await idle.find({ type: 'Text', text: /\d+ native · \d+ external/ })).toBeUndefined()
+  await idle.unmount()
+
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+  const busy = await bandOf($)
+  expect(await busy.find({ type: 'engine' })).toBeDefined()
+  expect((await busy.find({ type: 'Text', text: /\d+ native · \d+ external/ }))?.text).toBe('0 native · 1 external')
+  await busy.unmount()
+
+  const survey = await $.ui.mount({ plugin: 'harness', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, hasSurvey: true } })
+  expect(await survey.find({ type: 'Text', text: /\d+ native · \d+ external/ })).toBeUndefined()
+  await survey.unmount()
+})
+
+test('/clear drops the external rows, the costs and the pushed usage', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...READ.slice(0, 5)], ...IDLE()]
+  await startEngine($)
+  const { agentId = '' } = await spawnCodex($, 'Read note.txt')
+  await engineStep($, seen, agentId)
+  await $.session.measure({ context: { tokens: 5, window: 10, percent: 50 }, rateLimits: [], changed: ['context'] })
+  expect(Object.keys(externalState(seen))).toEqual([agentId])
+  await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
+  await seen.clock.settle()
+  expect(externalState(seen)).toEqual({})
+  expect(seen.state.get('harness.costs')).toEqual({})
+  expect(seen.state.get('harness.usage')).toBeNull()
 })
