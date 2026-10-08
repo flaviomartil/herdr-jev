@@ -38,6 +38,7 @@ import {
   shortModel,
   summarize,
 } from './plan'
+import { registerPrGate } from './pr-gate'
 import type { Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
 import {
   agentReason,
@@ -1063,6 +1064,8 @@ export const register: Register = (on, options) => {
   const gate = createGate()
   const reviewed = new Set<string>()
   const runtime: ScopeRuntime = { receipt: newReceipt(), pending: null, warned: new Set() }
+
+  registerPrGate(on, options)
 
   on('session.start', async ($, e, next) => {
     await attempt('register command', $, () =>
