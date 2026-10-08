@@ -27,7 +27,7 @@ import {
 import { resolveStageSpec } from "./pipelines/matrix.js";
 import { resolveRoleMatrix } from "./pipelines/roles.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
-import { checkHarnessStatus, externalRun, harnessCommand, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
+import { checkHarnessStatus, externalRun, harnessCommand, harnessModelCatalog, listHarnessRuns, readUsageQuota, resolveHarnessDelegation } from "./harness/bridge.js";
 import { detectVerifyCommand, formatReviewReport, runReview } from "./harness/review.js";
 import { DEFAULT_PROVE_TIMEOUT_MS, formatProveReport, readCommandJson, runProve } from "./harness/prove.js";
 import { exitAfterFlush, parsePipelineCouncilMode, parseReviewCouncilMode, renderReview, runCouncilCommand, startAutoCouncilAlongside, startCouncilAlongside, trackShutdownSignals, type CouncilAlongside, type ShutdownTracker } from "./council/command.js";
@@ -306,6 +306,7 @@ program
     console.log(`Triage: ${plan.triage.complexity.toUpperCase()} (effort: ${plan.triage.effort}, research: ${plan.spawnResearchSubagent})`);
     console.log(`Harness: ${JSON.stringify(plan.delegation)}`);
     console.log(`Executable stages: ${plan.executionStages?.map((stage) => `${stage.role}:${stage.client ?? plan.client}/${stage.model}`).join(", ") || "direct in current session"}`);
+    if (plan.consultStage) console.log(`Consult first (read-only, advisor decides): ${plan.consultStage.client ?? plan.client}/${plan.consultStage.model} (effort: ${plan.consultStage.effort})`);
     console.log(`Advisory stages (${plan.stages.length}, not launch authorization):`);
     plan.stages.forEach((stage, idx) => {
       const stageClient = (stage.client ?? plan.client).toUpperCase();
@@ -313,6 +314,34 @@ program
     });
     console.log(`Research Subagent: ${plan.spawnResearchSubagent ? "Enabled" : "Disabled"}`);
     console.log(`Auto-Improvement Hook: ${plan.autoImprovement ? "Enabled" : "Disabled"}\n`);
+  });
+
+program
+  .command("delegation-plan")
+  .description("Print the AI Harness delegation decision, including any read-only consult stage, without triage or launch")
+  .requiredOption("-c, --client <client>", "Advisor client")
+  .option("--model <id>", "Exact current advisor model ID")
+  .option("--available-models <ids>", "Verified available exact model IDs, comma-separated")
+  .option("--complexity <level>", "Task complexity: trivial, routine, moderate or architectural")
+  .option("--effort <level>", "Requested effort: standard, high or xhigh")
+  .option("--simple", "Treat the work as simple")
+  .option("-j, --json", "Output raw JSON")
+  .action((options: { client: string; model?: string; availableModels?: string; complexity?: string; effort?: string; simple?: boolean; json?: boolean }) => {
+    const decision = resolveHarnessDelegation(options.client, options.simple !== true, {
+      model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean),
+      complexity: options.complexity, effort: options.effort,
+    });
+    if (options.json) {
+      console.log(JSON.stringify(decision));
+      return;
+    }
+    if (decision.mode === "direct") {
+      console.log(`Direct: ${decision.reason}`);
+      return;
+    }
+    console.log(`Profile: ${decision.profile.id}${decision.profile.route ? ` (route ${decision.profile.route})` : ""}`);
+    if (decision.consult) console.log(`Consult first (read-only, advisor decides): ${decision.consult.model}${decision.consult.effort ? `/${decision.consult.effort}` : ""}`);
+    console.log(`Executor: ${decision.profile.executor.model}; reviewer: ${decision.profile.reviewer.model}`);
   });
 
 program

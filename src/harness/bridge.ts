@@ -167,11 +167,12 @@ export interface DelegationInput {
   availableClients?: string[];
 }
 
+export type HarnessStage = { model: string; client?: string; cliModel?: string; effort?: StageEffort };
+
 export type HarnessDecision = { mode: "direct"; reason: string } | {
   mode: "delegate";
-  profile: { id: string; client: string; advisor: string; route?: string;
-    executor: { model: string; client?: string; cliModel?: string; effort?: StageEffort };
-    reviewer: { model: string; client?: string; cliModel?: string; effort?: StageEffort } };
+  profile: { id: string; client: string; advisor: string; route?: string; executor: HarnessStage; reviewer: HarnessStage };
+  consult?: HarnessStage;
 };
 
 function validStage(value: any): boolean {
@@ -186,7 +187,10 @@ function parseDecision(value: any): HarnessDecision | null {
   const profile = value.profile;
   if (value.mode === "delegate" && profile && typeof profile === "object" && typeof profile.id === "string" && typeof profile.client === "string"
     && typeof profile.advisor === "string" && (profile.route === undefined || typeof profile.route === "string")
-    && validStage(profile.executor) && validStage(profile.reviewer)) return value as HarnessDecision;
+    && validStage(profile.executor) && validStage(profile.reviewer)) {
+    const { consult, ...decision } = value;
+    return (validStage(consult) ? { ...decision, consult } : decision) as HarnessDecision;
+  }
   return null;
 }
 

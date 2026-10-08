@@ -1,8 +1,8 @@
 import type { AgentSpawnArgs, AgentSpawnResult, EngineInterface } from 'claude-code'
 
-import type { HarnessPlan, HarnessRoleTable, HarnessTask, HarnessTaskState, HarnessVerdict } from '../types'
+import type { HarnessConsult, HarnessPlan, HarnessRoleTable, HarnessTask, HarnessTaskState, HarnessVerdict } from '../types'
 import type { RunPort } from './cli'
-import { claudeEffort, fit, modelRoleOf, parseNeedsYou, parseVerdict, spawnModelOf } from './plan'
+import { claudeEffort, CONSULT_REPORT_LIMIT, fit, modelRoleOf, parseNeedsYou, parseVerdict, spawnModelOf } from './plan'
 import type { AgentKind } from './plan'
 
 export type AgentSpec = Parameters<EngineInterface['agent']['register']>[0]
@@ -107,6 +107,87 @@ export function agentSpec(kind: AgentKind, spawnModel: string, effort: string | 
     return { ...common, tools: MECHANIC_TOOLS, disallowedTools: NO_HARNESS_CONTROL }
   }
   return { ...common, disallowedTools: NO_HARNESS_CONTROL }
+}
+
+const CONSULT_KIND = 'consultant'
+
+const CONSULT_PROMPT =
+  'You are the harness consultant. You advise the coordinating session before any implementation starts. Work strictly read-only: read the repository with Read, Glob and Grep, never edit, create or run anything and never spawn agents. Answer with a short recommendation in three parts: decomposition (bounded tasks with owned paths), risks (what can break and how to check it) and order (what to do first and what can run in parallel). The coordinating session decides whether to follow it.'
+
+export function consultSpec(spawnModel: string, effort: string | undefined): AgentSpec {
+  return {
+    name: CONSULT_KIND,
+    description: 'Harness consultant: read-only recommendation before implementation. Spawned by the harness mod only.',
+    prompt: CONSULT_PROMPT,
+    model: spawnModel,
+    ...(effort === undefined ? {} : { effort }),
+    tools: READ_ONLY_TOOLS,
+    disallowedTools: [...NO_EDIT, ...NO_HARNESS_AT_ALL],
+  }
+}
+
+export function buildConsultPrompt(plan: HarnessPlan, task: HarnessTask): string {
+  const paths = task.paths.length === 0 ? '- none declared' : task.paths.map(path => `- ${path}`).join('\n')
+  const checks = task.checks.length === 0 ? '- none declared' : task.checks.map(check => `- ${check}`).join('\n')
+  return [
+    `Objective: ${plan.objective}`,
+    `Task ${task.id}: ${task.title}`,
+    '',
+    'Owned paths:',
+    paths,
+    '',
+    'Acceptance checks:',
+    checks,
+    '',
+    'Recommend a decomposition, the main risks and the order of work for this task. Read only; do not implement anything.',
+  ].join('\n')
+}
+
+export async function launchConsult(
+  ports: LaunchPorts,
+  gate: Gate,
+  plan: HarnessPlan,
+  task: HarnessTask,
+  consult: Pick<HarnessConsult, 'cliModel' | 'effort'>,
+  cwd: string,
+): Promise<SpawnOutcome> {
+  const spawnModel = spawnModelOf(consult.cliModel)
+  if (spawnModel === null) return { ok: false, reason: `model ${consult.cliModel} has no Claude Code alias` }
+  const effort = claudeEffort(consult.effort)
+  return exclusive(gate, async (): Promise<SpawnOutcome> => {
+    const key = registrationKey(spawnModel, effort)
+    if (gate.registered.get(CONSULT_KIND) !== key) {
+      try {
+        await ports.register(consultSpec(spawnModel, effort))
+        gate.registered.set(CONSULT_KIND, key)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { ok: false, reason: `agent type ${CONSULT_KIND} not registered: ${message.slice(0, 160)}` }
+      }
+    }
+    try {
+      const spawned = await ports.spawn({
+        subagentType: `harness:${CONSULT_KIND}`,
+        prompt: buildConsultPrompt(plan, task),
+        description: fit(`consult: ${task.title}`, 60),
+        cwd,
+        model: spawnModel,
+      })
+      if (spawned.deny !== undefined) return { ok: false, reason: spawned.deny }
+      if (spawned.agentId === undefined) return { ok: false, reason: 'spawn returned no agent id' }
+      return { ok: true, agentId: spawned.agentId }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      return { ok: false, reason: message.slice(0, 160) }
+    }
+  })
+}
+
+export function decideConsultTurn(turn: CompletedTurn): Pick<HarnessConsult, 'state' | 'report' | 'note'> {
+  const report = turn.answer.trim()
+  if (turn.reason !== 'answer') return { state: 'failed', note: `consult turn ended: ${turn.reason}` }
+  if (report.length === 0) return { state: 'failed', note: 'consult gave no recommendation' }
+  return { state: 'done', report: fit(report, CONSULT_REPORT_LIMIT) }
 }
 
 export function createGate(): Gate {

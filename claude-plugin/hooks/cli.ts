@@ -1,7 +1,7 @@
 import type { PluginOptions, ProcessRunInit, ProcessRunResult } from 'claude-code'
 
-import { normalizeModels, normalizeReview, normalizeTriage } from './plan'
-import type { ReviewResult, TriageResult } from './plan'
+import { normalizeConsult, normalizeModels, normalizeReview, normalizeTriage } from './plan'
+import type { ConsultTarget, ReviewResult, TriageResult } from './plan'
 import type { HarnessRoleTable } from '../types'
 
 export type CliResult<T> = { ok: true; value: T } | { ok: false; reason: string; timedOut?: boolean }
@@ -118,6 +118,23 @@ export async function runModels(
   if (!ran.ok) return ran
   const table = normalizeModels(ran.value)
   return table === null ? { ok: false, reason: 'models list output has no roles' } : { ok: true, value: table }
+}
+
+export function availableModels(sessionModel: string, roles: HarnessRoleTable | null): string[] {
+  const listed = roles === null ? [] : Object.values(roles).map(entry => entry?.cliModel)
+  return [...new Set([sessionModel, ...listed].filter((one): one is string => typeof one === 'string' && one.length > 0))]
+}
+
+export async function runConsultPlan(
+  run: RunPort,
+  config: CliConfig,
+  input: { model: string; complexity: string; availableModels: readonly string[] },
+): Promise<CliResult<ConsultTarget | null>> {
+  const argv = ['delegation-plan', '--client', 'claude', '--model', input.model, '--complexity', input.complexity]
+  if (input.availableModels.length > 0) argv.push('--available-models', input.availableModels.join(','))
+  const ran = await runJson(run, config, [...argv, '--json'], QUICK_TIMEOUT_MS)
+  if (!ran.ok) return ran
+  return { ok: true, value: normalizeConsult(ran.value) }
 }
 
 export async function runReview(run: RunPort, config: CliConfig): Promise<CliResult<ReviewResult>> {
