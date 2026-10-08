@@ -103,8 +103,8 @@ export type ClaimKind = 'test' | 'lint' | 'build' | 'ci' | 'verified'
 export type ClaimCheck = 'test' | 'lint' | 'build' | 'ci' | 'push'
 
 export type ClaimEntry =
-  | { seq: number; type: 'edit'; path: string }
-  | { seq: number; type: 'run'; checks: ClaimCheck[]; command: string; isOk: boolean; isInterrupted: boolean }
+  | { seq: number; type: 'edit'; path: string; agentId?: string }
+  | { seq: number; type: 'run'; checks: ClaimCheck[]; command: string; isOk: boolean; isInterrupted: boolean; agentId?: string }
 
 export type ClaimWarning = {
   kind: ClaimKind
