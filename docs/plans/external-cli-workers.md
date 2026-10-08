@@ -62,11 +62,14 @@ A validar na 4a: qual modo de `agy` garante somente leitura sem depender só de 
 
 ## 5. Isolamento
 
-Todo worker externo roda em um worktree temporário, nunca na árvore do usuário.
+Todo worker externo roda em um diretório de revisão descartável, nunca na árvore do usuário. Implementado em `src/council/review-dir.ts` e medido nos testes de `tests/council-review-dir.test.ts`.
 
-- Revisão: worktree no commit base com o diff da tarefa aplicado como patch. Arquivos não rastreados com nome de segredo (`.env*`, `*.pem`, `*.key`, `secret`, `credential`) não entram no patch. Como o worktree não tem os não rastreados, o filtro vale também para as CLIs que leem a árvore sozinhas, o que o agent-council não cobre.
-- Implementação: um worktree e um branch `harness/<taskId>-<cli>` por worker, um único escritor por worktree. O resultado é o diff desse branch. Nada é mesclado sem passar pelo gate.
-- O worktree é removido ao fim, com sucesso ou falha. Antes de criar: `git worktree list` e caminho único.
+- Construção: o commit base é exportado como árvore (índice temporário, filtros smudge desativados, então arquivos de LFS ou git-crypt aparecem como armazenados), arquivos sensíveis são apagados e o diretório é reinicializado como um repositório novo com um único commit, sem `alternates`, sem remote, sem hooks e sem caminho do repositório do usuário em `.git`. O diff da tarefa é aplicado por cima, de modo que `git status` mostra ` M` e `??` como as CLIs de revisão esperam.
+- Revisão: o diretório recebe só o diff da tarefa. Todo caminho alterado, rastreado ou não, é comparado com `SENSITIVE_FILES` (`src/harness/review.ts`) mais `.npmrc`, `.netrc`, `.pypirc`, `.envrc`, `.git-credentials`, `.env-*` e `*.tfvars`. Os que casam ficam fora do patch, do prompt e da árvore exportada, e voltam em `skippedPaths`. Como o diretório não contém os não rastreados, o filtro vale também para as CLIs que leem a árvore sozinhas, o que o agent-council não cobre.
+- Implementação (4c e 4d, ainda não construídas): o mesmo diretório, um por worker e um único escritor por diretório, com o resultado extraído como diff do repositório descartável. Nada é mesclado sem passar pelo gate.
+- Worktree e clone compartilhado não servem para processo de terceiros nem para processo que escreve: um worktree divide o `.git` do usuário (refs, config, stash, hooks) e um clone com `alternates` ou `--shared` expõe o object store e o caminho do repositório. Um membro que roda `git stash`, `git config` ou `git update-ref` altera, num worktree, o repositório do usuário.
+- O diretório não é sandbox. O processo roda com os direitos de arquivo e de rede do usuário e pode ler ou escrever fora do diretório. O que o desenho garante é que o repositório do usuário, seu histórico e seus arquivos sensíveis não estão no diretório, não que o processo não alcance o resto da máquina.
+- O diretório é removido ao fim de cada membro, com sucesso ou falha; sobras são varridas no início da próxima execução e por handlers de sinal e saída.
 
 ## 6. Fluxo
 
@@ -224,8 +227,8 @@ Depois do protótipo `harness:codex`:
 | Fase | Entrega | DoD |
 | --- | --- | --- |
 | 4.0 | profile `claude-opus-5` e papel `consult`; depois a matriz por dificuldade em `harness.yml` | `delegation-plan` para sessão Opus devolve `delegate`; `herdr-jev plan` escolhe candidato por complexidade e respeita quota |
-| 4a | adapters de revisão para codex, kimi e agy; `run.ts`; `parse.ts`; worktree de revisão | cada adapter validado em execução real com um diff conhecido; cancelamento mata os filhos; `bun test` verde |
-| 4b | `synth.ts`, `review --council`, gatilho por triage, membros no profile | tarefa `moderate` dispara o conselho sozinha; `routine` não dispara; status do gate inalterado com e sem conselho |
+| 4a | adapters de revisão para codex, kimi e agy; `run.ts`; `parse.ts`; diretório de revisão. **Construída, pendente de validação ao vivo** (`docs/plans/council-live-validation.md`) | cada adapter validado em execução real com um diff conhecido; cancelamento mata os filhos; `bun test` verde |
+| 4b | `synth.ts`, `review --council`, gatilho por triage, membros no profile. **Construída, pendente de validação ao vivo** (`docs/plans/council-live-validation.md`); o gatilho automático por triage NÃO foi construído: o conselho roda só com `review --council` ou `herdr-jev council` | tarefa `moderate` dispara o conselho sozinha; `routine` não dispara; status do gate inalterado com e sem conselho |
 | 4c.0 | protótipo da terceira via só para Codex: tipo de agente `harness:codex`, troca de `turn.step`, worktree, assinatura | uma tarefa pequena implementada pelo Codex aparece como subagente, transmite ao vivo e termina com a assinatura; com hooks desligados o agente recusa em vez de responder como Claude |
 | 4c | `work --client codex` em worktree | tarefa de exemplo implementada pelo Codex, revisada por Opus e conselho sem o Codex, worktree removido |
 | 4d | implementação por kimi e agy | idem 4c para cada um |
@@ -237,7 +240,7 @@ O mod só exibe o conselho no pane depois da 4b. Atividade de arquivo de worker 
 
 | Risco | Mitigação |
 | --- | --- |
-| CLI "somente leitura" que escreve | worktree descartável em toda revisão; validar na 4a |
+| CLI "somente leitura" que escreve | diretório de revisão descartável, sem o `.git` do usuário, em toda revisão; validar na 4a |
 | Custo e quota com três CLIs por entrega | gatilho por triage, cooldown, hash do diff, preflight de quota |
 | Adapter quebra quando a CLI muda | checagem de assinatura em `--version`; falha de parse vira membro falho, não achado falso |
 | Dois workers externos na mesma tarefa | um escritor por worktree; reserva por `taskId` |
