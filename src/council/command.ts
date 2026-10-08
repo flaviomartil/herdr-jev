@@ -1,12 +1,15 @@
+import { constants as osConstants } from "node:os";
 import { availableDelegationClients, type CrossHarnessConfig } from "../delegation/cross-harness.js";
 import { resolveDefaultBranch } from "../harness/review.js";
 import { formatCouncilSummary } from "./format.js";
+import { resolveCouncilApiKey } from "./key.js";
 import { MEMBER_NAMES } from "./members.js";
 import { CLIENT_ALIASES, MAX_MEMBER_TIMEOUT_MS, runCouncil } from "./run.js";
 import type { SpawnFn } from "./spawn.js";
-import { synthesize } from "./synth.js";
+import { sanitizeFinding, synthesize } from "./synth.js";
+import { pathText, safe } from "./text.js";
 import type { CouncilSummary, JevLike } from "./synth-types.js";
-import type { CouncilMemberName, CouncilRun } from "./types.js";
+import type { CouncilMemberName, CouncilMemberResult, CouncilRun } from "./types.js";
 
 export const MIN_COUNCIL_TIMEOUT_MS = 1000;
 
@@ -27,6 +30,7 @@ export interface ConsultDeps {
   stateDir?: string;
   timeoutCommand?: string | null;
   crossHarness?: CrossHarnessConfig;
+  resolveKey?: () => Promise<string | null>;
 }
 
 export interface CouncilReport {
@@ -37,6 +41,23 @@ export interface CouncilReport {
 }
 
 const EMPTY_SUMMARY: CouncilSummary = { agreements: [], disagreements: [], unique: [], notes: [], messages: [], scoredBy: "none" };
+
+const FIELD_CAP = 600;
+
+export function sanitizeRun(run: CouncilRun): CouncilRun {
+  const clean: CouncilRun = {
+    ...run,
+    members: run.members.map((member) => {
+      const entry: CouncilMemberResult = { ...member, findings: member.findings.map(sanitizeFinding) };
+      if (member.reason !== undefined) entry.reason = safe(member.reason, FIELD_CAP);
+      if (member.note !== undefined) entry.note = safe(member.note, FIELD_CAP);
+      return entry;
+    }),
+  };
+  if (run.note !== undefined) clean.note = safe(run.note, FIELD_CAP);
+  if (run.skippedPaths !== undefined) clean.skippedPaths = run.skippedPaths.map((path) => pathText(path, 500));
+  return clean;
+}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -102,9 +123,12 @@ export async function consultCouncil(options: ConsultOptions, deps: ConsultDeps 
   } catch (error) {
     run = { members: [], diffHash: "", ran: false, note: `council failed: ${message(error)}`.slice(0, 400) };
   }
+  run = sanitizeRun(run);
   let summary: CouncilSummary;
   try {
-    summary = await synthesize(run.members.flatMap((member) => member.findings), { jev: deps.jev });
+    const findings = run.members.flatMap((member) => member.findings);
+    const apiKey = findings.length > 0 && !deps.jev ? await (deps.resolveKey ?? resolveCouncilApiKey)() : undefined;
+    summary = await synthesize(findings, { jev: deps.jev, apiKey });
   } catch (error) {
     summary = { ...EMPTY_SUMMARY, messages: [`synthesis failed: ${message(error)}`.slice(0, 300)] };
   }
@@ -118,6 +142,7 @@ export interface CouncilCommandOptions {
   base?: string;
   question?: string;
   timeout?: string;
+  wait?: string;
   json?: boolean;
 }
 
@@ -141,26 +166,88 @@ export async function runCouncilCommand(options: CouncilCommandOptions, context:
   return { output, exitCode: report.run.ran ? 0 : 2 };
 }
 
+export const DEFAULT_COUNCIL_WAIT_MS = 60_000;
+export const MAX_COUNCIL_WAIT_MS = 30 * 60 * 1000;
+export const COUNCIL_CANCELLED_BY_REVIEW = "cancelled (review finished first)";
+
+export function parseCouncilWait(value: string | undefined): number {
+  if (value === undefined) return DEFAULT_COUNCIL_WAIT_MS;
+  const ms = /^\d+$/.test(value.trim()) ? Number(value) : NaN;
+  if (!Number.isSafeInteger(ms) || ms > MAX_COUNCIL_WAIT_MS) {
+    throw new Error(`invalid council wait; use an integer between 0 and ${MAX_COUNCIL_WAIT_MS} milliseconds`);
+  }
+  return ms;
+}
+
 export interface CouncilAlongside {
   promise: Promise<CouncilReport>;
   abort(): void;
+  settle(): Promise<CouncilReport>;
+}
+
+function notRun(reason: string): CouncilReport {
+  const run: CouncilRun = { members: [], diffHash: "", ran: false, note: reason.slice(0, 400) };
+  return { run, summary: EMPTY_SUMMARY, notes: [], text: formatCouncilSummary(EMPTY_SUMMARY, run) };
 }
 
 export function startCouncilAlongside(options: CouncilCommandOptions, context: { cwd: string; client: string }, deps: ConsultDeps = {}): CouncilAlongside {
   const controller = new AbortController();
-  const failed = (reason: string): CouncilReport => {
-    const run: CouncilRun = { members: [], diffHash: "", ran: false, note: reason.slice(0, 400) };
-    return { run, summary: EMPTY_SUMMARY, notes: [], text: formatCouncilSummary(EMPTY_SUMMARY, run) };
-  };
   let promise: Promise<CouncilReport>;
+  let waitMs = DEFAULT_COUNCIL_WAIT_MS;
   try {
     const members = parseCouncilMembers(options.members);
     const timeoutMs = parseCouncilTimeout(options.timeout);
-    promise = consultCouncil({ cwd: context.cwd, client: context.client, base: reviewBaseFor(context.cwd, options.base), question: options.question, timeoutMs, members, signal: controller.signal }, deps).catch((error) => failed(`council failed: ${message(error)}`));
+    waitMs = parseCouncilWait(options.wait);
+    promise = consultCouncil({ cwd: context.cwd, client: context.client, base: reviewBaseFor(context.cwd, options.base), question: options.question, timeoutMs, members, signal: controller.signal }, deps).catch((error) => notRun(`council failed: ${message(error)}`));
   } catch (error) {
-    promise = Promise.resolve(failed(`council not run: ${message(error)}`));
+    promise = Promise.resolve(notRun(`council not run: ${message(error)}`));
   }
-  return { promise, abort: () => controller.abort() };
+  const abort = () => controller.abort();
+  const settle = async (): Promise<CouncilReport> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<"expired">((resolve) => {
+      timer = setTimeout(() => resolve("expired"), waitMs);
+    });
+    try {
+      const outcome = await Promise.race([promise, expired]);
+      if (outcome === "expired") {
+        abort();
+        return notRun(COUNCIL_CANCELLED_BY_REVIEW);
+      }
+      return outcome;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
+  return { promise, abort, settle };
+}
+
+export interface ShutdownTracker {
+  code(): number | undefined;
+  release(): void;
+}
+
+const TRACKED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
+export function trackShutdownSignals(): ShutdownTracker {
+  let received: number | undefined;
+  const handlers = TRACKED_SIGNALS.map((signal) => {
+    const handler = () => {
+      received ??= 128 + (osConstants.signals[signal] ?? 0);
+      if (process.listenerCount(signal) <= 1) {
+        process.off(signal, handler);
+        process.kill(process.pid, signal);
+      }
+    };
+    process.on(signal, handler);
+    return [signal, handler] as const;
+  });
+  return {
+    code: () => received,
+    release: () => {
+      for (const [signal, handler] of handlers) process.off(signal, handler);
+    },
+  };
 }
 
 export const REVIEW_COUNCIL_HEADING = "Council (consultative only: it does not change the review status or the exit code)";

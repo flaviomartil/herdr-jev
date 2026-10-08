@@ -357,6 +357,34 @@ describe("runCouncil limits", () => {
   });
 });
 
+describe("runCouncil state directory", () => {
+  it("refuses a state directory inside the repository that is not ignored", async () => {
+    const inside = join(repo, ".state");
+    const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+    const run = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: inside, members: ["codex", "kimi"] });
+    expect(run.ran).toBe(false);
+    expect(run.note).toContain("state_dir_inside_repo");
+    expect(run.members.map((entry) => entry.reason)).toEqual(["state_dir_inside_repo", "state_dir_inside_repo"]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("accepts a state directory inside the repository once it is ignored", async () => {
+    writeIn(repo, ".gitignore", ".state/\n");
+    const inside = join(repo, ".state");
+    const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+    const run = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: inside, members: ["codex", "kimi"] });
+    expect(run.ran).toBe(true);
+  });
+
+  it("refuses it when the repository is reached through a symlink", async () => {
+    const link = join(state.stateDir, "repo-link");
+    require("node:fs").symlinkSync(repo, link);
+    const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+    const run = await runCouncil({ cwd: link, spawn: fake.spawn, stateDir: join(repo, ".state"), members: ["codex", "kimi"] });
+    expect(run.note).toContain("state_dir_inside_repo");
+  });
+});
+
 describe("runCouncil interrupts and timers", () => {
   it("reports a signal interrupt as cancelled", async () => {
     const out = mkdtempSync(join(tmpdir(), "council-signal-out-"));

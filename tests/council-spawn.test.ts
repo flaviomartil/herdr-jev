@@ -201,11 +201,11 @@ describe("council default spawn", () => {
   it("escalates to SIGKILL when SIGTERM is ignored", async () => {
     const proc = defaultSpawn(["sh", "-c", "trap '' TERM; sleep 30 & echo $!; wait"], { cwd: dir, killGraceMs: 300 });
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const started = Date.now();
+    const started = performance.now();
     proc.kill();
     const out = await proc.result;
     const grandchild = Number(out.stdout.trim());
-    expect(Date.now() - started).toBeGreaterThanOrEqual(250);
+    expect(performance.now() - started).toBeGreaterThanOrEqual(250);
     expect(await until(() => !alive(grandchild))).toBe(true);
   }, 30000);
 });

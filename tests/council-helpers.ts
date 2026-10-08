@@ -1,6 +1,6 @@
 import { setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProcessOutput, SpawnedProcess, SpawnFn, SpawnOptions } from "../src/council/spawn.js";
@@ -103,3 +103,30 @@ export function fakeSpawn(handlers: Record<string, Handler>, options: FakeSpawnO
 }
 
 export const ok = (stdout: string): ProcessOutput => ({ exitCode: 0, stdout, stderr: "" });
+
+export interface PrivatePath {
+  path: string;
+  reached(): string[];
+}
+
+const MEMBER_VERSIONS: Record<string, string> = { codex: "codex-cli 0.160.1", kimi: "2.1.1", agy: "1.3.1" };
+
+export function privatePath(dir: string, behaviours: Partial<Record<"codex" | "kimi" | "agy", string>> = {}): PrivatePath {
+  const bin = join(dir, "private-bin");
+  const log = join(dir, "reached");
+  mkdirSync(bin, { recursive: true });
+  const stub = (name: string, body: string) => {
+    writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+    chmodSync(join(bin, name), 0o755);
+  };
+  for (const name of ["codex", "kimi", "agy"] as const) {
+    const body = behaviours[name];
+    if (body === undefined) stub(name, `echo "$0 $*" >> '${log}'\nexit 1`);
+    else stub(name, `if [ "$1" = "--version" ]; then echo "${MEMBER_VERSIONS[name]}"; exit 0; fi\ncat >/dev/null 2>&1\n${body}`);
+  }
+  stub("vault", "exit 1");
+  return {
+    path: `${bin}:${process.env.PATH ?? ""}`,
+    reached: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []),
+  };
+}
