@@ -216,6 +216,7 @@ export type AgentState = {
   run: Run | null
   delivered: string | null
   lastReport: string
+  trusted?: string
   used: boolean
 }
 
@@ -1054,6 +1055,7 @@ async function* drive(
   if (run.aborted) {
     state.run = null
     state.lastReport = run.note ?? ''
+    state.trusted = run.note ?? ''
     if (run.note) yield* stream.block(run.note)
     yield { kind: 'stop', stopReason: 'end_turn', usage: null }
     return stream.result(e, [], 'end_turn', null)
@@ -1077,6 +1079,7 @@ async function* drive(
   const failure = answer === '' ? failureText(run, stderr) : ''
   const notes = answer !== '' && run.failed && run.problems.length > 0 ? `Codex reported an error after this answer: ${run.problems.join(' ')}` : ''
   const report = composeReport({ answer, failure, notes, footer, signature: signature(run) })
+  state.trusted = failure ? footer : `${footer}\n\n${signature(run)}`
   return yield* conclude(ports, e, agentId, state, stream, report, takeUsage(run), false)
 }
 
@@ -1117,6 +1120,7 @@ export async function* externalStep(
   } finally {
     if (state?.run?.aborted) {
       state.lastReport = state.run.note ?? ''
+      state.trusted = state.run.note ?? ''
       state.run = null
     }
     if (state !== null) await ports.saveState(agentId, state).catch(() => undefined)
@@ -1160,6 +1164,7 @@ export async function cleanupAgent(ports: Ports, ext: External, agentId: string,
     const text = await stopAndSettle(ports, ext, state.run, polls)
     state.run = null
     state.lastReport = text
+    state.trusted = text
     ports.notify(`harness:codex stopped. ${text}`)
   }
   await ports.saveState(agentId, null)

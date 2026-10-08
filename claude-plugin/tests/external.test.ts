@@ -780,6 +780,7 @@ test('an aborted step stops the group, settles the copy into a kept patch and re
   expect(h.notes.join('\n')).toContain('Patch (mode 0600):')
   expect(h.store.get('agent-1')?.run).toBeNull()
   expect(h.store.get('agent-1')?.lastReport).toContain('Patch (mode 0600):')
+  expect(h.store.get('agent-1')?.trusted).toContain('Patch (mode 0600):')
   expect(h.fake.removed).toContain(runDirOf(h.fake))
 })
 
