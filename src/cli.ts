@@ -598,11 +598,11 @@ program
 
 program
   .command("prove")
-  .description("Show that the tests changed by the diff fail without the source change and pass with it, in a throwaway worktree")
+  .description("Show that the tests changed by the diff fail without the source change and pass with it, in a throwaway copy")
   .option("--base <ref>", "Compare against the merge base of this ref and HEAD; defaults to HEAD plus the working tree")
   .option("--test-command-json <path>", "JSON argv file for the test command; defaults to the repository test script")
-  .option("--setup-command-json <path>", "JSON argv file run once in the worktree before the first test run; without it node_modules is symlinked when present")
-  .option("--test-file <path>", "Repository-relative path to treat as a test file besides the built-in conventions; repeatable", (value: string, previous: string[]) => [...previous, value], [] as string[])
+  .option("--setup-command-json <path>", "JSON argv file run once in the copy before the first test run; without it node_modules is symlinked when present")
+  .option("--test-file <path>", "Changed file to treat as a test file besides the built-in conventions, relative to the current directory or the repository root; repeatable", (value: string, previous: string[]) => [...previous, value], [] as string[])
   .option("--timeout <ms>", "Deadline for each command", String(DEFAULT_PROVE_TIMEOUT_MS))
   .option("--json", "Output the full report as JSON")
   .action(async (options: { base?: string; testCommandJson?: string; setupCommandJson?: string; testFile: string[]; timeout: string; json?: boolean }) => {
