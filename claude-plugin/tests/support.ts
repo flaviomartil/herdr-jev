@@ -160,7 +160,11 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     return { turnId: e.turnId }
   })
   on('tool.call', () => ({ result: 'ok' }))
-  on('session.cwd', () => ({ value: CWD }))
+  on('session.cwd', () => {
+    const box = globalThis as { __cwd?: string; __cwdCalls?: number }
+    box.__cwdCalls = (box.__cwdCalls ?? 0) + 1
+    return { value: box.__cwd ?? CWD }
+  })
   on('session.model', () => ({ value: extra.model ?? SESSION_MODEL }))
   on('session.usage', () => {
     if (seen.failUsage) throw new Error('usage down')
