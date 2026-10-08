@@ -767,6 +767,12 @@ Accepted residuals, which the redactor does not remove:
 - a Slack webhook path
 - bare alphanumeric runs that look like words, including all-lowercase runs and UUIDs
 - a token split by a space or a newline
+- letters-only unquoted values of any length, such as `DB_PASSWORD=SuperSecretPassword`
+- `mysql -p<password>` with the password attached to the flag
+- a Bearer token under 16 characters or without a digit
+- a URL password that contains `@`
+- keys longer than 80 characters
+- letters-and-dots values such as `token=abc.def.ghi`
 
 ## Testing
 
