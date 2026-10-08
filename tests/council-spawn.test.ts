@@ -80,7 +80,7 @@ describe("council default spawn", () => {
     }
   });
 
-  it("gives the member the review directory as PWD, drops OLDPWD and scrubs variables pointing into the repository", async () => {
+  it("gives the member the review directory as PWD, drops OLDPWD and scrubs only the entries pointing into the repository", async () => {
     const saved = { PWD: process.env.PWD, OLDPWD: process.env.OLDPWD, REPO_HINT: process.env.REPO_HINT, PATH_HINT: process.env.PATH_HINT, OTHER: process.env.OTHER };
     process.env.PWD = "/real/repo";
     process.env.OLDPWD = "/real/repo/sub";
@@ -88,13 +88,59 @@ describe("council default spawn", () => {
     process.env.PATH_HINT = "/usr/bin:/real/repo/bin";
     process.env.OTHER = "/real/repository-other";
     try {
-      const out = await defaultSpawn(["sh", "-c", "echo \"[$PWD][$OLDPWD][$REPO_HINT][$PATH_HINT][$OTHER]\""], { cwd: dir, repoRoots: ["/real/repo"] }).result;
-      expect(out.stdout.trim()).toBe(`[${dir}][][][][/real/repository-other]`);
+      const out = await defaultSpawn(["/usr/bin/env"], { cwd: dir, repoRoots: ["/real/repo"] }).result;
+      const lines = out.stdout.split("\n");
+      expect(lines).toContain(`PWD=${dir}`);
+      expect(lines.some((line) => line.startsWith("OLDPWD="))).toBe(false);
+      expect(lines.some((line) => line.startsWith("REPO_HINT="))).toBe(false);
+      expect(lines).toContain("PATH_HINT=/usr/bin");
+      expect(lines).toContain("OTHER=/real/repository-other");
+      expect([...(out.scrubbed ?? [])].sort()).toEqual(["PATH_HINT", "REPO_HINT"]);
     } finally {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
+    }
+  });
+
+  it("keeps the other PATH entries when the repository's node_modules/.bin is on PATH, and still finds the binary", async () => {
+    const repoDir = join(dir, "proj");
+    const bin = join(dir, "tools");
+    mkdirSync(join(repoDir, "node_modules/.bin"), { recursive: true });
+    mkdirSync(bin);
+    writeFileSync(join(bin, "membertool"), "#!/bin/sh\necho found\n");
+    chmodSync(join(bin, "membertool"), 0o755);
+    const saved = process.env.PATH;
+    process.env.PATH = `${join(repoDir, "node_modules/.bin")}:${bin}:${saved}`;
+    try {
+      const out = await defaultSpawn(["membertool"], { cwd: dir, repoRoots: [repoDir] }).result;
+      expect(out.exitCode).toBe(0);
+      expect(out.stdout.trim()).toBe("found");
+      expect(out.scrubbed).toEqual(["PATH"]);
+      const env = await defaultSpawn(["/usr/bin/env"], { cwd: dir, repoRoots: [repoDir] }).result;
+      const pathLine = env.stdout.split("\n").find((line) => line.startsWith("PATH=")) ?? "";
+      expect(pathLine).not.toContain(repoDir);
+      expect(pathLine).toContain(bin);
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
+  it("leaves HOME and PATH intact when the repository is rooted at HOME", async () => {
+    const savedHome = process.env.HOME;
+    const savedPath = process.env.PATH;
+    process.env.HOME = dir;
+    process.env.PATH = `${join(dir, "bin")}:${savedPath}`;
+    try {
+      const out = await defaultSpawn(["/usr/bin/env"], { cwd: dir, repoRoots: [dir] }).result;
+      const lines = out.stdout.split("\n");
+      expect(lines).toContain(`HOME=${dir}`);
+      expect(lines.find((line) => line.startsWith("PATH="))).toBe(`PATH=${process.env.PATH}`);
+      expect(out.scrubbed).toBeUndefined();
+    } finally {
+      process.env.HOME = savedHome;
+      process.env.PATH = savedPath;
     }
   });
 

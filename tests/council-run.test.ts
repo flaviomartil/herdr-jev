@@ -16,7 +16,24 @@ beforeEach(() => {
   writeIn(repo, "src/a.ts", "export const a = 2;\n");
 });
 
+let asideSigterm: Function[] = [];
+
+function setAsideSigterm(): void {
+  asideSigterm = process.rawListeners("SIGTERM");
+  process.removeAllListeners("SIGTERM");
+}
+
+function restoreSigterm(): void {
+  for (const raw of asideSigterm) {
+    const original = (raw as { listener?: NodeJS.SignalsListener }).listener;
+    if (original) process.once("SIGTERM", original);
+    else process.on("SIGTERM", raw as NodeJS.SignalsListener);
+  }
+  asideSigterm = [];
+}
+
 afterEach(() => {
+  restoreSigterm();
   rmSync(repo, { recursive: true, force: true });
   state.cleanup();
 });
@@ -290,6 +307,20 @@ describe("runCouncil", () => {
 });
 
 describe("runCouncil limits", () => {
+  it("passes the repository root to members and to the version probe", async () => {
+    const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+    await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
+    expect(fake.probeCalls).toHaveLength(2);
+    for (const call of [...fake.probeCalls, ...fake.reviewCalls]) expect(call.repoRoots).toEqual([repo]);
+  });
+
+  it("names scrubbed variables, never values, in the member note", async () => {
+    const fake = fakeSpawn({ codex: () => ({ exitCode: 0, stdout: "NO_FINDINGS", stderr: "", scrubbed: ["REPO_HINT", "PATH"] }), kimi: () => ok("NO_FINDINGS") });
+    const run = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
+    expect(run.members[0].note).toContain("REPO_HINT, PATH");
+    expect(run.members[1].note).toBeUndefined();
+  });
+
   it("clamps the member timeout to thirty minutes and bounds each member by a lifetime", async () => {
     const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
     await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"], timeoutMs: 10 * 60 * 60 * 1000, timeoutCommand: "/usr/bin/timeout" });
@@ -346,8 +377,7 @@ describe("runCouncil limits", () => {
 describe("runCouncil interrupts and timers", () => {
   it("reports a signal interrupt as cancelled", async () => {
     const noop = () => undefined;
-    const others = process.listeners("SIGTERM");
-    process.removeAllListeners("SIGTERM");
+    setAsideSigterm();
     process.on("SIGTERM", noop);
     try {
       const fake = fakeSpawn({ codex: () => "hang", kimi: () => "hang" });
@@ -355,7 +385,7 @@ describe("runCouncil interrupts and timers", () => {
       const spawn: typeof fake.spawn = (argv, options) => {
         if (argv[1] === "--version") return fake.spawn(argv, options);
         started += 1;
-        return defaultSpawn(["sleep", "30"], options);
+        return defaultSpawn(["sleep", "5"], options);
       };
       const pending = runCouncil({ cwd: repo, spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
       await until(() => started === 2);
@@ -369,7 +399,7 @@ describe("runCouncil interrupts and timers", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     } finally {
       process.off("SIGTERM", noop);
-      for (const listener of others) process.on("SIGTERM", listener as NodeJS.SignalsListener);
+      restoreSigterm();
     }
   });
 

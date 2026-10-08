@@ -19,6 +19,7 @@ export interface ProcessOutput {
   stdout: string;
   stderr: string;
   truncated?: boolean;
+  scrubbed?: string[];
 }
 
 export interface SpawnedProcess {
@@ -75,9 +76,10 @@ export const defaultSpawn: SpawnFn = (argv, options) => {
   const [bin, ...args] = full;
   const limit = options.maxBytes ?? MAX_CAPTURE_BYTES;
   const grace = options.killGraceMs ?? KILL_GRACE_MS;
+  const memberEnv = scrubbedEnv(options.cwd, options.repoRoots);
   const child = nodeSpawn(bin, args, {
     cwd: options.cwd,
-    env: scrubbedEnv(options.cwd, options.repoRoots).env,
+    env: memberEnv.env,
     detached: true,
     stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
@@ -96,6 +98,7 @@ export const defaultSpawn: SpawnFn = (argv, options) => {
         stdout: stdout.text(),
         stderr: extra ? `${errText}${errText ? "\n" : ""}${extra}` : errText,
         ...(stdout.truncated || stderr.truncated ? { truncated: true } : {}),
+        ...(memberEnv.scrubbed.length > 0 ? { scrubbed: memberEnv.scrubbed } : {}),
       });
     };
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));

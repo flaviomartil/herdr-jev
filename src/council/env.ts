@@ -23,17 +23,18 @@ function under(value: string, root: string): boolean {
 export function scrubbedEnv(cwd: string, repoRoots: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): { env: NodeJS.ProcessEnv; scrubbed: string[] } {
   const copy = cleanEnv(env);
   const scrubbed: string[] = [];
-  const roots = repoRoots.map((root) => root.replace(/\/+$/u, "")).filter((root) => root !== "");
+  const home = (env.HOME ?? "").replace(/\/+$/u, "");
+  const roots = repoRoots.map((root) => root.replace(/\/+$/u, "")).filter((root) => root !== "" && !(home !== "" && under(home, root)));
   for (const [key, value] of Object.entries(copy)) {
     if (key === "PWD" || key === "OLDPWD" || typeof value !== "string") continue;
-    if (roots.some((root) => value.split(":").some((part) => under(part, root)))) {
-      delete copy[key];
-      scrubbed.push(key);
-    }
+    const parts = value.split(":");
+    const kept = parts.filter((part) => !roots.some((root) => under(part, root)));
+    if (kept.length === parts.length) continue;
+    if (kept.length === 0) delete copy[key];
+    else copy[key] = kept.join(":");
+    scrubbed.push(key);
   }
-  if (env.OLDPWD !== undefined) scrubbed.push("OLDPWD");
   delete copy.OLDPWD;
-  if (env.PWD !== undefined && env.PWD !== cwd) scrubbed.push("PWD");
   copy.PWD = cwd;
   return { env: copy, scrubbed };
 }

@@ -75,9 +75,9 @@ async function waitFor(proc: SpawnedProcess, timeoutMs: number, signal: AbortSig
 
 type Probe = "installed" | "missing" | "aborted";
 
-async function probe(member: CouncilMemberName, spawn: SpawnFn, cwd: string, signal: AbortSignal | undefined, timeoutCommand: string | null): Promise<Probe> {
+async function probe(member: CouncilMemberName, spawn: SpawnFn, cwd: string, signal: AbortSignal | undefined, timeoutCommand: string | null, repoRoots: string[]): Promise<Probe> {
   try {
-    const outcome = await waitFor(spawn([MEMBER_BINARIES[member], "--version"], { cwd, lifetimeMs: VERSION_TIMEOUT_MS + LIFETIME_MARGIN_MS, timeoutCommand }), VERSION_TIMEOUT_MS, signal);
+    const outcome = await waitFor(spawn([MEMBER_BINARIES[member], "--version"], { cwd, lifetimeMs: VERSION_TIMEOUT_MS + LIFETIME_MARGIN_MS, timeoutCommand, repoRoots }), VERSION_TIMEOUT_MS, signal);
     if (outcome.kind === "aborted") return "aborted";
     if (outcome.kind !== "output" || outcome.output.exitCode !== 0) return "missing";
     const first = outcome.output.stdout.trim().split("\n")[0]?.trim() ?? "";
@@ -136,8 +136,9 @@ async function runMember(member: CouncilMemberName, context: MemberContext): Pro
       else {
         const parsed = parseMemberOutput(member, waited.output, worktree.roots, { question: context.question !== undefined });
         const cut = waited.output.truncated ? "output cut at the capture limit" : undefined;
-        if ("error" in parsed) outcome = result(member, "failed", startedAt, parsed.error, [], cut);
-        else outcome = result(member, "done", startedAt, undefined, parsed.findings, join2([parsed.note, cut]));
+        const scrubbed = waited.output.scrubbed?.length ? `environment variables scrubbed of repository paths: ${waited.output.scrubbed.join(", ")}` : undefined;
+        if ("error" in parsed) outcome = result(member, "failed", startedAt, parsed.error, [], join2([cut, scrubbed]));
+        else outcome = result(member, "done", startedAt, undefined, parsed.findings, join2([parsed.note, cut, scrubbed]));
       }
     }
   } catch (error) {
@@ -210,7 +211,7 @@ export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
     };
     if (patch.patch.trim() === "") return withPaths(stopped(candidates, results, "empty diff", { note: join2(["empty diff; nothing to review", ...leftOut]), diffHash: patch.hash }));
 
-    const probes = await Promise.all(candidates.map(async (member) => ({ member, state: await probe(member, spawn, stateDir, opts.signal, timeoutCommand) })));
+    const probes = await Promise.all(candidates.map(async (member) => ({ member, state: await probe(member, spawn, stateDir, opts.signal, timeoutCommand, [patch.repoRoot]) })));
     if (probes.some((entry) => entry.state === "aborted") || opts.signal?.aborted || councilInterruptedSince(runStartedAt)) return withPaths(stopped(candidates, results, "cancelled", { note: "cancelled", diffHash: patch.hash }));
     const runnable: CouncilMemberName[] = [];
     for (const { member, state } of probes) {
