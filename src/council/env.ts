@@ -1,3 +1,5 @@
+import { realpathSync } from "node:fs";
+
 const REPO_LOCAL_GIT = [
   "GIT_INDEX_FILE",
   "GIT_DIR",
@@ -20,15 +22,41 @@ function under(value: string, root: string): boolean {
   return value === root || value.startsWith(`${root}/`);
 }
 
+function resolved(value: string): string | undefined {
+  try {
+    return realpathSync(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function withReal(values: readonly string[]): string[] {
+  const out = new Set<string>();
+  for (const value of values) {
+    out.add(value);
+    const real = value.startsWith("/") ? resolved(value) : undefined;
+    if (real !== undefined) out.add(real.replace(/\/+$/u, ""));
+  }
+  return [...out];
+}
+
 export function scrubbedEnv(cwd: string, repoRoots: readonly string[] = [], env: NodeJS.ProcessEnv = process.env): { env: NodeJS.ProcessEnv; scrubbed: string[] } {
   const copy = cleanEnv(env);
   const scrubbed: string[] = [];
   const home = (env.HOME ?? "").replace(/\/+$/u, "");
-  const roots = repoRoots.map((root) => root.replace(/\/+$/u, "")).filter((root) => root !== "" && !(home !== "" && under(home, root)));
+  const homes = withReal(home === "" ? [] : [home]);
+  const roots = withReal(repoRoots.map((root) => root.replace(/\/+$/u, "")).filter((root) => root !== "")).filter((root) => root !== "" && !homes.some((candidate) => under(candidate, root)));
+  const inside = (part: string): boolean => {
+    if (roots.length === 0) return false;
+    if (roots.some((root) => under(part, root))) return true;
+    if (!part.startsWith("/")) return false;
+    const real = resolved(part);
+    return real !== undefined && roots.some((root) => under(real, root));
+  };
   for (const [key, value] of Object.entries(copy)) {
     if (key === "PWD" || key === "OLDPWD" || typeof value !== "string") continue;
     const parts = value.split(":");
-    const kept = parts.filter((part) => !roots.some((root) => under(part, root)));
+    const kept = parts.filter((part) => !inside(part));
     if (kept.length === parts.length) continue;
     if (kept.length === 0) delete copy[key];
     else copy[key] = kept.join(":");

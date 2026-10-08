@@ -15,7 +15,6 @@ const PREFIX_SHAPES: RegExp[] = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{16,}/g,
   /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
   /\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
@@ -35,6 +34,11 @@ const KEYED = new RegExp(
   `(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,80})(["'\\]]{0,2}[ \\t]*(?:=>|[!=]==?|:=|[:=])[ \\t]*(?:\\n[ \\t]+)?)${VALUE}`,
   "g",
 );
+const FALLBACK = new RegExp(
+  `(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,80})(["'\\]]{0,2}[ \\t]*[:=][ \\t]*[^\\s|?,;(){}"']{1,120}(?:\\[[^\\]\\n]{1,60}\\])?[ \\t]*(?:\\|\\||\\?\\?)[ \\t]*)("[^"]{4,}"|'[^']{4,}')`,
+  "g",
+);
+const SK_RUN = /\bsk-[A-Za-z0-9_-]{20,}/g;
 const FLAG = new RegExp(`(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]{1,60})([ \\t]+)${VALUE}`, "g");
 
 function removable(code: number): boolean {
@@ -75,7 +79,7 @@ export function clean(text: unknown): string {
   return strip(text).replace(/\s+/g, " ").trim();
 }
 
-function clip(text: string, max: number): string {
+export function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text;
 }
 
@@ -153,6 +157,9 @@ function redactKeyed(text: string, pattern: RegExp, fixedSeparator?: string): st
 export function redactShapes(text: string): string {
   let out = redactPem(text);
   for (const shape of PREFIX_SHAPES) out = out.replace(shape, REDACTED);
+  out = out.replace(SK_RUN, (match, offset: number, whole: string) =>
+    /\d/.test(match) && !/^\.[A-Za-z0-9]/.test(whole.slice(offset + match.length, offset + match.length + 2)) ? REDACTED : match,
+  );
   return out;
 }
 
@@ -167,6 +174,7 @@ function redactOnce(text: string): string {
   out = out.replace(BEARER, `$1${REDACTED}`);
   out = redactKeyed(out, KEYED);
   out = redactKeyed(out, FLAG, ":");
+  out = redactKeyed(out, FALLBACK, ":");
   out = out.replace(HEX_RUN, (match, offset: number, whole: string) => {
     if (match.length === 40 && SHA_CONTEXT.test(whole.slice(Math.max(0, offset - 24), offset))) return match;
     return REDACTED;

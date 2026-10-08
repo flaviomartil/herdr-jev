@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { spawn as spawnChild } from "node:child_process";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCouncil } from "../src/council/run.js";
-import { councilScope } from "../src/council/scope.js";
-import { defaultSpawn } from "../src/council/spawn.js";
 import { fakeSpawn, git, gitRaw, makeRepo, ok, writeIn } from "./council-helpers.js";
 import { createTestStateDir } from "./helpers.js";
 
@@ -16,24 +16,7 @@ beforeEach(() => {
   writeIn(repo, "src/a.ts", "export const a = 2;\n");
 });
 
-let asideSigterm: Function[] = [];
-
-function setAsideSigterm(): void {
-  asideSigterm = process.rawListeners("SIGTERM");
-  process.removeAllListeners("SIGTERM");
-}
-
-function restoreSigterm(): void {
-  for (const raw of asideSigterm) {
-    const original = (raw as { listener?: NodeJS.SignalsListener }).listener;
-    if (original) process.once("SIGTERM", original);
-    else process.on("SIGTERM", raw as NodeJS.SignalsListener);
-  }
-  asideSigterm = [];
-}
-
 afterEach(() => {
-  restoreSigterm();
   rmSync(repo, { recursive: true, force: true });
   state.cleanup();
 });
@@ -376,32 +359,24 @@ describe("runCouncil limits", () => {
 
 describe("runCouncil interrupts and timers", () => {
   it("reports a signal interrupt as cancelled", async () => {
-    const noop = () => undefined;
-    setAsideSigterm();
-    process.on("SIGTERM", noop);
+    const out = mkdtempSync(join(tmpdir(), "council-signal-out-"));
+    const child = spawnChild(process.execPath, ["run", join(import.meta.dir, "fixtures/council-run-signal-child.ts"), repo, state.stateDir, out], { stdio: "ignore", env: { ...process.env } });
+    const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
     try {
-      const fake = fakeSpawn({ codex: () => "hang", kimi: () => "hang" });
-      let started = 0;
-      const spawn: typeof fake.spawn = (argv, options) => {
-        if (argv[1] === "--version") return fake.spawn(argv, options);
-        started += 1;
-        return defaultSpawn(["sleep", "5"], options);
-      };
-      const pending = runCouncil({ cwd: repo, spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
-      await until(() => started === 2);
+      await until(() => existsSync(join(out, "started")));
+      expect(existsSync(join(out, "started"))).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 200));
-      process.kill(process.pid, "SIGTERM");
-      const run = await pending;
+      child.kill("SIGTERM");
+      expect(await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve("hung"), 15000))])).toBe(0);
+      const run = JSON.parse(readFileSync(join(out, "result.json"), "utf8"));
       expect(run.ran).toBe(false);
       expect(run.note).toBe("cancelled");
-      expect(run.members.map((entry) => [entry.status, entry.reason])).toEqual([["skipped", "cancelled"], ["skipped", "cancelled"]]);
-      await until(() => !councilScope.stopped);
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(run.members).toEqual([["skipped", "cancelled"], ["skipped", "cancelled"]]);
     } finally {
-      process.off("SIGTERM", noop);
-      restoreSigterm();
+      child.kill("SIGKILL");
+      rmSync(out, { recursive: true, force: true });
     }
-  });
+  }, 30000);
 
   it("clears the settle timer after a timeout", async () => {
     const realSet = globalThis.setTimeout;

@@ -156,4 +156,25 @@ describe("formatCouncilSummary", () => {
     const out = formatCouncilSummary(await empty(), { diffHash: "x", ran: false, note: "task is routine", members: [] });
     expect(out).toContain("Council did not run: task is routine");
   });
+
+  test("shows the member note and the paths left out of the review", async () => {
+    const out = formatCouncilSummary(await empty(), {
+      diffHash: "x",
+      ran: true,
+      note: "1 sensitive path left out",
+      skippedPaths: [".env", "secrets/prod.tfvars"],
+      members: [
+        { member: "codex", status: "done", findings: [], durationMs: 1000, note: "output cut at the capture limit" },
+        { member: "kimi", status: "failed", reason: "timed out", findings: [], durationMs: 1000, note: "cleanup failed" },
+      ],
+    });
+    expect(out).toContain("- codex: done, 0 finding(s), 1.0s (output cut at the capture limit)");
+    expect(out).toContain("- kimi: failed: timed out (cleanup failed)");
+    expect(out).toContain('Left out of the review (2): ".env", "secrets/prod.tfvars"');
+    expect(out).toContain("Run note: 1 sensitive path left out");
+  });
+
+  test("omits the left out line when no path was skipped", async () => {
+    expect(formatCouncilSummary(await empty(), run)).not.toContain("Left out of the review");
+  });
 });
