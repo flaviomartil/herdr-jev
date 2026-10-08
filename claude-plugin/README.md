@@ -37,16 +37,32 @@ Limite conhecido: o runbook não é detectado sozinho. O `ai-harness skill-selec
 
 ## PR gate
 
-Quando um Bash vai criar ou atualizar um pull request, o mod anexa o status do review do harness ao resultado da ferramenta. Nunca nega a chamada.
+Quando um Bash vai criar ou atualizar um pull request, o mod anexa ao resultado da ferramenta o status do review do harness. Só contexto para o modelo: nunca nega a chamada, nunca reescreve o comando e não toca no resultado do motor além de acrescentar uma linha. Se o resultado volta `deny` ou `isError`, nada é acrescentado.
 
-- Detecta o que o shell de fato executaria: `gh pr create|new|edit|ready` (com `-R/--repo`), `az repos pr create|update`. Corpo de heredoc, texto entre aspas, `echo`, `--help`/`-h`, `--dry-run` e `gh pr ready --undo` não contam; `git push` não é comando de PR. Bitbucket fica de fora: não existe a CLI `bb` nesta máquina (o fluxo usa a API).
-- Status: `ai-harness review-status --client claude --session <id> --cwd <pasta>`, com prazo de 5 s. A pasta é o alvo do `cd <pasta> &&` inicial do comando, senão a pasta da sessão. Qualquer falha vira `unknown` e o comando roda mesmo assim.
-- Contexto só para o modelo: `ready` acrescenta `Harness review status: ready.`; qualquer outro status avisa que o PR rodou sem review pronto e que `herdr-jev review` produz um.
-- `prGateAsk` (padrão `false`): com `true`, quando o status é conhecido e não é `ready`, o hook `tool.check` devolve `ask` e o motor pergunta à pessoa; a confirmação segue o modo de permissão da sessão. Status `ready` ou `unknown` nunca pergunta, e um `deny` do motor nunca é trocado. Não existe modo `deny`.
+Qual identidade é lida. O `herdr-jev review` grava o resultado sob um `session` gerado (`jev-review-<hex>`) e usa a raiz do git como `cwd`; a própria sessão do Claude zera sua identidade para `pending_verification` a cada chamada de ferramenta que não é leitura (inclui `git commit`). Por isso o gate não consulta a sessão do Claude. O mod guarda `client`, `session` e `cwd` do relatório do review que ele mesmo roda (`/harness review`, botão `Refresh review`, `autoReview`) no estado `harness.reviewIds`, por raiz de repositório, e o gate chama `ai-harness review-status --client <client> --session <session> --cwd <raiz>` com essa identidade. O harness revalida contra o snapshot atual do git, então `ready` some sozinho se o código mudou depois do review. Sem identidade guardada para o repositório o status é `none` e o aviso manda rodar `/harness review`.
+
+Limite declarado: um `herdr-jev review` digitado num shell não é encontrado, porque o mod não tem como saber o `session` gerado. Para achá-lo seria preciso passar `--session` fixo ou ler o id impresso pelo comando; o gate não adivinha sessões. O estado `harness.reviewIds` vive só na sessão do Claude Code e some ao recarregar.
+
+O que é detectado, só quando o shell de fato executaria. O comando é lido por um lexer próprio (aspas, `\` + quebra de linha, comentários, heredocs com vários marcadores por linha, `<<<`, `$(...)` e crases) e cada comando simples é analisado depois de pular atribuições de ambiente e wrappers (`env`, `sudo`, `timeout`, `nice`, `ionice`, `xargs`, `rtk`, `rtk -u`, `rtk proxy`, `command`, `exec`, `nohup`, `setsid`, `stdbuf`, `if`, `while !`, `then`, `do`):
+
+- GitHub: `gh pr create|new|edit|ready` (com `-R/--repo` antes ou depois de `pr`), `gh api` com método de escrita em `repos/<o>/<r>/pulls[/<n>]`, `curl`/`http`/`wget` de escrita em `api.github.com/repos/<o>/<r>/pulls[/<n>]`.
+- Azure DevOps: `az repos pr create|update`; `curl`/`http`/`wget` de escrita em `.../git/repositories/<repo>/pullrequests[/<id>]` (o formato do skill de PR do InvoiceCon, mesmo com a base da API numa variável). Escrita é `-X/--request POST|PATCH|PUT`, `--method`, ou dados (`-d`, `--data*`, `--json`, `-F`, `--post-data`, itens do httpie) sem `-G`. GET nunca casa; comentários em `.../pullrequests/<id>/threads` também não.
+- Fora: `git push`, heredocs, texto entre aspas, comentários, `echo`, `--help`/`-h`, `--dry-run`, `gh pr ready --undo`. `--web` conta como criação, de propósito.
+- Bitbucket fica de fora: não existe CLI `bb` aqui.
+
+Limites declarados, não seguidos: `bash -c '...'`, `sh -c`, `eval`, heredoc entregue a um shell, alias do `gh`, `az devops invoke`, `curl` com a URL montada em variável de comando, mutações GraphQL, funções de shell.
+
+Diretório. Só um `cd <literal> &&` simples e inicial é seguido. Qualquer outra forma (`cd a; ...`, `cd a` em linha própria, `(cd a && ...)`, `pushd`, `cd` no meio da cadeia, `cd -P`, `cd --`, espaço escapado, `FOO=1 cd`, dois `cd`, `cd a || ...`, `cd $VAR`) dá status `unknown`, nunca o diretório da sessão. O diretório vira a raiz do git (`git rev-parse --show-toplevel`) e aparece no aviso. Também dá `unknown`: `--repo/-R` ou `--repository` que não bate com um remoto do checkout (variáveis como `${REPO}` nunca batem), e `gh pr edit|ready <n>`, `az repos pr update --id`, PATCH por REST, que miram um PR que pode não ser a mudança revisada aqui. A leitura tem prazo de 5 s por processo; qualquer falha (processo, JSON inválido, objeto sem `status`, status fora de `^[a-z_]{1,40}$`) vira `unknown` e o comando roda mesmo assim. Só o `null` de topo é `none`. A causa mostrada é uma frase fixa; nada de stderr é repetido.
+
+Contexto (inglês, só para o modelo): `Review status read before the PR command for <raiz>: ready.`; para os demais status acrescenta que não há review independente pronto e manda pedir ao usuário `/harness review`, tratar os achados antes de publicar ou avisar que o PR está sem review; para `unknown` diz só que o status não pôde ser lido.
+
+Custo do detector: linear no tamanho do comando (um lexer de passagem única; aninhamento de `$(` limitado a 48 níveis); o teste lê 400 KB entre aspas, 60 mil `<<` e 20 mil `$(` em menos de um segundo no total.
+
+`prGateAsk` (padrão `false`). Ligado, quando o status é conhecido e não é `ready`, o hook `tool.check` troca um `allow` do motor por `{ decision: 'ask', reason }` (objeto limpo, sem `rule`/`hook`); um `deny` ou um `ask` do motor passam como vieram. A chamada fica marcada pelo `tool_use_id` enquanto o `tool.call` está em curso e é solta no `finally`. Coberto por teste: pergunta só para o id em curso, não para outro id nem sem id, não depois do retorno e nunca com a opção desligada. Não verificado sem uma sessão real: que o motor dispara `tool.check` dentro do `next(e)` com o mesmo `tool_use_id`; que em `dontAsk` ou headless um `ask` de hook é recusado, o que na prática vira `deny`; e o que `next(e)` devolve depois que a pessoa responde Não. Por isso fica desligado. Não existe modo `deny`.
 
 ## Créditos
 
-Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions) e shimo4228/harness-scope (mecanismo do Scope).
+Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions) e shimo4228/harness-scope (mecanismo do Scope) e pourya7/claude-code-mods `co-op` (MIT, Copyright (c) 2026 Pourya: o tratamento de aspas, heredoc e substituição de comando, o prefixo de comando e o `cd` inicial do PR gate, reescritos aqui como lexer; ver `NOTICE`).
 
 ## Como carregar
 
@@ -127,6 +143,7 @@ O hook `tool.call` atribui as chamadas de ferramenta de um subagente ao worker p
 - `autoRun` (padrão `true`): `harness_plan` e cada tarefa liquidada iniciam sozinhos as tarefas prontas.
 - `scopeMode` (padrão `enforce`), `runbook` (vazio), `alwaysAllowSkills` e `alwaysAllowAgents`: ver a seção Scope.
 - `autoReview` (padrão `false`): dispara o review do harness uma vez quando tudo está `done` ou `approved` e há ao menos uma `approved`.
+- `prGateAsk` (padrão `false`): ver PR gate.
 
 ## Limites conhecidos
 

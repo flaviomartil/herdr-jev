@@ -87,6 +87,12 @@ export type HarnessReview = {
   at: number
 }
 
+export type HarnessReviewIdentity = {
+  client: string
+  session: string
+  at: number
+}
+
 export type ScopeState = {
   status: 'pending' | 'ready' | 'partial'
   selected: string[]
@@ -113,6 +119,7 @@ declare module 'claude-code' {
       isExpanded: boolean
       folds: Record<string, boolean>
       scope: ScopeState
+      reviewIds: Record<string, HarnessReviewIdentity>
     }
   }
 }
