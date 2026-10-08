@@ -189,6 +189,36 @@ Base: [diegocamara89/claude-mods](https://github.com/diegocamara89/claude-mods) 
 - `painel-vivo`: mostra quota de 5 h e semanal e a saída ao vivo de Codex e agy no pane. Referência de UI para a Fase 3 do mod.
 - `lixeira` e `varredura-push` ficam fora do escopo: o harness já tem regras para ação destrutiva e para segredo.
 
+## 10c. Regras que viram checagem
+
+Base: [pourya7/claude-code-mods](https://github.com/pourya7/claude-code-mods) (MIT, sem uso externo comprovado). Três regras do harness hoje são `Enforcement: guidance`; estes mods mostram como aplicá-las no momento da tool call.
+
+| Regra do harness | Mod de referência | Mecanismo |
+| --- | --- | --- |
+| revisar antes de criar ou atualizar PR | `co-op` | em `tool.call` de Bash, detecta `gh pr create` que o shell de fato executaria (ignora heredoc e texto entre aspas), corta o diff contra a base, pede revisão a um modelo de tier diferente, bloqueia em achado grave e falha aberto |
+| não declarar sucesso sem evidência | `anti-cheat` | determinístico: procura "testes passam", "CI verde", "verificado" na resposta e confere se houve execução depois da última edição no turno |
+| teste precisa falhar sem a correção | `prove-it` | reverte o código-fonte, exige que os testes alterados falhem, restaura conferindo por hash e exige que passem |
+
+Adaptação:
+
+- `co-op`: em vez de um modelo próprio, o gatilho chama `herdr-jev review` e respeita o status do harness. Para Azure DevOps e Bitbucket o detector precisa cobrir os comandos de PR dessas plataformas, não só `gh`.
+- `anti-cheat`: entra no mod como aviso, não como bloqueio, coerente com hooks só de observação.
+- `prove-it`: vira etapa opcional de `herdr-jev review` (`--prove`), restrita a árvores limpas ou worktree, porque reverter código em árvore com trabalho alheio é destrutivo.
+
+Dois mods do mesmo repositório cobrem regras aprendidas e podem ser testados como estão, sem reimplementar: `anchor` (deriva de cwd do Bash) e `honest-exit` (glob sem match no zsh e exit code escondido por pipe).
+
+Referência de UI para o mod: `party` (sessões vivas e quem espera pelo usuário) e `painel-vivo` (seção 10b).
+
+## 10d. Parte visual do mod
+
+Depois do protótipo `harness:codex`:
+
+- Pane: linha por worker externo com cliente, modelo, última linha da saída, branch e worktree, e o resumo do diff ao terminar.
+- Pane, rodapé: uso de contexto e quota de 5 h e semanal, lidos de `$.session.usage()` e do hook `session.measure`.
+- Banda acima do prompt: contagem de workers externos junto dos nativos.
+- Lista de tarefas: papel e tarefa por linha de subagente, pelo contrato de arquivos da seção 8.
+- Retorno de `harness:reviewer` e do conselho: regra de prova da seção 10b anexada como `context`.
+
 ## 11. Fases
 
 | Fase | Entrega | DoD |
