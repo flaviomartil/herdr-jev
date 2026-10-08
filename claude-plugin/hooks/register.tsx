@@ -1247,15 +1247,14 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
-    const ended = await next(e)
     if (e.reason === 'clear') {
       await attempt('claims reset', $, async () => {
         await update($, claimWarningsAtom, () => [])
         await update($, claimLogAtom, () => [])
       })
     }
-    return ended
+    if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
+    return next(e)
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'harness' }, async ($, e) => {
