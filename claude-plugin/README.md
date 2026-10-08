@@ -144,6 +144,10 @@ A palavra de leitura só vale como palavra inteira (`readme` e `thread` não con
 
 Um `role` informado na tarefa (`reader`, `mechanic`, `implementer`, `advisor`) vale como override manual. Os quatro tipos de agente ficam fora da lista de agentes oferecidos ao modelo; só o mod spawna.
 
+## Consulta antes da implementação
+
+Depois do triage, o `harness_plan` roda `herdr-jev delegation-plan --client claude --model <modelo da sessão> --complexity <c> --available-models <modelos do models list e da sessão> --json` uma vez por complexidade presente no plano. Quando o plano de delegação do AI Harness traz o campo `consult` (hoje só o perfil `claude-opus-5`, com `fable-5` em tarefas `architectural`), o mod spawna um `harness:consultant` por tarefa correspondente, só com `Read`, `Glob` e `Grep` e `disallowedTools` para escrita, shell, `Agent` e as ferramentas do harness. Ele devolve uma recomendação de decomposição, riscos e ordem, que fica em `harness_status`. A tarefa não inicia sozinha: o `harness_run` sem `taskId` e o `autoRun` a ignoram, e a sessão decide se segue a recomendação e inicia a tarefa com `harness_run taskId`. Sem o campo `consult`, ou se a consulta falhar, nada muda e o plano não fica `stale`. O custo é uma chamada do modelo de consulta por tarefa correspondente.
+
 ## Fluxo de estados
 
 `proposed` -> `running` -> `review` -> `approved` -> `verified`.

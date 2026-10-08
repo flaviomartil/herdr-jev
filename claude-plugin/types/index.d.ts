@@ -25,6 +25,18 @@ export type HarnessRoleModel = {
 
 export type HarnessRoleTable = Partial<Record<HarnessModelRole, HarnessRoleModel>>
 
+export type HarnessConsultState = 'running' | 'done' | 'failed'
+
+export type HarnessConsult = {
+  model: string
+  cliModel: string
+  effort: string | null
+  state: HarnessConsultState
+  agentId?: string
+  report?: string
+  note?: string
+}
+
 export type HarnessTask = {
   id: string
   title: string
@@ -50,6 +62,7 @@ export type HarnessTask = {
   note?: string
   report?: string
   reviewReport?: string
+  consult?: HarnessConsult
 }
 
 export type HarnessPlan = {
