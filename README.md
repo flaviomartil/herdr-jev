@@ -473,6 +473,16 @@ When `review-verify` answers anything but `pending_review`, no judge runs and th
 
 A scope the Harness reports as `pending` with reason `timeout` is judged once more on the same snapshot, without a new `review-verify`; the report lists it under `retried` and a scope that stays pending is printed with its reason (`timeout` or `no_verdict`). The command never fabricates a verdict. The printed status is the Harness status (`ready`, `changes_required`, `pending_review`); it is `unavailable` when the Harness cannot answer. The exit code is 0 only for `ready`. A Harness without scope support gets a single `default` scope. Command files are written with mode 0600 under `<stateDir>/review/<session>/`, one `judge-<index>.json` per scope in report order, never in the repository, and removed when the command ends. A `review-findings` answer whose shape is not valid (a non-array `scopes`, a null item, a non-string name, verdict or status) is treated as unavailable: the report keeps the judges and takes the status from `review-status`. A scope option error (`unknown_option:--scopes`) is the only thing taken as a Harness without scope support; other scope errors are reported as they are. Text the Harness returns is printed without terminal control sequences. A Harness call that times out is killed with the processes it started.
 
+### prove
+
+```sh
+herdr-jev prove [--base <ref>] [--test-command-json <path>] [--setup-command-json <path>] [--timeout <ms>] [--json]
+```
+
+Shows that the tests changed by a diff fail without the source change and pass with it. The change set is the working tree and untracked files against `HEAD`, or against the merge base of `--base <ref>` and `HEAD`. Changed files under `tests/`, `test/`, `__tests__/` or named `*.test.*` or `*.spec.*` are the tests; every other changed file is source. The working tree is never modified: the command creates a throwaway Git worktree and a temporary branch at the base commit under `<stateDir>/prove/`, applies only the test files and runs the test command, which must fail, then applies the source files and runs it again, which must pass. The worktree and branch are removed on every outcome, including timeout, error and interruption (the command process group is killed on timeout).
+
+The test command is a JSON argv array from `--test-command-json`, or the repository test command that `review` detects. Without `--setup-command-json` the `node_modules` of the repository is symlinked into the worktree when it exists; with it, the command runs once in the worktree before the first test run. `--timeout` (default 600000) bounds each command. Verdicts: `proven`, `not_proven` (the tests pass without the source change), `broken` (they fail with the full change), `no_tests` (no changed test file, nothing is run) and `error` (setup problem, timeout or interruption, with a reason). The report has both exit codes, durations and a bounded tail of each output, and the exit code is 0 only for `proven`.
+
 ### Models, quota and companions
 
 | Command | Purpose |
