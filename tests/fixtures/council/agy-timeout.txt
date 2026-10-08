@@ -1,0 +1,7 @@
+exit: 1
+--- stdout ---
+{"conversation_id":"00000000-0000-0000-0000-000000000000","status":"ERROR","response":"","error":"interrupted","duration_seconds":0,"num_turns":0,"json_schema":{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string","enum":["high","medium","low"]},"title":{"type":"string"},"detail":{"type":"string"}},"required":["path","severity","title","detail"]}}},"required":["findings"]},"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}
+
+--- stderr ---
+error: interrupted
+

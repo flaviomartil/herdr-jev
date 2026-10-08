@@ -1,0 +1,11 @@
+exit: 0
+--- stdout ---
+The new greeting function crashes when no matching user exists.
+
+Review comment:
+
+- [P2] Handle a missing user before accessing its name — /tmp/review/src/user.ts:18-18
+  When `users` is empty or contains no matching name, `findUser` returns `null`, so `greet` throws a `TypeError` instead of returning a string. Handle the missing-user case before accessing `user.name`; this also fails compilation with TypeScript's `strictNullChecks` enabled.
+
+--- stderr ---
+

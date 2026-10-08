@@ -1,0 +1,6 @@
+exit: 0
+--- stdout ---
+{"conversation_id":"00000000-0000-0000-0000-000000000000","status":"SUCCESS","response":"{\"findings\":[],\"toolAction\":\"Submitting review findings\",\"toolSummary\":\"Code review completion\"}\n","duration_seconds":79.214006841,"num_turns":1,"structured_output":{"findings":[]},"json_schema":{"type":"object","properties":{"findings":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer"},"severity":{"type":"string","enum":["high","medium","low"]},"title":{"type":"string"},"detail":{"type":"string"}},"required":["path","severity","title","detail"]}}},"required":["findings"]},"usage":{"input_tokens":60048,"output_tokens":5125,"thinking_tokens":3945,"cache_read_tokens":256970,"total_tokens":65173}}
+
+--- stderr ---
+

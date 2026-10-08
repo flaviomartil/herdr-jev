@@ -1,0 +1,12 @@
+exit: 0
+--- stdout ---
+• UserPromptSubmit hook
+
+  [caveman] ULTRA: sem narrar progresso; ação termina em 1 linha curta: deu certo ou falhou + bloqueio. Evidências internas. Detalhe só se solicitado.
+
+• {"path":"src/user.ts","line":24,"severity":"high","title":"Null deref: findUser may return null","detail":"greet calls findUser which returns User | null; user.name throws TypeError when the user is not found. Fix: check for null (e.g. if (!user) return 'hello unknown') before dereferencing."}
+  {"path":"src/user.ts","line":19,"severity":"medium","title":"Hardcoded API key committed in source","detail":"API_KEY is a hardcoded credential-like value baked into the module and leaked into every greet() output string. Fix: move to env/config and never interpolate secrets into user-facing strings."}
+
+
+--- stderr ---
+
