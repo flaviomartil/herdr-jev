@@ -9,6 +9,7 @@ import type {
   HarnessTask,
   HarnessWorkerRow,
 } from '../types'
+import { registerClaims } from './claims'
 import { autoReview, autoRun, cliConfig, maxWorkers, runModels, runReview, runTriage } from './cli'
 import type { RunPort } from './cli'
 import {
@@ -1060,6 +1061,7 @@ function pctHue(word: string): Hue {
 }
 
 export const register: Register = (on, options) => {
+  registerClaims(on)
   const gate = createGate()
   const reviewed = new Set<string>()
   const runtime: ScopeRuntime = { receipt: newReceipt(), pending: null, warned: new Set() }

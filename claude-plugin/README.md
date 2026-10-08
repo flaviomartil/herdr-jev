@@ -35,9 +35,19 @@ Falhas: se o `skill-select` falha, o escopo fica `partial` e nenhuma skill é es
 
 Limite conhecido: o runbook não é detectado sozinho. O `ai-harness skill-select` roda sem `--runbook` (aceita) e só usa `runbook` quando configurado, então as CLIs que dependem de runbook só aparecem com ele.
 
+## Claims
+
+Aviso determinístico, sem modelo, para resposta que declara verificação que nada no turno sustenta. Adaptado do anti-cheat do pourya7/claude-code-mods (MIT), sem a banda de jogo, sem sprites e sem o prompt de desafio. Só avisa: não nega chamada de ferramenta, não segura nem encerra turno e nunca envia prompt.
+
+- `turn.complete` da sessão principal (`reason: answer`) extrai afirmações da resposta, uma por tipo: `test` (`tests pass`, `testes passaram`), `lint` (`typecheck clean`, `typecheck limpo`), `build`, `ci` (`CI is green`, `CI verde`) e `verified` (`verified`, `verificado`, `passou`). Negação, condição, hedge, pergunta, bloco de código, código em linha, texto entre aspas e citação (`>`) não são afirmação.
+- `tool.call` (Edit, Write, NotebookEdit e Bash) alimenta o log da sessão. Edit, Write, NotebookEdit e Bash que escreve arquivo (redirecionamento, `sed -i`, `tee`, `mv`, `rm`, `git checkout`, `--fix`, `--write`) invalidam a evidência anterior. Bash de teste, typecheck/lint, build ou leitura de status de CI depois da última edição é evidência do tipo certo; `verified` aceita qualquer um. CI vale depois do último `git push`. Uma execução com erro ou interrompida não é evidência.
+- Subagentes: o engine atribui as chamadas pelo `agentId`. A edição de um subagente invalida a evidência, a execução de um subagente conta como evidência (não dá para saber de qual worktree veio, então na dúvida não avisa) e a resposta de um subagente nunca é checada.
+- A banda acima do prompt ganha uma linha por aviso (até 3, depois `+N more unverified`), na cor `warning`: `unverified: "all tests pass" · no test ran after the last edit`. O hook chama `next(e)` e acrescenta a linha ao que veio, então a banda do plano e a de outros mods continuam. O próximo prompt da pessoa (`composer`, `bridge`, `sdk`) limpa; a próxima resposta recalcula.
+- Estado em `harness.claimLog` (últimas 200 entradas) e `harness.claimWarnings`. Sem opção de configuração.
+
 ## Créditos
 
-Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions) e shimo4228/harness-scope (mecanismo do Scope).
+Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions), shimo4228/harness-scope (mecanismo do Scope) e pourya7/claude-code-mods anti-cheat (detecção de afirmações e classificação de evidência do Claims).
 
 ## Como carregar
 
