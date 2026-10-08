@@ -1,6 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import { printable, singleLine } from "./printable.js";
@@ -10,6 +10,7 @@ export interface RunOptions {
   timeoutMs: number;
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
+  onSpawn?: (pid: number) => void;
 }
 
 export interface RunResult {
@@ -42,10 +43,12 @@ export interface ProveReport {
   baseRef: string | null;
   testFiles: string[];
   sourceFiles: string[];
+  skippedPaths: string[];
+  skippedCount: number;
   dependencies: ProveDependencies;
   withoutSource?: ProveRun;
   withSource?: ProveRun;
-  worktreeRemoved: boolean;
+  workspaceRemoved: boolean;
   cleanupError?: string;
 }
 
@@ -55,6 +58,7 @@ export interface ProveOptions {
   testCommand: string[];
   testFiles?: string[];
   setupCommand?: string[];
+  testAtRoot?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
   run?: RunFn;
@@ -66,6 +70,9 @@ const OUTPUT_TAIL_CHARS = 4000;
 const CAPTURE_CHARS = 64 * 1024;
 const EXIT_GRACE_MS = 1000;
 const GIT_CALL_TIMEOUT_MS = 120_000;
+const STALE_FLOOR_MS = 7_200_000;
+const SKIPPED_LISTED = 100;
+const GIT_SAFE_CONFIG = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
 const INHERITED_GIT_VARIABLES = ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY"];
 
 const TEST_PATH = /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[^/]+$|_test\.[^/]+$|(^|\/)test_[^/]+\.py$/;
@@ -96,6 +103,7 @@ export const defaultRun: RunFn = (argv, options) =>
     let child: ChildProcess;
     try {
       child = spawn(argv[0]!, argv.slice(1), { cwd: options.cwd, env: options.env ?? process.env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+      if (child.pid !== undefined) options.onSpawn?.(child.pid);
     } catch (error) {
       done({ exitCode: null, timedOut: false, aborted: false, output: "", error: error instanceof Error ? error.message : String(error) });
       return;
@@ -152,7 +160,7 @@ export const defaultRun: RunFn = (argv, options) =>
   });
 
 function git(cwd: string, args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+  const result = spawnSync("git", [...GIT_SAFE_CONFIG, ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -206,23 +214,32 @@ function containedParent(realRoot: string, parent: string, rel: string): boolean
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
   }
-  if (real !== realRoot && !real.startsWith(realRoot + sep)) throw new Error(`unsafe_path: ${brief(rel)} resolves outside the worktree`);
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) throw new Error(`unsafe_path: ${brief(rel)} resolves outside the workspace`);
   return true;
 }
 
-function applyFiles(root: string, worktree: string, files: readonly string[]): void {
-  const realRoot = realpathSync(worktree);
+function realDirectories(base: string, parts: readonly string[]): boolean {
+  let current = base;
+  for (const part of parts.slice(0, -1)) {
+    current = join(current, part);
+    if (!lstatOrNull(current)?.isDirectory()) return false;
+  }
+  return true;
+}
+
+function applyFiles(root: string, workspace: string, files: readonly string[]): void {
+  const realRoot = realpathSync(workspace);
   for (const file of files) {
     const rel = safeRelative(file);
     const parts = rel.split("/");
     const source = join(root, rel);
-    const target = join(worktree, rel);
-    const sourceStat = lstatOrNull(source);
+    const target = join(workspace, rel);
+    const sourceStat = realDirectories(root, parts) ? lstatOrNull(source) : null;
     if (!sourceStat) {
-      if (containedParent(realRoot, dirname(target), rel)) removeEntry(target);
+      if (realDirectories(workspace, parts) && containedParent(realRoot, dirname(target), rel)) removeEntry(target);
       continue;
     }
-    let current = worktree;
+    let current = workspace;
     for (const part of parts.slice(0, -1)) {
       current = join(current, part);
       ensureDirectory(current);
@@ -276,9 +293,11 @@ interface ChangeSet {
   subdir: string;
   baseSha: string;
   files: string[];
+  skipped: string[];
+  submodules: string[];
 }
 
-function ignoredPath(path: string): boolean {
+function skippedUntracked(path: string): boolean {
   return path.endsWith("/") || path.split("/").some((part) => part === "node_modules" || part.toLowerCase() === ".git");
 }
 
@@ -299,74 +318,122 @@ function computeChangeSet(cwd: string, baseRef: string | undefined): ChangeSet {
     baseSha = head.stdout.trim();
     if (!head.ok || !baseSha) throw new Error("no_commits: the repository has no commit to compare against");
   }
-  const tracked = git(root, ["diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", baseSha, "--"]);
+  const tracked = git(root, ["diff", "--raw", "-z", "--no-renames", "--no-ext-diff", "--ignore-submodules=dirty", baseSha, "--"]);
   if (!tracked.ok) throw new Error(`git_failed: git diff did not finish: ${brief(tracked.stderr)}`);
+  const trackedFiles: string[] = [];
+  const submodules: string[] = [];
+  const tokens = nulList(tracked.stdout);
+  for (let index = 0; index < tokens.length; index += 2) {
+    const meta = /^:(\d+) (\d+) /.exec(tokens[index]!);
+    const path = tokens[index + 1];
+    if (!meta || path === undefined) throw new Error("git_failed: git diff returned output that could not be read");
+    trackedFiles.push(path);
+    if (meta[1] === "160000" || meta[2] === "160000") submodules.push(path);
+  }
   const untracked = git(root, ["ls-files", "-z", "--others", "--exclude-standard", "--full-name", "--", ":/"]);
   if (!untracked.ok) throw new Error(`git_failed: git ls-files did not finish: ${brief(untracked.stderr)}`);
-  const files = [...new Set([...nulList(tracked.stdout), ...nulList(untracked.stdout)])].filter((file) => !ignoredPath(file)).sort();
-  return { root, subdir: prefix, baseSha, files };
+  const untrackedAll = nulList(untracked.stdout);
+  const skipped = untrackedAll.filter(skippedUntracked).sort();
+  const files = [...new Set([...trackedFiles, ...untrackedAll.filter((file) => !skippedUntracked(file))])].sort();
+  return { root, subdir: prefix, baseSha, files, skipped, submodules: submodules.sort() };
 }
 
-function worktreeListed(root: string, path: string): boolean {
-  const listing = git(root, ["worktree", "list", "--porcelain"]);
-  return listing.stdout.split("\n").some((line) => line === `worktree ${path}`);
+interface Meta {
+  startedAt: number;
+  timeoutMs: number;
+  pid?: number;
+  argv?: string[];
 }
 
-function removeOwnAdminEntry(root: string, path: string): void {
-  const common = git(root, ["rev-parse", "--git-common-dir"]).stdout.trim();
-  if (!common) return;
-  const admin = join(resolve(root, common), "worktrees");
+function metaPath(path: string): string {
+  return `${path}.meta.json`;
+}
+
+function writeMeta(path: string, meta: Meta): void {
+  try {
+    writeFileSync(metaPath(path), JSON.stringify(meta), { mode: 0o600 });
+  } catch {
+  }
+}
+
+function readMeta(path: string): Meta | null {
+  try {
+    const parsed = JSON.parse(readFileSync(metaPath(path), "utf8"));
+    if (typeof parsed?.startedAt !== "number" || typeof parsed?.timeoutMs !== "number") return null;
+    return parsed as Meta;
+  } catch {
+    return null;
+  }
+}
+
+function belongsToCommand(pid: number, argv: readonly string[]): boolean {
+  const result = spawnSync("ps", ["-ww", "-o", "pgid=,args=", "-p", String(pid)], { encoding: "utf8", timeout: 5000 });
+  if (result.status !== 0 || result.error) return false;
+  const match = /^\s*(\d+)\s(.*)$/.exec((result.stdout ?? "").replace(/\n+$/, ""));
+  return Boolean(match) && Number(match![1]) === pid && match![2] === argv.join(" ");
+}
+
+function sweepStale(parent: string): void {
   let names: string[];
   try {
-    names = readdirSync(admin);
+    names = readdirSync(parent);
   } catch {
     return;
   }
-  for (const name of names) {
+  const ids = new Set(names.map((name) => (name.endsWith(".meta.json") ? name.slice(0, -".meta.json".length) : name)));
+  for (const id of ids) {
     try {
-      if (readFileSync(join(admin, name, "gitdir"), "utf8").trim() === join(path, ".git")) rmSync(join(admin, name), { recursive: true, force: true });
-    } catch {
-    }
-  }
-}
-
-function removeWorktree(root: string, path: string, links: readonly string[]): { worktreeRemoved: boolean; error?: string } {
-  const errors: string[] = [];
-  for (const link of links) {
-    try {
-      unlinkSync(link);
-    } catch {
-    }
-  }
-  if (worktreeListed(root, path) || existsSync(path)) {
-    git(root, ["worktree", "remove", "--force", "--force", path]);
-    if (existsSync(path)) {
-      try {
-        rmSync(path, { recursive: true, force: true });
-      } catch (error) {
-        errors.push(`rm: ${error instanceof Error ? error.message : String(error)}`);
+      const dir = join(parent, id);
+      const meta = readMeta(dir);
+      let startedAt = meta?.startedAt;
+      if (startedAt === undefined) {
+        try {
+          startedAt = statSync(dir).mtimeMs;
+        } catch {
+          startedAt = 0;
+        }
       }
+      const threshold = Math.max(STALE_FLOOR_MS, 3 * (meta?.timeoutMs ?? DEFAULT_PROVE_TIMEOUT_MS));
+      if (Date.now() - startedAt < threshold) continue;
+      if (meta?.pid && meta.argv && belongsToCommand(meta.pid, meta.argv)) {
+        try {
+          process.kill(-meta.pid, "SIGKILL");
+        } catch {
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(metaPath(dir), { force: true });
+    } catch {
     }
-    if (worktreeListed(root, path)) removeOwnAdminEntry(root, path);
   }
-  const worktreeRemoved = !existsSync(path) && !worktreeListed(root, path);
-  if (!worktreeRemoved) errors.push(`worktree still present: ${brief(path)}`);
-  return { worktreeRemoved, ...(errors.length > 0 ? { error: errors.join("; ") } : {}) };
 }
 
-function freshWorkspace(root: string): { path: string } {
+function removeWorkspace(path: string): { workspaceRemoved: boolean; error?: string } {
+  let error: string | undefined;
+  try {
+    rmSync(path, { recursive: true, force: true });
+  } catch (cause) {
+    error = `rm: ${cause instanceof Error ? cause.message : String(cause)}`;
+  }
+  const workspaceRemoved = !existsSync(path);
+  if (!workspaceRemoved) error = `${error ? `${error}; ` : ""}workspace still present: ${brief(path)}`;
+  return { workspaceRemoved, ...(error ? { error } : {}) };
+}
+
+function freshWorkspace(): { path: string } {
   const parent = join(resolveStateDir(), "prove");
   mkdirSync(parent, { recursive: true, mode: 0o700 });
+  sweepStale(parent);
   const realParent = realpathSync(parent);
   for (let attempt = 0; attempt < 8; attempt++) {
     const path = join(realParent, `${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`);
-    if (!existsSync(path) && !worktreeListed(root, path)) return { path };
+    if (!existsSync(path)) return { path };
   }
-  throw new Error("worktree_path_unavailable: could not find an unused worktree path");
+  throw new Error("workspace_path_unavailable: could not find an unused workspace path");
 }
 
 function failed(partial: Partial<ProveReport> & { reason: string }): ProveReport {
-  return { verdict: "error", base: null, baseRef: null, testFiles: [], sourceFiles: [], dependencies: "none", worktreeRemoved: true, ...partial };
+  return { verdict: "error", base: null, baseRef: null, testFiles: [], sourceFiles: [], skippedPaths: [], skippedCount: 0, dependencies: "none", workspaceRemoved: true, ...partial };
 }
 
 export async function runProve(opts: ProveOptions): Promise<ProveReport> {
@@ -385,53 +452,77 @@ export async function runProve(opts: ProveOptions): Promise<ProveReport> {
   const explicit = new Set((opts.testFiles ?? []).map((file) => file.replace(/^\.\//, "")));
   const testFiles = changes.files.filter((file) => isTestPath(file, explicit));
   const sourceFiles = changes.files.filter((file) => !isTestPath(file, explicit));
-  const common = { base: changes.baseSha, baseRef: opts.base ?? null, testFiles, sourceFiles };
-  if (testFiles.length === 0) return { verdict: "no_tests", reason: "no changed test files", ...common, dependencies: "none", worktreeRemoved: true };
+  const common = { base: changes.baseSha, baseRef: opts.base ?? null, testFiles, sourceFiles, skippedPaths: changes.skipped.slice(0, SKIPPED_LISTED), skippedCount: changes.skipped.length };
+  if (testFiles.length === 0) return { verdict: "no_tests", reason: "no changed test files", ...common, dependencies: "none", workspaceRemoved: true };
+  if (changes.submodules.length > 0) return failed({ ...common, reason: `submodule_change_unsupported: ${changes.submodules.slice(0, 5).map(brief).join(", ")} changed its commit pointer; submodule updates cannot be applied to the copy` });
 
   let workspace: { path: string };
   try {
-    workspace = freshWorkspace(changes.root);
+    workspace = freshWorkspace();
   } catch (error) {
     return failed({ ...common, reason: error instanceof Error ? error.message : String(error) });
   }
-  const links: string[] = [];
+  const meta: Meta = { startedAt: Date.now(), timeoutMs };
+  writeMeta(workspace.path, meta);
   let report: ProveReport;
   try {
-    report = await prove({ ...opts, run, timeoutMs }, changes, workspace.path, common, links);
+    report = await prove({ ...opts, run, timeoutMs }, changes, workspace.path, common, meta);
   } catch (error) {
-    report = failed({ ...common, reason: error instanceof Error ? error.message : String(error) });
+    report = failed({ ...common, workspaceRemoved: false, reason: error instanceof Error ? error.message : String(error) });
   }
-  const cleanup = removeWorktree(changes.root, workspace.path, links);
-  report.worktreeRemoved = cleanup.worktreeRemoved;
+  const cleanup = removeWorkspace(workspace.path);
+  report.workspaceRemoved = cleanup.workspaceRemoved;
   if (cleanup.error) report.cleanupError = cleanup.error;
+  if (cleanup.workspaceRemoved) rmSync(metaPath(workspace.path), { force: true });
   return report;
+}
+
+function partialClone(root: string): boolean {
+  const config = git(root, ["config", "--get-regexp", "^(extensions\\.partialclone|remote\\..*\\.(promisor|partialclonefilter))$"]);
+  return config.ok && config.stdout.trim().length > 0;
+}
+
+async function createWorkspace(opts: ProveOptions & { timeoutMs: number }, changes: ChangeSet, path: string, env: NodeJS.ProcessEnv): Promise<string | null> {
+  if (partialClone(changes.root)) return "partial_clone_unsupported: the repository is a partial clone, so the base commit may be missing objects; run prove in a full clone";
+  const steps: Array<[string, string[]]> = [
+    ["clone", ["git", ...GIT_SAFE_CONFIG, "clone", "--quiet", "--shared", "--no-checkout", "--template=", "--origin", "origin", changes.root, path]],
+    ["checkout", ["git", "-C", path, ...GIT_SAFE_CONFIG, "checkout", "--quiet", "--force", "--detach", changes.baseSha]],
+    ["remote", ["git", "-C", path, ...GIT_SAFE_CONFIG, "remote", "remove", "origin"]],
+    ["fetch", ["git", "-C", path, ...GIT_SAFE_CONFIG, "fetch", "--quiet", "--no-tags", changes.root, "+refs/heads/*:refs/heads/*", "+refs/remotes/*:refs/remotes/*"]],
+  ];
+  for (const [name, argv] of steps) {
+    const result = await defaultRun(argv, { cwd: changes.root, timeoutMs: opts.timeoutMs, signal: opts.signal, env: { ...env, GIT_OPTIONAL_LOCKS: "0" } });
+    if (result.aborted) return "aborted";
+    if (result.timedOut) return `workspace_timeout: git ${name}`;
+    if (result.exitCode !== 0) return `workspace_failed: git ${name}: ${brief(result.output)}`;
+  }
+  return null;
 }
 
 async function prove(
   opts: ProveOptions & { timeoutMs: number; run: RunFn },
   changes: ChangeSet,
   path: string,
-  common: Pick<ProveReport, "base" | "baseRef" | "testFiles" | "sourceFiles">,
-  links: string[],
+  common: Pick<ProveReport, "base" | "baseRef" | "testFiles" | "sourceFiles" | "skippedPaths" | "skippedCount">,
+  meta: Meta,
 ): Promise<ProveReport> {
-  const base = { ...common, worktreeRemoved: false };
+  const base = { ...common, workspaceRemoved: false };
   const env = cleanEnv();
-  const add = await defaultRun(["git", "-c", "core.hooksPath=/dev/null", "worktree", "add", "--detach", path, changes.baseSha], {
-    cwd: changes.root,
-    timeoutMs: opts.timeoutMs,
-    signal: opts.signal,
-    env: { ...env, GIT_OPTIONAL_LOCKS: "0" },
-  });
-  if (add.aborted) return { verdict: "error", reason: "aborted", dependencies: "none", ...base };
-  if (add.timedOut) return { verdict: "error", reason: "worktree_add_timeout", dependencies: "none", ...base };
-  if (add.exitCode !== 0) return { verdict: "error", reason: `worktree_add_failed: ${brief(add.output)}`, dependencies: "none", ...base };
+  const creation = await createWorkspace(opts, changes, path, env);
+  if (creation) return { verdict: "error", reason: creation, dependencies: "none", ...base };
 
-  const runIn = join(path, changes.subdir);
+  const execute = async (argv: readonly string[], cwd: string): Promise<RunResult> => {
+    const result = await opts.run(argv, { cwd, timeoutMs: opts.timeoutMs, signal: opts.signal, env, onSpawn: (pid) => writeMeta(path, { ...meta, pid, argv: [...argv] }) });
+    writeMeta(path, meta);
+    return result;
+  };
+  const setupIn = join(path, changes.subdir);
+  const testIn = opts.testAtRoot ? path : setupIn;
   let dependencies: ProveDependencies = "none";
   if (opts.setupCommand) {
     dependencies = "setup_command";
-    if (!existsSync(runIn)) return { verdict: "error", reason: `setup_cwd_missing: ${brief(changes.subdir)} does not exist at the base commit; run from the repository root or a directory present at the base`, dependencies, ...base };
-    const setup = await opts.run(opts.setupCommand, { cwd: runIn, timeoutMs: opts.timeoutMs, signal: opts.signal, env });
+    if (!existsSync(setupIn)) return { verdict: "error", reason: `setup_cwd_missing: ${brief(changes.subdir)} does not exist at the base commit; run from the repository root or a directory present at the base`, dependencies, ...base };
+    const setup = await execute(opts.setupCommand, setupIn);
     const infra = infraReason("setup", setup);
     if (infra) return { verdict: "error", reason: infra, dependencies, ...base };
     if (setup.exitCode !== 0) return { verdict: "error", reason: `setup_failed: exit ${setup.exitCode}: ${brief(tailOf(setup.output).slice(-300))}`, dependencies, ...base };
@@ -440,14 +531,13 @@ async function prove(
     const target = join(path, "node_modules");
     if (existsSync(modules) && !lstatOrNull(target)) {
       symlinkSync(modules, target);
-      links.push(target);
       dependencies = "node_modules_symlink";
     }
   }
 
   applyFiles(changes.root, path, common.testFiles);
-  if (!existsSync(runIn)) return { verdict: "error", reason: `test_cwd_missing: ${brief(changes.subdir)} does not exist with only the test files applied; run from the repository root`, dependencies, ...base };
-  const first = await opts.run(opts.testCommand, { cwd: runIn, timeoutMs: opts.timeoutMs, signal: opts.signal, env });
+  if (!existsSync(testIn)) return { verdict: "error", reason: `test_cwd_missing: ${brief(changes.subdir)} does not exist with only the test files applied; run from the repository root`, dependencies, ...base };
+  const first = await execute(opts.testCommand, testIn);
   const withoutSource = toRun(first);
   const firstInfra = infraReason("test", first);
   if (firstInfra) return { verdict: "error", reason: firstInfra, dependencies, withoutSource, ...base };
@@ -455,7 +545,7 @@ async function prove(
   if (common.sourceFiles.length === 0) return { verdict: "broken", reason: "tests fail and the change has no source files to fix them", dependencies, withoutSource, ...base };
 
   applyFiles(changes.root, path, common.sourceFiles);
-  const second = await opts.run(opts.testCommand, { cwd: runIn, timeoutMs: opts.timeoutMs, signal: opts.signal, env });
+  const second = await execute(opts.testCommand, testIn);
   const withSource = toRun(second);
   const secondInfra = infraReason("test", second);
   if (secondInfra) return { verdict: "error", reason: secondInfra, dependencies, withoutSource, withSource, ...base };
@@ -475,6 +565,7 @@ export function formatProveReport(report: ProveReport): string {
   const lines = [`Prove: ${report.verdict}${report.reason ? ` (${report.reason})` : ""}`];
   if (report.base) lines.push(`Base: ${report.baseRef ? `${report.baseRef} ` : ""}${report.base.slice(0, 12)}`);
   lines.push(`Test files: ${report.testFiles.length}, source files: ${report.sourceFiles.length}, dependencies: ${report.dependencies}`);
+  if (report.skippedCount > 0) lines.push(`Skipped untracked paths: ${report.skippedCount} (${report.skippedPaths.slice(0, 5).map(brief).join(", ")}${report.skippedCount > 5 ? ", ..." : ""})`);
   lines.push(...describeRun("Without source change", report.withoutSource));
   lines.push(...describeRun("With source change", report.withSource));
   if (report.cleanupError) lines.push(`Cleanup incomplete: ${report.cleanupError}`);
