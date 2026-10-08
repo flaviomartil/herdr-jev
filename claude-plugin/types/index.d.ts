@@ -87,6 +87,13 @@ export type HarnessReview = {
   at: number
 }
 
+export type HarnessReviewIdentity = {
+  client: string
+  session: string
+  at: number
+  status: string | null
+}
+
 export type ScopeState = {
   status: 'pending' | 'ready' | 'partial'
   selected: string[]
@@ -96,6 +103,20 @@ export type ScopeState = {
   query: string
   total: number | null
   note: string | null
+}
+
+export type ClaimKind = 'test' | 'lint' | 'build' | 'ci' | 'verified'
+
+export type ClaimCheck = 'test' | 'lint' | 'build' | 'ci' | 'push'
+
+export type ClaimEntry =
+  | { seq: number; type: 'edit'; path: string; agentId?: string }
+  | { seq: number; type: 'run'; checks: ClaimCheck[]; command: string; isOk: boolean; isInterrupted: boolean; agentId?: string }
+
+export type ClaimWarning = {
+  kind: ClaimKind
+  quote: string
+  reason: string
 }
 
 declare module 'claude-code' {
@@ -113,6 +134,9 @@ declare module 'claude-code' {
       isExpanded: boolean
       folds: Record<string, boolean>
       scope: ScopeState
+      claimLog: ClaimEntry[]
+      claimWarnings: ClaimWarning[]
+      reviewIds: Record<string, HarnessReviewIdentity>
     }
   }
 }

@@ -22,6 +22,7 @@ export type ReviewResult = {
   status: string | null
   detail: string | null
   error: string | null
+  identity: { client: string; session: string; cwd: string } | null
 }
 
 export type PlanTaskInput = {
@@ -171,7 +172,15 @@ export function normalizeReview(raw: unknown): ReviewResult | null {
     status: text(raw.status),
     detail: parts.length === 0 ? null : parts.join(', '),
     error: text(raw.error),
+    identity: reviewIdentity(raw),
   }
+}
+
+function reviewIdentity(raw: Record<string, unknown>): ReviewResult['identity'] {
+  const client = text(raw.client)
+  const session = text(raw.session)
+  const cwd = text(raw.cwd)
+  return client === null || session === null || cwd === null ? null : { client, session, cwd }
 }
 
 export function assignRole(triage: TriageResult | null, hints: RoleHints): RoleDecision {

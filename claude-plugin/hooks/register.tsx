@@ -9,8 +9,24 @@ import type {
   HarnessTask,
   HarnessWorkerRow,
 } from '../types'
+import { registerClaims } from './claims'
 import { autoReview, autoRun, cliConfig, maxWorkers, runModels, runReview, runTriage } from './cli'
 import type { RunPort } from './cli'
+import {
+  agentSpec,
+  cleanupAgent,
+  createExternal,
+  endAll,
+  externalRefusal,
+  externalRole,
+  externalStep,
+  maxMinutesOf,
+  noteSpawn,
+  PROGRESS_DESCRIPTION,
+  progressCall,
+  spawnDenial,
+} from './external'
+import type { AgentState, External, Ports } from './external'
 import {
   approvedKey,
   baseName,
@@ -38,6 +54,9 @@ import {
   shortModel,
   summarize,
 } from './plan'
+import { registerPrGate } from './pr-gate'
+import { mergeReviewIds, reviewIdsKey } from './review-run'
+import type { ReviewIds } from './review-run'
 import type { Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
 import {
   agentReason,
@@ -69,6 +88,8 @@ import {
 } from './workers'
 import type { Gate, LaunchPorts } from './workers'
 
+const claimLogAtom = atom({ plugin: 'harness', key: 'claimLog' } as const, [])
+const claimWarningsAtom = atom({ plugin: 'harness', key: 'claimWarnings' } as const, [])
 const planAtom = atom({ plugin: 'harness', key: 'plan' } as const, null)
 const workersAtom = atom({ plugin: 'harness', key: 'workers' } as const, {})
 const needsYouAtom = atom({ plugin: 'harness', key: 'needsYou' } as const, [])
@@ -80,6 +101,7 @@ const reviewAtom = atom({ plugin: 'harness', key: 'review' } as const, null)
 const isReviewRunningAtom = atom({ plugin: 'harness', key: 'isReviewRunning' } as const, false)
 const isExpandedAtom = atom({ plugin: 'harness', key: 'isExpanded' } as const, false)
 const foldsAtom = atom({ plugin: 'harness', key: 'folds' } as const, {})
+const reviewIdsAtom = atom({ plugin: 'harness', key: 'reviewIds' } as const, {})
 const scopeAtom = atom({ plugin: 'harness', key: 'scope' } as const, EMPTY_SCOPE as ScopeState)
 
 const PANE_ID = 'harness'
@@ -87,6 +109,7 @@ const PANE_ID = 'harness'
 const TOOL_PLAN = 'mcp__harness__harness_plan'
 const TOOL_RUN = 'mcp__harness__harness_run'
 const TOOL_STATUS = 'mcp__harness__harness_status'
+const TOOL_CODEX_PROGRESS = /^mcp__harness__codex_progress$/
 
 const ACTIVE_STATUS = ['pending', 'running', 'waiting', 'idle']
 const RESTARTABLE: readonly HarnessTask['state'][] = ['proposed', 'failed', 'needs_you']
@@ -176,6 +199,63 @@ const launchPorts = ($: EngineInterface): LaunchPorts => ({
   register: spec => $.agent.register(spec),
   run: (argv, init) => $.process.run(argv, init),
 })
+
+const CODEX_STORE_PREFIX = 'codex-agent:'
+
+async function codexPrefix($: EngineInterface, sessionId?: string): Promise<string> {
+  return `${CODEX_STORE_PREFIX}${sessionId !== undefined && sessionId.length > 0 ? sessionId : await $.session.id()}:`
+}
+
+const externalPorts = ($: EngineInterface, sessionId?: string): Ports => ({
+  run: (argv, init) => $.process.run(argv, init),
+  now: () => $.clock.now(),
+  sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
+  cwd: () => $.session.cwd(),
+  env: async () => ({
+    stateDir: await $.env.get('HERDR_JEV_STATE_DIR'),
+    pluginId: await $.env.get('HERDR_PLUGIN_ID'),
+    pluginStateDir: await $.env.get('HERDR_PLUGIN_STATE_DIR'),
+    home: await $.env.get('HOME'),
+    testGuard: await $.env.get('HERDR_JEV_TEST_GUARD'),
+    aiHarnessTestGuard: await $.env.get('AI_HARNESS_TEST_GUARD'),
+    generatedDir: await $.env.get('AI_HARNESS_GENERATED_DIR'),
+  }),
+  readText: async path => {
+    const raw = await $.fs.read(path)
+    if (typeof raw !== 'string') throw new Error('not a text file')
+    return raw
+  },
+  exists: path => $.fs.exists(path),
+  userTexts: async agentId => {
+    const rows = await $.session.messages({ agentId })
+    return Array.isArray(rows) ? rows.filter(row => row.role === 'user').map(row => row.text) : null
+  },
+  agentType: async agentId => (await $.agent.list()).find(one => one.id === agentId)?.type,
+  loadState: async agentId => ((await $.store.get(`${await codexPrefix($, sessionId)}${agentId}`)) as AgentState | undefined) ?? null,
+  saveState: async (agentId, state) => {
+    if (state === null) await $.store.delete(`${await codexPrefix($, sessionId)}${agentId}`)
+    else await $.store.set(`${await codexPrefix($, sessionId)}${agentId}`, state)
+  },
+  sessionAgents: async () => {
+    const prefix = await codexPrefix($, sessionId)
+    return (await $.store.keys()).filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length))
+  },
+  notify: text => {
+    $.ui.toast(text.slice(0, 600), { timeoutMs: 15000 })
+  },
+})
+
+async function registerCodexAgent($: EngineInterface, external: External, options: PluginOptions): Promise<void> {
+  if (options.codex !== true) return
+  try {
+    external.progressTool = (await $.tool.register({ name: 'codex_progress', description: PROGRESS_DESCRIPTION })).tool
+  } catch {
+    external.progressTool = ''
+  }
+  if (external.progressTool === '') return
+  await $.agent.register(agentSpec(external.progressTool))
+  external.agentRegistered = true
+}
 
 async function save($: EngineInterface, cwd: string): Promise<void> {
   try {
@@ -906,8 +986,16 @@ async function refreshReview($: EngineInterface, options: PluginOptions, cwd: st
       return ran.timedOut === true ? `harness review timed out: ${ran.reason}.` : `harness review failed: ${ran.reason}.`
     }
 
-    const { status, detail, error } = ran.value
+    const { status, detail, error, identity } = ran.value
     await setReview($, { ok: true, status, detail, reason: error, at })
+    if (identity !== null) {
+      await update($, reviewIdsAtom, ids =>
+        mergeReviewIds(ids as ReviewIds, identity.cwd, { client: identity.client, session: identity.session, at, status }),
+      )
+      await attempt('store review ids', $, async () => {
+        await $.store.set(reviewIdsKey(await $.session.id()), await read($, reviewIdsAtom))
+      })
+    }
     if (status !== 'ready') return `harness review ${status ?? 'unknown'}; approved tasks stay approved.`
 
     let verified = 0
@@ -1060,15 +1148,19 @@ function pctHue(word: string): Hue {
 }
 
 export const register: Register = (on, options) => {
+  registerClaims(on)
+  const external = createExternal(maxMinutesOf(options.codexMaxMinutes))
   const gate = createGate()
   const reviewed = new Set<string>()
   const runtime: ScopeRuntime = { receipt: newReceipt(), pending: null, warned: new Set() }
+
+  registerPrGate(on, options)
 
   on('session.start', async ($, e, next) => {
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
-        description: 'Show the Herdr-Jev harness plan and workers in a pane',
+        description: 'Show the Herdr-Jev harness plan and workers in a pane; /harness review runs the harness review',
       }),
     )
     await attempt('register harness_plan', $, () =>
@@ -1087,6 +1179,7 @@ export const register: Register = (on, options) => {
         inputSchema: RUN_SCHEMA,
       }),
     )
+    await attempt('register codex agent', $, () => registerCodexAgent($, external, options))
     await attempt('register harness_status', $, () =>
       $.tool.register({
         name: 'harness_status',
@@ -1125,6 +1218,45 @@ export const register: Register = (on, options) => {
     next.called ? next(e) : { isOffered: false },
   )
 
+  on('agent.offer', { agent: 'harness:codex' }, () => ({ isOffered: options.codex === true })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+
+  on('tool.call', { tool: TOOL_CODEX_PROGRESS }, async ($, e) => progressCall(externalPorts($), e.agentId)).catch(($, e, next) =>
+    next.called ? next(e) : { deny: 'codex_progress failed, see the debug log.' },
+  )
+
+  on('agent.spawn', async ($, e, next) => {
+    const denial = spawnDenial(e, options.codex === true)
+    if (denial !== null) return { deny: denial }
+    const started = await next(e)
+    await attempt('note codex spawn', $, () => noteSpawn(externalPorts($), e.subagentType, e.prompt, e.cwd, started.agentId))
+    return started
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const agentId = e.agentId
+    if (agentId === undefined || options.codex !== true) return yield* next(e)
+    const ports = externalPorts($)
+    if ((await externalRole(ports, external, agentId)) === 'other') return yield* next(e)
+    return yield* externalStep(ports, external, e, agentId, next.signal, () => next.budget.remainingMs)
+  }).catch(async function* ($, e, next) {
+    if (next.called || e.agentId === undefined || options.codex !== true) return yield* next(e)
+    if ((await externalRole(externalPorts($), external, e.agentId)) === 'other') return yield* next(e)
+    return yield* externalRefusal(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') {
+      await attempt('claims reset', $, async () => {
+        await update($, claimWarningsAtom, () => [])
+        await update($, claimLogAtom, () => [])
+      })
+    }
+    if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('command.run', { command: 'harness' }, async ($, e) => {
     if (e.args.trim() === 'scope') {
       const text = receiptText(scopeMode(options), await read($, scopeAtom), runtime.receipt)
@@ -1137,6 +1269,9 @@ export const register: Register = (on, options) => {
       if (!hasScreen) return { text }
       $.ui.log(text)
       return {}
+    }
+    if (e.args.trim() === 'review') {
+      return { text: await refreshReview($, options, await $.session.cwd()) }
     }
     await update($, isHiddenAtom, () => false)
     await $.ui.open({ id: PANE_ID, title: 'Harness', closeOnEscape: true })
@@ -1239,6 +1374,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) {
       const agentId = e.agentId
+      await attempt('codex cleanup', $, () => cleanupAgent(externalPorts($), external, agentId))
       await attempt('turn complete', $, async () => {
         const cwd = await $.session.cwd()
         const outcome = await onWorkerTurnComplete($, gate, { agentId, answer: e.answer, reason: e.reason }, cwd)
