@@ -828,6 +828,27 @@ test('cleanup on a finished agent stops the run, settles it and tells the user',
   expect(h.fake.kills.length).toBe(before)
 })
 
+test('two stops of the same run settle the copy once and never report a removed copy as kept', async () => {
+  const h = readyHarness()
+  h.fake.batches = Array.from({ length: 80 }, () => [] as string[])
+  h.fake.stat = ' started.txt | 1 +\n 1 file changed, 1 insertion(+)'
+  await h.step('agent-1')
+  const handled = h.fake.handle
+  h.fake.handle = async (argv, init) => {
+    if (argv[2] === SCRIPTS.copy && argv[4]?.endsWith('/pristine.git') && h.fake.removed.includes(runDirOf(h.fake))) return out('', 1)
+    return handled(argv, init)
+  }
+  await Promise.all([cleanupAgent(h.ports, h.ext, 'agent-1'), cleanupAgent(h.ports, h.ext, 'agent-1')])
+  expect(h.notes).toHaveLength(2)
+  for (const note of h.notes) {
+    expect(note).toContain('Patch (mode 0600):')
+    expect(note).not.toContain('kept')
+  }
+  expect(h.fake.patches).toHaveLength(1)
+  expect(h.fake.copies.filter(call => call[1]?.endsWith('/work/.git'))).toHaveLength(1)
+  expect(h.fake.removed.filter(path => path === runDirOf(h.fake))).toHaveLength(1)
+})
+
 test('a rollout lookup needs a real thread id and accepts only a safe model id', async () => {
   const bad = readyHarness()
   bad.fake.batches = [['{"type":"thread.started","thread_id":"not-a-uuid"}', ...READ.slice(1)]]
