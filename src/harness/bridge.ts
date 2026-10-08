@@ -346,22 +346,46 @@ export async function terminateHarnessProcesses(scope: HarnessProcessScope = def
   for (const child of children) if (tracked(scope, child)) signalGroup(child, "SIGKILL");
 }
 
-const DEFAULT_SCOPE_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+const GUARD_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
+
+export interface ProcessGuardOptions {
+  graceMs?: number;
+  cleanup?: (willExit: boolean) => void;
+}
+
+interface GuardEntry {
+  scope: HarnessProcessScope;
+  options: ProcessGuardOptions;
+}
+
+const guardEntries = new Set<GuardEntry>();
+let guardRelease: (() => void) | undefined;
 let defaultScopeGuard: (() => void) | undefined;
 
-function guardDefaultScope(): void {
-  if (defaultScopeGuard) return;
-  const onExit = () => { for (const child of defaultScope.groups.values()) signalGroup(child, "SIGKILL"); };
+function installGuard(): void {
+  if (guardRelease) return;
+  const onExit = () => {
+    for (const entry of guardEntries) {
+      for (const child of entry.scope.groups.values()) signalGroup(child, "SIGKILL");
+      try { entry.options.cleanup?.(true); } catch {}
+    }
+  };
   let stopping = false;
-  const handlers = DEFAULT_SCOPE_SIGNALS.map((signal) => {
+  const handlers = GUARD_SIGNALS.map((signal) => {
     const handler = () => {
       const others = process.listenerCount(signal) > 1;
       if (stopping) return;
       stopping = true;
-      terminateHarnessProcesses(defaultScope).catch(() => {}).finally(() => {
+      const entries = [...guardEntries];
+      Promise.all(entries.map((entry) => terminateHarnessProcesses(entry.scope, entry.options.graceMs))).catch(() => {}).finally(() => {
+        for (const entry of entries) {
+          try { entry.options.cleanup?.(!others); } catch {}
+        }
         stopping = false;
         if (others) return;
-        releaseDefaultScopeGuard();
+        guardEntries.clear();
+        defaultScopeGuard = undefined;
+        releaseGuard();
         process.kill(process.pid, signal);
       });
     };
@@ -369,10 +393,30 @@ function guardDefaultScope(): void {
     return [signal, handler] as const;
   });
   process.on("exit", onExit);
-  defaultScopeGuard = () => {
+  guardRelease = () => {
     for (const [signal, handler] of handlers) process.off(signal, handler);
     process.off("exit", onExit);
   };
+}
+
+function releaseGuard(): void {
+  guardRelease?.();
+  guardRelease = undefined;
+}
+
+export function registerProcessGuard(scope: HarnessProcessScope, options: ProcessGuardOptions = {}): () => void {
+  const entry: GuardEntry = { scope, options };
+  guardEntries.add(entry);
+  installGuard();
+  return () => {
+    guardEntries.delete(entry);
+    if (guardEntries.size === 0) releaseGuard();
+  };
+}
+
+function guardDefaultScope(): void {
+  if (defaultScopeGuard) return;
+  defaultScopeGuard = registerProcessGuard(defaultScope);
 }
 
 function releaseDefaultScopeGuard(): void {

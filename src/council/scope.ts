@@ -1,17 +1,18 @@
-import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { closeSync, linkSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import { createHarnessProcessScope, terminateHarnessProcesses } from "../harness/bridge.js";
+import { createHarnessProcessScope, registerProcessGuard, terminateHarnessProcesses } from "../harness/bridge.js";
 
 export const councilScope = createHarnessProcessScope();
 
 const trackedPaths = new Set<string>();
-const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 const SIGNAL_GRACE_MS = 1500;
 export const STALE_AGE_MS = 2 * 60 * 60 * 1000;
+const GUARD_STALE_MS = 10_000;
 
-let releaseGuard: (() => void) | undefined;
+let unregisterGuard: (() => void) | undefined;
+let lastInterruptAt = 0;
 
 function removeTracked(): void {
   for (const path of trackedPaths) {
@@ -24,60 +25,29 @@ function removeTracked(): void {
   trackedPaths.clear();
 }
 
-function killGroups(signal: NodeJS.Signals): void {
-  for (const child of councilScope.groups.values()) {
-    try {
-      if (child.pid === undefined) throw new Error("no_pid");
-      process.kill(-child.pid, signal);
-    } catch {
-      try {
-        child.kill(signal);
-      } catch {
-        continue;
-      }
-    }
-  }
-}
-
 function install(): void {
-  if (releaseGuard) return;
-  const onExit = () => {
-    killGroups("SIGKILL");
-    removeTracked();
-  };
-  let stopping = false;
-  const handlers = SIGNALS.map((signal) => {
-    const handler = () => {
-      const others = process.listenerCount(signal) > 1;
-      if (stopping) return;
-      stopping = true;
-      terminateHarnessProcesses(councilScope, SIGNAL_GRACE_MS)
-        .catch(() => undefined)
-        .finally(() => {
-          removeTracked();
-          stopping = false;
-          if (others) return;
-          uninstall();
-          process.kill(process.pid, signal);
-        });
-    };
-    process.on(signal, handler);
-    return [signal, handler] as const;
+  if (unregisterGuard) return;
+  unregisterGuard = registerProcessGuard(councilScope, {
+    graceMs: SIGNAL_GRACE_MS,
+    cleanup: (willExit) => {
+      lastInterruptAt = Date.now();
+      removeTracked();
+      if (!willExit) councilScope.stopped = false;
+    },
   });
-  process.on("exit", onExit);
-  releaseGuard = () => {
-    for (const [signal, handler] of handlers) process.off(signal, handler);
-    process.off("exit", onExit);
-  };
 }
 
 function uninstall(): void {
-  releaseGuard?.();
-  releaseGuard = undefined;
+  unregisterGuard?.();
+  unregisterGuard = undefined;
 }
 
 function settle(): void {
   if (councilScope.groups.size === 0 && trackedPaths.size === 0) uninstall();
+}
+
+export function councilInterruptedSince(startedAt: number): boolean {
+  return councilScope.stopped || lastInterruptAt >= startedAt;
 }
 
 export function trackChild(child: ChildProcess): () => void {
@@ -149,34 +119,93 @@ export interface RepoLock {
   release(): void;
 }
 
-export function acquireRepoLock(stateDir: string, repoRoot: string, maxAgeMs: number = STALE_AGE_MS): RepoLock | undefined {
-  const dir = lockRoot(stateDir);
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, `${createHash("sha1").update(repoRoot).digest("hex").slice(0, 20)}.lock`);
+interface Holder {
+  pid?: number;
+  at?: number;
+}
+
+function readHolder(path: string): { raw: string; holder: Holder } | undefined {
+  try {
+    const raw = readFileSync(path, "utf8");
+    try {
+      return { raw, holder: JSON.parse(raw) as Holder };
+    } catch {
+      return { raw, holder: {} };
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function busy(holder: Holder, maxAgeMs: number): boolean {
+  const fresh = typeof holder.at === "number" && Date.now() - holder.at < maxAgeMs;
+  return fresh && typeof holder.pid === "number" && alive(holder.pid);
+}
+
+function linkInto(tmp: string, path: string): boolean {
+  try {
+    linkSync(tmp, path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+    throw error;
+  }
+}
+
+function takeGuard(guard: string): boolean {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const fd = openSync(path, "wx", 0o600);
-      writeSync(fd, JSON.stringify({ pid: process.pid, at: Date.now() }));
-      closeSync(fd);
-      const untrack = trackPath(path);
-      return {
-        release() {
-          untrack();
-          rmSync(path, { force: true });
-        },
-      };
+      closeSync(openSync(guard, "wx", 0o600));
+      return true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      let holder: { pid?: number; at?: number } = {};
       try {
-        holder = JSON.parse(readFileSync(path, "utf8"));
+        if (Date.now() - statSync(guard).mtimeMs < GUARD_STALE_MS) return false;
+        rmSync(guard, { force: true });
       } catch {
-        holder = {};
+        return false;
       }
-      const fresh = typeof holder.at === "number" && Date.now() - holder.at < maxAgeMs;
-      if (fresh && typeof holder.pid === "number" && alive(holder.pid)) return undefined;
-      rmSync(path, { force: true });
     }
   }
-  return undefined;
+  return false;
+}
+
+export interface LockHooks {
+  afterStaleRead?: () => void;
+}
+
+export function acquireRepoLock(stateDir: string, repoRoot: string, maxAgeMs: number = STALE_AGE_MS, hooks: LockHooks = {}): RepoLock | undefined {
+  const dir = lockRoot(stateDir);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const name = createHash("sha1").update(repoRoot).digest("hex").slice(0, 20);
+  const path = join(dir, `${name}.lock`);
+  const guard = join(dir, `${name}.guard`);
+  const tmp = join(dir, `${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
+  const won = (): RepoLock => {
+    const untrack = trackPath(path);
+    return {
+      release() {
+        untrack();
+        rmSync(path, { force: true });
+      },
+    };
+  };
+  try {
+    if (linkInto(tmp, path)) return won();
+    const first = readHolder(path);
+    if (first && busy(first.holder, maxAgeMs)) return undefined;
+    hooks.afterStaleRead?.();
+    if (!takeGuard(guard)) return undefined;
+    try {
+      const current = readHolder(path);
+      if (current && busy(current.holder, maxAgeMs)) return undefined;
+      rmSync(path, { force: true });
+      return linkInto(tmp, path) ? won() : undefined;
+    } finally {
+      rmSync(guard, { force: true });
+    }
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }

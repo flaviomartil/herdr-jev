@@ -3,14 +3,16 @@ import { join } from "node:path";
 import { resolveStateDir } from "../herdr/state-dir.js";
 import { commandOf, DIFF_CAP, MEMBER_BINARIES, MEMBER_NAMES, PROMPT_FILE_NAME, VERSION_SIGNATURES } from "./members.js";
 import { parseMemberOutput } from "./parse.js";
-import { acquireRepoLock, STALE_AGE_MS, sweepStale } from "./scope.js";
-import { defaultSpawn, type ProcessOutput, type SpawnedProcess, type SpawnFn } from "./spawn.js";
+import { acquireRepoLock, councilInterruptedSince, STALE_AGE_MS, sweepStale } from "./scope.js";
+import { defaultSpawn, findTimeoutCommand, type ProcessOutput, type SpawnedProcess, type SpawnFn } from "./spawn.js";
 import type { CouncilMemberName, CouncilMemberResult, CouncilRun } from "./types.js";
-import { buildReviewPatch, createReviewWorktree, resolveRepoRoot, type ReviewPatch } from "./worktree.js";
+import { buildReviewPatch, createReviewWorktree, resolveRepoRoot, type ReviewPatch } from "./review-dir.js";
 
 export const DEFAULT_MEMBER_TIMEOUT_MS = 8 * 60 * 1000;
 const VERSION_TIMEOUT_MS = 10_000;
 const KILL_SETTLE_MS = 4_000;
+const LIFETIME_MARGIN_MS = 5_000;
+export const MAX_MEMBER_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface RunCouncilOptions {
   cwd: string;
@@ -23,6 +25,7 @@ export interface RunCouncilOptions {
   spawn?: SpawnFn;
   signal?: AbortSignal;
   stateDir?: string;
+  timeoutCommand?: string | null;
 }
 
 const CLIENT_ALIASES: Readonly<Record<string, CouncilMemberName>> = {
@@ -55,14 +58,16 @@ async function waitFor(proc: SpawnedProcess, timeoutMs: number, signal: AbortSig
       }
     }
   });
+  let settle: ReturnType<typeof setTimeout> | undefined;
   try {
     const outcome = await Promise.race([proc.result.then((output): Outcome => ({ kind: "output", output })), interrupt]);
     if (outcome.kind !== "output") {
       proc.kill();
-      await Promise.race([proc.result.catch(() => undefined), new Promise((resolve) => setTimeout(resolve, KILL_SETTLE_MS))]);
+      await Promise.race([proc.result.catch(() => undefined), new Promise((resolve) => { settle = setTimeout(resolve, KILL_SETTLE_MS); })]);
     }
     return outcome;
   } finally {
+    if (settle) clearTimeout(settle);
     if (timer) clearTimeout(timer);
     if (onAbort && signal) signal.removeEventListener("abort", onAbort);
   }
@@ -70,9 +75,9 @@ async function waitFor(proc: SpawnedProcess, timeoutMs: number, signal: AbortSig
 
 type Probe = "installed" | "missing" | "aborted";
 
-async function probe(member: CouncilMemberName, spawn: SpawnFn, cwd: string, signal: AbortSignal | undefined): Promise<Probe> {
+async function probe(member: CouncilMemberName, spawn: SpawnFn, cwd: string, signal: AbortSignal | undefined, timeoutCommand: string | null): Promise<Probe> {
   try {
-    const outcome = await waitFor(spawn([MEMBER_BINARIES[member], "--version"], { cwd }), VERSION_TIMEOUT_MS, signal);
+    const outcome = await waitFor(spawn([MEMBER_BINARIES[member], "--version"], { cwd, lifetimeMs: VERSION_TIMEOUT_MS + LIFETIME_MARGIN_MS, timeoutCommand }), VERSION_TIMEOUT_MS, signal);
     if (outcome.kind === "aborted") return "aborted";
     if (outcome.kind !== "output" || outcome.output.exitCode !== 0) return "missing";
     const first = outcome.output.stdout.trim().split("\n")[0]?.trim() ?? "";
@@ -105,6 +110,8 @@ interface MemberContext {
   question?: string;
   signal?: AbortSignal;
   stateDir: string;
+  timeoutCommand: string | null;
+  startedAt: number;
 }
 
 async function runMember(member: CouncilMemberName, context: MemberContext): Promise<CouncilMemberResult> {
@@ -119,10 +126,10 @@ async function runMember(member: CouncilMemberName, context: MemberContext): Pro
       writeFileSync(promptPath, command.promptFile, { encoding: "utf8", mode: 0o600 });
       chmodSync(promptPath, 0o600);
     }
-    if (context.signal?.aborted) {
+    if (context.signal?.aborted || councilInterruptedSince(context.startedAt)) {
       outcome = result(member, "failed", startedAt, "cancelled");
     } else {
-      const proc = context.spawn(command.argv, { cwd: worktree.path, stdin: command.stdin });
+      const proc = context.spawn(command.argv, { cwd: worktree.path, stdin: command.stdin, lifetimeMs: context.timeoutMs + LIFETIME_MARGIN_MS, timeoutCommand: context.timeoutCommand });
       const waited = await waitFor(proc, context.timeoutMs, context.signal);
       if (waited.kind === "timeout") outcome = result(member, "failed", startedAt, `timed out after ${describeDuration(context.timeoutMs)}`);
       else if (waited.kind === "aborted") outcome = result(member, "failed", startedAt, "cancelled");
@@ -154,13 +161,16 @@ function stopped(candidates: CouncilMemberName[], results: CouncilMemberResult[]
 
 export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
   const spawn = opts.spawn ?? defaultSpawn;
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_MEMBER_TIMEOUT_MS;
+  const timeoutMs = Math.min(opts.timeoutMs ?? DEFAULT_MEMBER_TIMEOUT_MS, MAX_MEMBER_TIMEOUT_MS);
+  const runStartedAt = Date.now();
+  const timeoutCommand = opts.timeoutCommand !== undefined ? opts.timeoutCommand : (findTimeoutCommand() ?? null);
+  const unbounded = timeoutCommand === null && (opts.spawn === undefined || opts.timeoutCommand === null);
   const stateDir = opts.stateDir ?? resolveStateDir();
   const excluded = new Set(opts.exclude ?? []);
   const requested = [...new Set(opts.members ?? MEMBER_NAMES)];
   const results: CouncilMemberResult[] = [];
 
-  if (opts.signal?.aborted) return stopped(requested, [], "cancelled", { note: "council cancelled before start" });
+  if (opts.signal?.aborted) return stopped(requested, [], "cancelled", { note: "cancelled" });
 
   let candidates: CouncilMemberName[] = [];
   const allowed = opts.availableClients ? new Set(opts.availableClients.map((client) => CLIENT_ALIASES[client.trim().toLowerCase()]).filter((member): member is CouncilMemberName => member !== undefined)) : undefined;
@@ -172,7 +182,7 @@ export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
   if (candidates.length < 2) return stopped(candidates, results, "fewer than two runnable members", { note: "fewer than two council members available; nothing was run" });
 
   mkdirSync(stateDir, { recursive: true, mode: 0o700 });
-  sweepStale(stateDir, Math.max(STALE_AGE_MS, timeoutMs * 3));
+  sweepStale(stateDir, STALE_AGE_MS);
 
   let repoRoot: string;
   try {
@@ -180,7 +190,7 @@ export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
   } catch (error) {
     return stopped(candidates, results, "no diff", { note: `cannot read the diff: ${message(error)}`.slice(0, 400) });
   }
-  const lock = acquireRepoLock(stateDir, repoRoot, Math.max(STALE_AGE_MS, timeoutMs * 3));
+  const lock = acquireRepoLock(stateDir, repoRoot, STALE_AGE_MS);
   if (!lock) return stopped(candidates, results, "council already running", { note: "a council run is already in progress for this repository" });
 
   try {
@@ -200,8 +210,8 @@ export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
     };
     if (patch.patch.trim() === "") return withPaths(stopped(candidates, results, "empty diff", { note: join2(["empty diff; nothing to review", ...leftOut]), diffHash: patch.hash }));
 
-    const probes = await Promise.all(candidates.map(async (member) => ({ member, state: await probe(member, spawn, stateDir, opts.signal) })));
-    if (probes.some((entry) => entry.state === "aborted") || opts.signal?.aborted) return withPaths(stopped(candidates, results, "cancelled", { note: "council cancelled during the install check", diffHash: patch.hash }));
+    const probes = await Promise.all(candidates.map(async (member) => ({ member, state: await probe(member, spawn, stateDir, opts.signal, timeoutCommand) })));
+    if (probes.some((entry) => entry.state === "aborted") || opts.signal?.aborted || councilInterruptedSince(runStartedAt)) return withPaths(stopped(candidates, results, "cancelled", { note: "cancelled", diffHash: patch.hash }));
     const runnable: CouncilMemberName[] = [];
     for (const { member, state } of probes) {
       if (state === "installed") runnable.push(member);
@@ -209,10 +219,12 @@ export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
     }
     if (runnable.length < 2) return withPaths(stopped(runnable, results, "fewer than two runnable members", { note: join2(["fewer than two council members are installed; nothing was run", ...leftOut]), diffHash: patch.hash }));
 
-    const context: MemberContext = { patch, spawn, timeoutMs, question: opts.question, signal: opts.signal, stateDir };
+    const context: MemberContext = { patch, spawn, timeoutMs, question: opts.question, signal: opts.signal, stateDir, timeoutCommand, startedAt: runStartedAt };
     const ran = await Promise.all(runnable.map((member) => runMember(member, context)));
+    if (opts.signal?.aborted || councilInterruptedSince(runStartedAt)) return withPaths(stopped(runnable, results, "cancelled", { note: "cancelled", diffHash: patch.hash }));
     results.push(...ran);
     const notes = [...leftOut];
+    if (unbounded) notes.push("the timeout command was not found; members are not bounded if this process is killed");
     if (patch.promptDiff.length > DIFF_CAP) notes.push(`prompt diff truncated from ${patch.promptDiff.length} to ${DIFF_CAP} characters`);
     return withPaths({ members: ordered(results), diffHash: patch.hash, ran: true, ...(notes.length > 0 ? { note: notes.join("; ") } : {}) });
   } finally {

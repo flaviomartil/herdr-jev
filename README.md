@@ -775,9 +775,17 @@ bun run smoke
 
 ## Review council
 
-`src/council` reviews one diff with several external CLIs (codex, kimi, agy) in parallel. Each member runs in its own throwaway clone of the repository (`git clone --shared`, no remote), never in your working tree and never through `git worktree`, so a member that writes cannot change your stash, config, hooks or refs. The clone is removed after every member, and stale ones are swept at the start of a run.
+`src/council` reviews one diff with several external CLIs (codex, kimi, agy) in parallel. Each member runs in its own review directory under `<state dir>/council`, never in your working tree.
 
-Sensitive paths never reach a member. Every changed path, tracked or not, is checked against the `SENSITIVE_FILES` patterns in `src/harness/review.ts` plus `.npmrc`, `.netrc`, `.pypirc` and `*.tfvars`; a match is left out of the patch and the prompt, and tracked files that match are removed from the clone. The skipped paths come back in `CouncilRun.skippedPaths` and are counted in `CouncilRun.note`. Names such as `src/auth/credentials.ts` or `tests/secret.test.ts` are not matched, because the patterns need a bare `credentials` or `secret` name with a data extension. Untracked files over 5 MB are also left out and reported.
+**What the review directory guarantees**
+- It is built from an exported tree, not a clone and not a `git worktree`: the base commit is written out with a temporary index, sensitive files are deleted, and a fresh repository is initialised there with a single commit and the task diff applied on top. `git status` shows ` M` for tracked changes and `??` for untracked files, which is what `codex exec review --uncommitted` reads.
+- It shares nothing with your repository: no alternates, no remote, no copy of your object store, no config, no hooks (`--template=` and `core.hooksPath=/dev/null`), and no path to your repository stored under `.git`. A member that runs `git stash`, `git config`, `git update-ref` or `git log -p --all` inside it changes or reads only the throwaway repository, which holds one commit without your history.
+- Sensitive paths never reach it. Every changed path, tracked or not, is checked against the `SENSITIVE_FILES` patterns in `src/harness/review.ts` plus `.npmrc`, `.netrc`, `.pypirc`, `.envrc`, `.git-credentials`, `.env-*` and `*.tfvars` (case-insensitive). A match is left out of the patch and the prompt, and tracked matches are deleted from the exported tree, so they are also unreadable through git. The skipped paths come back in `CouncilRun.skippedPaths` and are counted in `CouncilRun.note`. Names such as `src/auth/credentials.ts` or `tests/secret.test.ts` are not matched. Untracked files over 5 MB are left out and reported too.
+- The directory is mode 0700 and the prompt file 0600. It is removed after every member, stale ones are swept at the start of a run, and a signal or exit handler removes the rest. Members are bounded by a timeout, by the parent's signal handlers and, when `timeout` is on PATH, by `timeout -k 1`, so they do not outlive a killed parent. Without `timeout`, the run note says so.
+
+**What it does not guarantee**
+- It is not a sandbox. A member runs with your user's file and network rights: it can read any file you can read, write outside the directory, use your credentials and reach the network, and a hostile diff can steer it to do so. Tell a member where your repository is and it can use it.
+- It does not hide what the diff contains. Secrets with ordinary names, or inside a source file, are sent.
 
 Live behaviour of kimi and agy is unvalidated until the checklist in [docs/plans/council-live-validation.md](docs/plans/council-live-validation.md) is run.
 

@@ -36,18 +36,40 @@ interface GitResult {
   stderr: string;
 }
 
-function git(cwd: string, args: string[], input?: string): Promise<GitResult> {
+const REVIEW_GIT_ENV: NodeJS.ProcessEnv = {
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_AUTHOR_NAME: "council",
+  GIT_AUTHOR_EMAIL: "council@localhost",
+  GIT_AUTHOR_DATE: "2000-01-01T00:00:00Z",
+  GIT_COMMITTER_NAME: "council",
+  GIT_COMMITTER_EMAIL: "council@localhost",
+  GIT_COMMITTER_DATE: "2000-01-01T00:00:00Z",
+};
+
+function isolatedEnv(): NodeJS.ProcessEnv {
+  return { ...cleanEnv(), ...REVIEW_GIT_ENV };
+}
+
+interface GitOptions {
+  input?: string;
+  env?: NodeJS.ProcessEnv;
+  extra?: string[];
+}
+
+function git(cwd: string, args: string[], options: GitOptions = {}): Promise<GitResult> {
   return new Promise((resolve) => {
-    const child = spawn("git", [...NO_HOOKS, ...args], { cwd, env: cleanEnv(), stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
+    const child = spawn("git", [...NO_HOOKS, ...(options.extra ?? []), ...args], { cwd, env: options.env ?? cleanEnv(), stdio: [options.input === undefined ? "ignore" : "pipe", "pipe", "pipe"] });
     const out: Buffer[] = [];
     const err: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => out.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => err.push(chunk));
     child.on("error", (error) => resolve({ code: 127, stdout: "", stderr: error.message }));
     child.on("close", (code) => resolve({ code: code ?? 1, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8") }));
-    if (input !== undefined && child.stdin) {
+    if (options.input !== undefined && child.stdin) {
       child.stdin.on("error", () => undefined);
-      child.stdin.end(input);
+      child.stdin.end(options.input);
     }
   });
 }
@@ -62,8 +84,8 @@ function lastLine(text: string): string {
   );
 }
 
-async function gitOk(cwd: string, args: string[], input?: string): Promise<string> {
-  const result = await git(cwd, args, input);
+async function gitOk(cwd: string, args: string[], options: GitOptions = {}): Promise<string> {
+  const result = await git(cwd, args, options);
   if (result.code !== 0) throw new Error(`git_failed: git ${args[0]} exited ${result.code}: ${lastLine(result.stderr)}`.slice(0, 300));
   return result.stdout;
 }
@@ -149,18 +171,23 @@ export async function createReviewWorktree(source: ReviewPatch, label: string, s
     }
   };
 
+  const indexFile = join(realParent, `.${randomBytes(6).toString("hex")}.index`);
   try {
-    await gitOk(parent, ["clone", "--quiet", "--shared", "--no-checkout", "--template=", source.repoRoot, path]);
+    mkdirSync(path, { mode: 0o700 });
     chmodSync(path, 0o700);
-    await gitOk(path, ["checkout", "--quiet", "--detach", source.baseCommit]);
-    await gitOk(path, ["remote", "remove", "origin"]);
-    const sensitiveTracked = splitZ(await gitOk(path, ["ls-files", "-z"])).filter(isSensitivePath);
-    if (sensitiveTracked.length > 0) {
-      await gitOk(path, ["update-index", "--skip-worktree", "-z", "--stdin"], `${sensitiveTracked.join("\0")}\0`);
-      for (const file of sensitiveTracked) rmSync(join(path, file), { force: true });
-    }
-    if (source.patch !== "") await gitOk(path, ["apply", "--binary", "--whitespace=nowarn", "-"], source.patch);
+    const indexEnv = { ...cleanEnv(), GIT_INDEX_FILE: indexFile };
+    await gitOk(source.repoRoot, ["read-tree", source.baseCommit], { env: indexEnv });
+    await gitOk(source.repoRoot, ["checkout-index", "-a", "-f", "-q", `--prefix=${path}/`], { env: indexEnv, extra: ["-c", "core.autocrlf=false"] });
+    rmSync(indexFile, { force: true });
+    const tracked = splitZ(await gitOk(source.repoRoot, ["ls-tree", "-r", "-z", "--name-only", source.baseCommit]));
+    for (const file of tracked.filter(isSensitivePath)) rmSync(join(path, file), { force: true });
+    const env = isolatedEnv();
+    await gitOk(path, ["init", "-q", "--template="], { env, extra: ["-c", "init.defaultBranch=main"] });
+    await gitOk(path, ["add", "-A", "-f"], { env, extra: ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false"] });
+    await gitOk(path, ["commit", "-q", "--no-verify", "--allow-empty", "-m", "review base"], { env, extra: ["-c", "commit.gpgsign=false"] });
+    if (source.patch !== "") await gitOk(path, ["apply", "--binary", "--whitespace=nowarn", "-"], { env, input: source.patch });
   } catch (error) {
+    rmSync(indexFile, { force: true });
     await remove();
     throw error;
   }

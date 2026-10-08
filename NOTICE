@@ -1,6 +1,6 @@
 agent-council (src/council)
 
-Parts of src/council/members.ts, parse.ts, worktree.ts and run.ts adapt ideas and code from
+Parts of src/council/members.ts, parse.ts, review-dir.ts and run.ts adapt ideas and code from
 agent-council (https://github.com/apolenkov/agent-council), hooks/model/members.ts,
 hooks/model/parse.ts, hooks/model/detect.ts, hooks/model/diff-input.ts and
 hooks/effects/run-member.ts.

@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
+import { accessSync, constants } from "node:fs";
+import { delimiter, join } from "node:path";
 import { cleanEnv } from "./env.js";
 import { trackChild } from "./scope.js";
 
@@ -7,6 +9,8 @@ export interface SpawnOptions {
   stdin?: string;
   maxBytes?: number;
   killGraceMs?: number;
+  lifetimeMs?: number;
+  timeoutCommand?: string | null;
 }
 
 export interface ProcessOutput {
@@ -25,6 +29,20 @@ export type SpawnFn = (argv: readonly string[], options: SpawnOptions) => Spawne
 
 export const MAX_CAPTURE_BYTES = 8 * 1024 * 1024;
 export const KILL_GRACE_MS = 1500;
+
+export function findTimeoutCommand(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  for (const dir of (env.PATH ?? "").split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, "timeout");
+    try {
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
 
 class Capture {
   private readonly chunks: Buffer[] = [];
@@ -51,7 +69,9 @@ class Capture {
 }
 
 export const defaultSpawn: SpawnFn = (argv, options) => {
-  const [bin, ...args] = argv;
+  const wrapper = options.lifetimeMs === undefined ? undefined : options.timeoutCommand === undefined ? findTimeoutCommand() : (options.timeoutCommand ?? undefined);
+  const full = wrapper && options.lifetimeMs !== undefined ? [wrapper, "-k", "1", String(Math.max(1, Math.ceil(options.lifetimeMs / 1000))), ...argv] : [...argv];
+  const [bin, ...args] = full;
   const limit = options.maxBytes ?? MAX_CAPTURE_BYTES;
   const grace = options.killGraceMs ?? KILL_GRACE_MS;
   const child = nodeSpawn(bin, args, {
@@ -63,13 +83,11 @@ export const defaultSpawn: SpawnFn = (argv, options) => {
   const untrack = trackChild(child);
   const stdout = new Capture(limit);
   const stderr = new Capture(limit);
-  let closed = false;
   const result = new Promise<ProcessOutput>((resolve) => {
     let settled = false;
     const finish = (exitCode: number, extra = "") => {
       if (settled) return;
       settled = true;
-      closed = true;
       untrack();
       const errText = stderr.text();
       resolve({
@@ -104,12 +122,11 @@ export const defaultSpawn: SpawnFn = (argv, options) => {
   return {
     result,
     kill() {
-      if (closed) return;
       signalGroup("SIGTERM");
-      const timer = setTimeout(() => {
-        if (!closed) signalGroup("SIGKILL");
+      setTimeout(() => {
+        signalGroup("SIGKILL");
+        untrack();
       }, grace);
-      timer.unref();
     },
   };
 };

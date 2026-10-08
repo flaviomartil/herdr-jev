@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildReviewPatch, createReviewWorktree, isSecretLikePath } from "../src/council/worktree.js";
+import { buildReviewPatch, createReviewWorktree, isSecretLikePath } from "../src/council/review-dir.js";
 import { git, gitRaw, makeRepo, writeIn } from "./council-helpers.js";
 import { createTestStateDir } from "./helpers.js";
 
@@ -79,6 +81,12 @@ describe("council review patch", () => {
     expect(isSecretLikePath("apps/web/.env.production")).toBe(true);
     expect(isSecretLikePath("a/b/id.pem")).toBe(true);
     expect(isSecretLikePath(".env.example")).toBe(false);
+    expect(isSecretLikePath(".envrc")).toBe(true);
+    expect(isSecretLikePath("app/.ENV")).toBe(true);
+    expect(isSecretLikePath(".env-production")).toBe(true);
+    expect(isSecretLikePath(".env_local")).toBe(true);
+    expect(isSecretLikePath(".git-credentials")).toBe(true);
+    expect(isSecretLikePath("home/.NPMRC")).toBe(true);
     expect(isSecretLikePath("src/environment.ts")).toBe(false);
     expect(isSecretLikePath("src/a.ts")).toBe(false);
   });
@@ -125,6 +133,46 @@ describe("council review patch", () => {
 
   it("reports the last stderr line of a failing git command", async () => {
     await expect(buildReviewPatch(repo, "no-such-ref")).rejects.toThrow(/git_failed/);
+  });
+});
+
+function walkFiles(root: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    const full = join(root, entry.name);
+    if (entry.isDirectory()) out.push(...walkFiles(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+describe("council review patch diff flags", () => {
+  it("ignores textconv drivers so the patch applies", async () => {
+    writeIn(repo, ".gitattributes", "*.dat diff=upper\n");
+    writeIn(repo, "data.dat", "hello world\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "dat");
+    git(repo, "config", "diff.upper.textconv", "tr a-z A-Z <");
+    writeIn(repo, "data.dat", "hello there\n");
+    const patch = await buildReviewPatch(repo);
+    expect(patch.patch).toContain("+hello there");
+    expect(patch.patch).not.toContain("HELLO");
+    expect(patch.promptDiff).not.toContain("HELLO");
+    const worktree = await createReviewWorktree(patch, "codex", state.stateDir);
+    expect(readFileSync(join(worktree.path, "data.dat"), "utf8")).toBe("hello there\n");
+    await worktree.remove();
+  });
+
+  it("keeps a modified tracked binary out of the prompt diff", async () => {
+    writeFileSync(join(repo, "blob.bin"), Buffer.from(Array.from({ length: 3000 }, (_, i) => i % 256)));
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "bin");
+    writeFileSync(join(repo, "blob.bin"), Buffer.from(Array.from({ length: 3000 }, (_, i) => (i * 5 + 1) % 256)));
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    const patch = await buildReviewPatch(repo);
+    expect(patch.patch).toContain("GIT binary patch");
+    expect(patch.promptDiff).not.toContain("GIT binary patch");
+    expect(patch.promptDiff).toContain("+export const a = 2;");
   });
 });
 
@@ -185,7 +233,7 @@ describe("council review directory", () => {
     git(worktree.path, "stash", "push", "-u");
     git(worktree.path, "config", "core.hooksPath", "/tmp/evil-hooks");
     git(worktree.path, "update-ref", "-d", "refs/heads/other");
-    git(worktree.path, "branch", "-f", "main", "HEAD");
+    git(worktree.path, "update-ref", "refs/heads/main", "HEAD");
     expect(git(worktree.path, "stash", "list")).not.toBe("");
     expect(snapshot()).toEqual(before);
     expect(git(repo, "branch", "--list", "other")).toContain("other");
@@ -209,5 +257,105 @@ describe("council review directory", () => {
     expect(first.path).not.toBe(second.path);
     await first.remove();
     await second.remove();
+  });
+
+  it("leaves no way into the user's repository from inside", async () => {
+    writeIn(repo, "config/credentials.json", "{\"s\":\"COMMITTEDSECRET\"}\n");
+    writeIn(repo, ".env", "TOKEN=oldsecret\n");
+    git(repo, "add", "-A", "-f");
+    git(repo, "commit", "-q", "-m", "oops");
+    git(repo, "rm", "-q", "--cached", ".env");
+    git(repo, "commit", "-q", "-m", "drop env");
+    git(repo, "add", "-A", "-f");
+    git(repo, "commit", "-q", "-m", "oops again");
+    writeIn(repo, "src/a.ts", "export const a = 5;\n");
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "kimi", state.stateDir);
+    const inside = (...args: string[]) => spawnSync("git", args, { cwd: worktree.path, encoding: "utf8", env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+    expect(inside("show", "HEAD:config/credentials.json").status).not.toBe(0);
+    expect(inside("show", "HEAD:.env").status).not.toBe(0);
+    const history = inside("log", "-p", "--all", "-S", "COMMITTEDSECRET");
+    expect(history.stdout).toBe("");
+    expect(inside("log", "-p", "--all", "-S", "oldsecret").stdout).toBe("");
+    expect(inside("rev-list", "--all", "--count").stdout.trim()).toBe("1");
+    expect(existsSync(join(worktree.path, ".git/objects/info/alternates"))).toBe(false);
+    expect(inside("remote").stdout.trim()).toBe("");
+    for (const file of walkFiles(join(worktree.path, ".git"))) {
+      expect(readFileSync(file).includes(repo)).toBe(false);
+    }
+    expect(inside("config", "-l").stdout).not.toContain(repo);
+    expect(inside("for-each-ref").stdout).not.toContain(repo);
+    await worktree.remove();
+  });
+
+  it("shows the exported base as a single commit with M and ?? status", async () => {
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    writeIn(repo, "src/new.ts", "export const n = 1;\n");
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+    expect(git(worktree.path, "rev-list", "--all", "--count")).toBe("1");
+    expect(gitRaw(worktree.path, "status", "--porcelain").trimEnd().split("\n").sort()).toEqual([" M src/a.ts", "?? src/new.ts"]);
+    await worktree.remove();
+  });
+
+  it("does not fire hooks configured through the environment", async () => {
+    const hooks = mkdtempSync(join(tmpdir(), "council-hooks-"));
+    const marker = join(hooks, "ran");
+    for (const name of ["pre-commit", "post-commit", "post-checkout", "reference-transaction"]) {
+      writeFileSync(join(hooks, name), `#!/bin/sh\ntouch ${marker}\n`);
+      chmodSync(join(hooks, name), 0o755);
+    }
+    const saved = { c: process.env.GIT_CONFIG_COUNT, k: process.env.GIT_CONFIG_KEY_0, v: process.env.GIT_CONFIG_VALUE_0 };
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "core.hooksPath";
+    process.env.GIT_CONFIG_VALUE_0 = hooks;
+    try {
+      writeIn(repo, "src/a.ts", "export const a = 2;\n");
+      const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+      expect(existsSync(marker)).toBe(false);
+      await worktree.remove();
+    } finally {
+      for (const [key, value] of [["GIT_CONFIG_COUNT", saved.c], ["GIT_CONFIG_KEY_0", saved.k], ["GIT_CONFIG_VALUE_0", saved.v]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(hooks, { recursive: true, force: true });
+    }
+  });
+
+  it("does not copy a git template into the review directory", async () => {
+    const template = mkdtempSync(join(tmpdir(), "council-template-"));
+    mkdirSync(join(template, "hooks"));
+    writeFileSync(join(template, "hooks", "post-commit"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(template, "from-template"), "x");
+    const saved = { c: process.env.GIT_CONFIG_COUNT, k: process.env.GIT_CONFIG_KEY_0, v: process.env.GIT_CONFIG_VALUE_0 };
+    process.env.GIT_CONFIG_COUNT = "1";
+    process.env.GIT_CONFIG_KEY_0 = "init.templateDir";
+    process.env.GIT_CONFIG_VALUE_0 = template;
+    try {
+      writeIn(repo, "src/a.ts", "export const a = 2;\n");
+      const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+      expect(existsSync(join(worktree.path, ".git/from-template"))).toBe(false);
+      expect(existsSync(join(worktree.path, ".git/hooks/post-commit"))).toBe(false);
+      await worktree.remove();
+    } finally {
+      for (const [key, value] of [["GIT_CONFIG_COUNT", saved.c], ["GIT_CONFIG_KEY_0", saved.k], ["GIT_CONFIG_VALUE_0", saved.v]] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(template, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to remove a directory that resolves outside the review root", async () => {
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+    const outside = mkdtempSync(join(tmpdir(), "council-outside-"));
+    writeFileSync(join(outside, "keep"), "x");
+    rmSync(worktree.path, { recursive: true, force: true });
+    symlinkSync(outside, worktree.path);
+    const problem = await worktree.remove();
+    expect(problem).toContain("outside the review directory");
+    expect(existsSync(join(outside, "keep"))).toBe(true);
+    rmSync(worktree.path, { force: true });
+    rmSync(outside, { recursive: true, force: true });
   });
 });

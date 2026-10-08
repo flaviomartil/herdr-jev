@@ -287,6 +287,60 @@ describe("runCouncil", () => {
   });
 });
 
+describe("runCouncil limits", () => {
+  it("clamps the member timeout to thirty minutes and bounds each member by a lifetime", async () => {
+    const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+    await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"], timeoutMs: 10 * 60 * 60 * 1000, timeoutCommand: "/usr/bin/timeout" });
+    for (const call of fake.reviewCalls) {
+      expect(call.lifetimeMs).toBe(30 * 60 * 1000 + 5000);
+      expect(call.timeoutCommand).toBe("/usr/bin/timeout");
+    }
+    for (const call of fake.probeCalls) expect(call.lifetimeMs).toBe(15000);
+  });
+
+  it("says in the run note when the timeout command is missing", async () => {
+    const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+    const run = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"], timeoutCommand: null });
+    expect(run.ran).toBe(true);
+    expect(run.note).toContain("timeout command was not found");
+    const bounded = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"], timeoutCommand: "/usr/bin/timeout" });
+    expect(bounded.note ?? "").not.toContain("timeout command");
+  });
+
+  it("never runs a program named by the global git config inside the review directory", async () => {
+    const seen = join(state.stateDir, "fsmonitor-cwd");
+    const script = join(state.stateDir, "fsmonitor.sh");
+    require("node:fs").writeFileSync(script, `#!/bin/sh\npwd >> ${seen}\nexit 0\n`, { mode: 0o755 });
+    const config = join(state.stateDir, "global-gitconfig-2");
+    require("node:fs").writeFileSync(config, `[core]\n\tfsmonitor = ${script}\n`);
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = config;
+    try {
+      const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+      await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
+      const dirs = existsSync(seen) ? readFileSync(seen, "utf8").split("\n").filter(Boolean) : [];
+      expect(dirs.some((entry) => entry.startsWith(join(state.stateDir, "council")))).toBe(false);
+    } finally {
+      process.env.GIT_CONFIG_GLOBAL = saved;
+    }
+  });
+
+  it("works from a global git config that sets hooks, gpg signing and a template", async () => {
+    const config = join(state.stateDir, "global-gitconfig");
+    require("node:fs").writeFileSync(config, "[commit]\n\tgpgsign = true\n[gpg]\n\tprogram = /bin/false\n[core]\n\thooksPath = /nonexistent\n[clone]\n\tdefaultRemoteName = upstream\n");
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = config;
+    try {
+      const fake = fakeSpawn({ codex: () => ok("NO_FINDINGS"), kimi: () => ok("NO_FINDINGS") });
+      const run = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
+      expect(run.ran).toBe(true);
+      expect(run.members.map((entry) => entry.status)).toEqual(["done", "done"]);
+    } finally {
+      process.env.GIT_CONFIG_GLOBAL = saved;
+    }
+  });
+});
+
 describe("runCouncil cancellation", () => {
   it("kills running members on abort", async () => {
     const fake = fakeSpawn({ codex: () => "hang", kimi: () => "hang" });
@@ -296,7 +350,9 @@ describe("runCouncil cancellation", () => {
     expect(fake.reviewCalls).toHaveLength(2);
     controller.abort();
     const run = await pending;
-    expect(run.members.map((entry) => entry.reason)).toEqual(["cancelled", "cancelled"]);
+    expect(run.ran).toBe(false);
+    expect(run.note).toBe("cancelled");
+    expect(run.members.map((entry) => [entry.status, entry.reason])).toEqual([["skipped", "cancelled"], ["skipped", "cancelled"]]);
     expect(fake.reviewCalls.every((call) => call.killed)).toBe(true);
     expect(worktreesLeft()).toEqual([]);
   });
@@ -307,7 +363,8 @@ describe("runCouncil cancellation", () => {
     const run = await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"], signal: controller.signal });
     expect(fake.probeCalls).toHaveLength(2);
     expect(fake.reviewCalls).toEqual([]);
-    expect(run.members.map((entry) => entry.reason)).toEqual(["cancelled", "cancelled"]);
+    expect(run.ran).toBe(false);
+    expect(run.members.map((entry) => [entry.status, entry.reason])).toEqual([["skipped", "cancelled"], ["skipped", "cancelled"]]);
     expect(worktreesLeft()).toEqual([]);
   });
 
@@ -319,8 +376,8 @@ describe("runCouncil cancellation", () => {
     controller.abort();
     const run = await pending;
     expect(run.ran).toBe(false);
-    expect(run.note).toContain("cancelled");
-    expect(run.members.map((entry) => entry.reason)).toEqual(["cancelled", "cancelled"]);
+    expect(run.note).toBe("cancelled");
+    expect(run.members.map((entry) => [entry.status, entry.reason])).toEqual([["skipped", "cancelled"], ["skipped", "cancelled"]]);
     expect(fake.reviewCalls).toEqual([]);
   });
 

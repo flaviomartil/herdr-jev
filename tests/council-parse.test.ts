@@ -91,6 +91,15 @@ describe("council parse", () => {
     expect(withField).toEqual({ error: "antigravity: not signed in" });
   });
 
+  it("accepts an object with findings under result and fails on any other object", () => {
+    const body = { findings: [{ path: "x.ts", title: "A", severity: "high", detail: "d" }] };
+    const nested = parseMemberOutput("antigravity", run(JSON.stringify({ result: body })), roots);
+    expect("findings" in nested && nested.findings).toHaveLength(1);
+    expect(parseMemberOutput("antigravity", run(JSON.stringify({ result: { findings: [] } })), roots)).toEqual({ findings: [] });
+    expect("error" in parseMemberOutput("antigravity", run(JSON.stringify({ result: { plan: "step 1" } })), roots)).toBe(true);
+    expect("error" in parseMemberOutput("antigravity", run(JSON.stringify({ result: { findings: [{ nope: 1 }] } })), roots)).toBe(true);
+  });
+
   it("fails on agy inner text that is neither findings nor NO_FINDINGS", () => {
     const parsed = parseMemberOutput("antigravity", run(JSON.stringify({ result: "I looked at the diff and it seems fine." })), roots);
     expect("error" in parsed).toBe(true);
