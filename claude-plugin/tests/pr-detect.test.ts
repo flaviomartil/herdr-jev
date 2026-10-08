@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { detectPr, prCommandOf } from '../hooks/pr-detect'
+import { analyze, detectPr, prCommandOf } from '../hooks/pr-detect'
 
 const kind = (command: string): string | null => {
   const hit = prCommandOf(command)
@@ -212,5 +212,109 @@ test('the detector is linear on large quoted strings, heredoc markers and deep n
   expect(kind(`echo "${'q ; gh " '.repeat(30_000)}"`)).toBeNull()
   expect(kind(`${'$('.repeat(20_000)}gh pr create`)).toBeNull()
   expect(kind(`${'a '.repeat(150_000)}\ngh pr create`)).toBe('github:create:cli')
+  expect(Date.now() - started).toBeLessThan(3000)
+})
+
+test('arithmetic, wrapper names from Object.prototype and curl attached data do not hide a PR command', () => {
+  const hits: [string, string][] = [
+    ['(( x = 1 << n ))\ngh pr create --fill', 'github:create:cli'],
+    ['echo $((1<<2))\ngh pr create --fill', 'github:create:cli'],
+    ['n=$(( 1 << 3 )); gh pr create', 'github:create:cli'],
+    ['constructor -x; gh pr create', 'github:create:cli'],
+    ['toString -x && gh pr create', 'github:create:cli'],
+    ['curl https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests -d@b.json', 'azure:create:rest'],
+    ['curl -d@b.json https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests', 'azure:create:rest'],
+    ['curl -sSd @b.json https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests', 'azure:create:rest'],
+    ['curl -X POST https://ghe.corp.example/api/v3/repos/o/r/pulls -d @b.json', 'github:create:rest'],
+    ['curl -XPOST "${API_BASE}/git/repositories/${REPO}/pullrequests?api-version=7.0" -d @b.json', 'azure:create:rest'],
+    ['gh pr edit --title x 42', 'github:edit:cli'],
+  ]
+  for (const [command, expected] of hits) {
+    expect({ command, hit: kind(command) }).toEqual({ command, hit: expected })
+  }
+})
+
+test('function definitions and array assignments are not executions, calling them is not tracked', () => {
+  for (const command of [
+    'f() { gh pr create; }',
+    'f () { gh pr create --fill; }',
+    'function f { gh pr create; }',
+    'function f() {\n  gh pr create\n}',
+    'f() {\n  echo hi\n  if true; then gh pr create; fi\n}',
+    'f() ( gh pr create )',
+    'cmd=(gh pr create --fill)',
+    'cmd+=(az repos pr create)',
+  ]) {
+    expect({ command, hit: kind(command) }).toEqual({ command, hit: null })
+  }
+  expect(kind('f() { echo hi; }; gh pr create')).toBe('github:create:cli')
+  expect(kind('f() { echo hi; }\ngh pr create')).toBe('github:create:cli')
+  expect(kind('cmd=(a b); gh pr create')).toBe('github:create:cli')
+  expect(kind('x=(a $(gh pr create))')).toBe('github:create:cli')
+})
+
+test('REST matches are tied to the URL operand, the host and the write method', () => {
+  for (const command of [
+    'curl -X POST https://example.com/git/repositories/r/pullrequests -d x',
+    'curl -X POST https://dev.azure.com/o/p/git/repositories/r/pullrequests -d x',
+    'curl -X POST https://example.com/x -H "Referer: https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests"',
+    'curl -X POST https://example.com/x -d https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests',
+    'curl -X POST https://example.com/x --data-raw https://api.github.com/repos/o/r/pulls',
+    'http https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests api-version==7.0',
+    'http POST https://example.com/x url=https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests',
+    'curl -X POST https://evil.test/repos/o/r/pulls -d x',
+    'curl -X POST "${B}/git/repositories/r/pullrequests?note=a b" -d x',
+    'curl -X POST "https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests?note=a b" -d x',
+    'curl -X POST https://example.com/api/repos/o/r/pulls -d x',
+    'curl -X POST https://api.github.com.evil.test/repos/o/r/pulls -d x',
+    'curl -X POST https://api.github.com/repos/o/r/issues -d x',
+    'curl -X POST https://api.github.com/repos/o/r/pulls/5/comments -d x',
+    'curl https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests',
+    'gh api -X POST repos/o/r/issues -f title=x',
+    'gh api repos/o/r/issues -f title=repos/o/r/pulls',
+  ]) {
+    expect({ command, hit: kind(command) }).toEqual({ command, hit: null })
+  }
+  expect(kind('http https://dev.azure.com/o/p/_apis/git/repositories/r/pullrequests title=x')).toBe('azure:create:rest')
+  expect(kind('curl -X POST https://api.github.com/repos/o/r/pulls -d @b')).toBe('github:create:rest')
+})
+
+test('placeholders, variables, other heads and GH_REPO are reported on the command', () => {
+  const first = (command: string) => detectPr(command)?.commands[0]
+  expect(first('gh api repos/{owner}/{repo}/pulls -f title=x')?.repo).toBeNull()
+  expect(first('gh api repos/acme/app/pulls -f title=x')?.repo).toBe('acme/app')
+  expect(first(AZURE_SKILL)?.repo).toBe('${REPO}')
+  expect(first('gh pr create --head other')?.foreign).toContain('--head')
+  expect(first('gh pr create -H other')?.foreign).toContain('--head')
+  expect(first('gh pr create --head=o:b')?.foreign).toContain('--head')
+  expect(first('gh pr create --fill')?.foreign).toBeNull()
+  expect(first('GH_REPO=o/r gh pr create')?.foreign).toContain('GH_REPO')
+  expect(first('env GH_REPO=o/r gh pr create')?.foreign).toContain('GH_REPO')
+  expect(first('gh pr edit --title x 42')?.targetsPr).toBe(true)
+  expect(first('gh pr edit 42 --title x')?.targetsPr).toBe(true)
+  expect(first('gh pr edit https://github.com/o/r/pull/9 --title x')?.targetsPr).toBe(true)
+  expect(first('gh pr edit --title x')?.targetsPr).toBe(false)
+})
+
+test('herdr-jev review is recognised through wrappers, with its json flag', () => {
+  const review = (command: string) => analyze(command).review
+  expect(review('herdr-jev review')).toEqual({ json: false })
+  expect(review('herdr-jev review --json')).toEqual({ json: true })
+  expect(review('rtk -u herdr-jev review --base main')).toEqual({ json: false })
+  expect(review('cd /w && timeout 900 herdr-jev review --json --base main')).toEqual({ json: true })
+  expect(review('~/.bun/bin/herdr-jev review')).toEqual({ json: false })
+  expect(review('herdr-jev review --help')).toBeNull()
+  expect(review('herdr-jev triage x')).toBeNull()
+  expect(review('echo herdr-jev review')).toBeNull()
+  expect(review('git commit -m "herdr-jev review"')).toBeNull()
+  expect(review('cat <<EOF\nherdr-jev review\nEOF')).toBeNull()
+  expect(analyze('herdr-jev review && gh pr create').pr).not.toBeNull()
+})
+
+test('a lone parenthesis scan and function markers stay linear', () => {
+  const started = Date.now()
+  void kind(`${'(('.repeat(150_000)}\ngh pr create`)
+  void kind(`${'f() '.repeat(100_000)}\ngh pr create`)
+  expect(kind(`${'x=( '.repeat(30_000)}`)).toBeNull()
   expect(Date.now() - started).toBeLessThan(3000)
 })
