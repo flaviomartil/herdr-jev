@@ -111,6 +111,23 @@ Ao recarregar, uma tarefa `running` volta a `proposed` se o `agentId` não apare
 
 O hook `tool.call` atribui as chamadas de ferramenta de um subagente ao worker pelo `agentId`. Só ficam o nome da ferramenta e, para Read, Edit e Write, o nome-base do arquivo, e para Glob o padrão. O padrão do Grep nunca é guardado (só `Grep`). Texto de comando Bash nunca é guardado nem exibido (só `Bash`).
 
+## Subagente externo `harness:codex`
+
+Protótipo da fase 4c.0 (`docs/plans/external-cli-workers.md`, seção 10a). O tipo `harness:codex` é um subagente nativo do Claude Code cuja requisição de modelo é trocada por uma execução destacada de `codex exec --json`; ele aparece na lista de tarefas, transmite ao vivo e termina com uma linha de assinatura. Fica **desligado por padrão**: a opção `codex` controla se o tipo é registrado e oferecido ao modelo.
+
+Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuário lê, incluindo arquivos de credencial (`~/.codex/auth.json`, `~/.ssh`, `.env` fora da cópia). O sandbox do Codex limita só a escrita e a rede. Ligue a opção só quando isso for aceitável.
+
+- Cópia: o mod exporta o HEAD do repositório da sessão (`git read-tree` e `git checkout-index` com um índice temporário) para um diretório sob o estado do herdr-jev, roda `git init --template=` ali, faz `git add -A -f` e um único commit com identidade fixa, `core.hooksPath=/dev/null`, `commit.gpgsign=false`, `GIT_CONFIG_GLOBAL=/dev/null` e `GIT_CONFIG_NOSYSTEM=1`. A cópia tem um commit, nenhum remote, nenhum alternates e nenhum caminho do repositório real. Nada é criado no repositório do usuário (sem branch, worktree, ref, stash ou config). O trabalho não commitado não vai para a cópia.
+- Filtros: os drivers `filter.<nome>.smudge|process|required` do repositório são neutralizados na exportação. Arquivos filtrados (LFS, git-crypt) aparecem para o Codex como estão armazenados, não como estão no checkout, e um patch que os toque pode não aplicar na árvore real.
+- Resultado: um arquivo `.patch` (`git diff --binary` da cópia contra o commit único, modo 0600) em `codex-patches/` no diretório de estado, mais `git diff --stat` e o comando exato `git -C <repo> apply <patch>` no relatório. O patch nunca é aplicado. A cópia é removida ao fim, com ou sem mudanças. Se o grupo de processos do Codex não puder ser parado, nada é tocado e o relatório diz como matá-lo.
+- Invocação: `codex exec --json --skip-git-repo-check --ignore-user-config -C <cópia> -s workspace-write -c sandbox_workspace_write.exclude_slash_tmp=true -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.network_access=false -c 'sandbox_workspace_write.writable_roots=[]' --add-dir <tmp privado> [-m <modelo>] -`. O prompt segue por stdin a partir de um arquivo 0600, fora do `ps`. `--ignore-user-config` descarta a config do usuário (incluindo os servidores MCP); a autenticação continua em `CODEX_HOME`. `TMPDIR` aponta para um diretório privado da execução. As variáveis `GIT_*`, `OLDPWD` e qualquer variável cujo valor seja o caminho do repositório são removidas do ambiente do Codex, e `PWD` aponta para a cópia.
+- Sessões: a execução não usa `--ephemeral`, então prompt e saída das ferramentas ficam em `~/.codex/sessions` (e é de lá que sai o modelo quando os eventos não o dizem).
+- Modelo e assinatura: `codex-model: <id>` na primeira linha do prompt escolhe o modelo (`-m`), validado por classe de caracteres. A linha final é `— answered by codex, <modelo>` com o modelo lido dos eventos do Codex e, na falta, do registro da sessão em `$CODEX_HOME/sessions` (`~/.codex` sem `CODEX_HOME`). Se nenhum dos dois o nomeia, o relatório diz `requested <id>, unconfirmed` ou `unknown model`; nunca assina um modelo que não respondeu.
+- Controle do processo: o lançador roda destacado (`setsid`) com `timeout --foreground -k 10` (máximo `codexMaxMinutes`, padrão 30) e um arquivo de lease que cada leitura do mod renova; sem renovação por 60 s, o lançador mata o próprio grupo. `session.end` e `turn.complete` do agente matam e liquidam a execução; aborto, fechamento do stream e erro fazem o mesmo e guardam o patch. O estado da execução fica no `$.store` do mod, não em memória. Cada passo transmite por até 7 s e termina na tool interna `codex_progress`.
+- Barreiras: só a sessão principal pode iniciar o agente; ele é recusado em modo `plan`, por subagente, teammate, workflow e fork. A definição de fallback (Haiku) tem apenas `codex_progress` e `SubagentHandback` como tools, e um `.catch` no `turn.step` responde com recusa em vez de deixar um modelo Claude responder. Um agente `harness:codex` sem estado de execução também é recusado.
+- Limites: sem follow-up (a segunda mensagem responde que não é suportado), sem modo teammate, só Codex, só Linux (`setsid`, `ps`, `find -newermt`, `timeout`, `node` no PATH). Restos de execuções que o mod não conseguiu matar não são varridos sozinhos.
+- Dependências de comportamento não documentado do engine ficam em `hooks/external.ts` (`ENGINE`): orçamento do hook (`HOOK_BUDGET_MS`, conferido por tipo contra `HookBudget['ms']`), nome `SubagentHandback`, prefixos `<system-reminder>` e `[handback-send-enforce]`.
+
 ## Configuração (`userConfig`)
 
 - `herdrJevBin` (padrão `herdr-jev`): executável, resolvido pelo PATH.
@@ -118,6 +135,7 @@ O hook `tool.call` atribui as chamadas de ferramenta de um subagente ao worker p
 - `autoRun` (padrão `true`): `harness_plan` e cada tarefa liquidada iniciam sozinhos as tarefas prontas.
 - `scopeMode` (padrão `enforce`), `runbook` (vazio), `alwaysAllowSkills` e `alwaysAllowAgents`: ver a seção Scope.
 - `autoReview` (padrão `false`): dispara o review do harness uma vez quando tudo está `done` ou `approved` e há ao menos uma `approved`.
+- `codex` (padrão `false`): registra e oferece o agente `harness:codex`. `codexMaxMinutes` (padrão `30`): tempo máximo de uma execução do Codex.
 
 ## Limites conhecidos
 

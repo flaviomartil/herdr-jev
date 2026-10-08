@@ -12,6 +12,21 @@ import type {
 import { autoReview, autoRun, cliConfig, maxWorkers, runModels, runReview, runTriage } from './cli'
 import type { RunPort } from './cli'
 import {
+  agentSpec,
+  cleanupAgent,
+  createExternal,
+  endAll,
+  externalRefusal,
+  externalRole,
+  externalStep,
+  maxMinutesOf,
+  noteSpawn,
+  PROGRESS_DESCRIPTION,
+  progressCall,
+  spawnDenial,
+} from './external'
+import type { AgentState, External, Ports } from './external'
+import {
   approvedKey,
   baseName,
   bandState,
@@ -87,6 +102,7 @@ const PANE_ID = 'harness'
 const TOOL_PLAN = 'mcp__harness__harness_plan'
 const TOOL_RUN = 'mcp__harness__harness_run'
 const TOOL_STATUS = 'mcp__harness__harness_status'
+const TOOL_CODEX_PROGRESS = /^mcp__harness__codex_progress$/
 
 const ACTIVE_STATUS = ['pending', 'running', 'waiting', 'idle']
 const RESTARTABLE: readonly HarnessTask['state'][] = ['proposed', 'failed', 'needs_you']
@@ -176,6 +192,64 @@ const launchPorts = ($: EngineInterface): LaunchPorts => ({
   register: spec => $.agent.register(spec),
   run: (argv, init) => $.process.run(argv, init),
 })
+
+const CODEX_STORE_PREFIX = 'codex-agent:'
+
+const externalPorts = ($: EngineInterface): Ports => ({
+  run: (argv, init) => $.process.run(argv, init),
+  now: () => $.clock.now(),
+  sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
+  cwd: () => $.session.cwd(),
+  env: async () => ({
+    stateDir: await $.env.get('HERDR_JEV_STATE_DIR'),
+    pluginId: await $.env.get('HERDR_PLUGIN_ID'),
+    pluginStateDir: await $.env.get('HERDR_PLUGIN_STATE_DIR'),
+    home: await $.env.get('HOME'),
+    testGuard: await $.env.get('HERDR_JEV_TEST_GUARD'),
+    aiHarnessTestGuard: await $.env.get('AI_HARNESS_TEST_GUARD'),
+    generatedDir: await $.env.get('AI_HARNESS_GENERATED_DIR'),
+  }),
+  readText: async path => {
+    const raw = await $.fs.read(path)
+    if (typeof raw !== 'string') throw new Error('not a text file')
+    return raw
+  },
+  exists: path => $.fs.exists(path),
+  userTexts: async agentId => {
+    const rows = await $.session.messages({ agentId })
+    return Array.isArray(rows) ? rows.filter(row => row.role === 'user').map(row => row.text) : null
+  },
+  agentType: async agentId => (await $.agent.list()).find(one => one.id === agentId)?.type,
+  loadState: async agentId => ((await $.store.get(`${CODEX_STORE_PREFIX}${agentId}`)) as AgentState | undefined) ?? null,
+  saveState: async (agentId, state) => {
+    if (state === null) await $.store.delete(`${CODEX_STORE_PREFIX}${agentId}`)
+    else await $.store.set(`${CODEX_STORE_PREFIX}${agentId}`, state)
+  },
+  liveAgents: async () => {
+    const keys = (await $.store.keys()).filter(key => key.startsWith(CODEX_STORE_PREFIX))
+    const live: string[] = []
+    for (const key of keys) {
+      const state = (await $.store.get(key)) as AgentState | undefined
+      if (state?.run != null) live.push(key.slice(CODEX_STORE_PREFIX.length))
+    }
+    return live
+  },
+  notify: text => {
+    $.ui.toast(text.slice(0, 600), { timeoutMs: 15000 })
+  },
+})
+
+async function registerCodexAgent($: EngineInterface, external: External, options: PluginOptions): Promise<void> {
+  if (options.codex !== true) return
+  try {
+    external.progressTool = (await $.tool.register({ name: 'codex_progress', description: PROGRESS_DESCRIPTION })).tool
+  } catch {
+    external.progressTool = ''
+  }
+  if (external.progressTool === '') return
+  await $.agent.register(agentSpec(external.progressTool))
+  external.agentRegistered = true
+}
 
 async function save($: EngineInterface, cwd: string): Promise<void> {
   try {
@@ -1060,6 +1134,7 @@ function pctHue(word: string): Hue {
 }
 
 export const register: Register = (on, options) => {
+  const external = createExternal(maxMinutesOf(options.codexMaxMinutes))
   const gate = createGate()
   const reviewed = new Set<string>()
   const runtime: ScopeRuntime = { receipt: newReceipt(), pending: null, warned: new Set() }
@@ -1087,6 +1162,7 @@ export const register: Register = (on, options) => {
         inputSchema: RUN_SCHEMA,
       }),
     )
+    await attempt('register codex agent', $, () => registerCodexAgent($, external, options))
     await attempt('register harness_status', $, () =>
       $.tool.register({
         name: 'harness_status',
@@ -1124,6 +1200,39 @@ export const register: Register = (on, options) => {
   on('agent.offer', { agent: 'harness:mechanic' }, () => ({ isOffered: false })).catch(($, e, next) =>
     next.called ? next(e) : { isOffered: false },
   )
+
+  on('agent.offer', { agent: 'harness:codex' }, () => ({ isOffered: options.codex === true })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+
+  on('tool.call', { tool: TOOL_CODEX_PROGRESS }, async ($, e) => progressCall(externalPorts($), e.agentId)).catch(($, e, next) =>
+    next.called ? next(e) : { deny: 'codex_progress failed, see the debug log.' },
+  )
+
+  on('agent.spawn', async ($, e, next) => {
+    const denial = spawnDenial(e, options.codex === true)
+    if (denial !== null) return { deny: denial }
+    const started = await next(e)
+    await attempt('note codex spawn', $, () => noteSpawn(externalPorts($), e.subagentType, e.prompt, e.cwd, started.agentId))
+    return started
+  })
+
+  on('turn.step', async function* ($, e, next) {
+    const agentId = e.agentId
+    if (agentId === undefined || options.codex !== true) return yield* next(e)
+    const ports = externalPorts($)
+    if ((await externalRole(ports, external, agentId)) === 'other') return yield* next(e)
+    return yield* externalStep(ports, external, e, agentId, next.signal, () => next.budget.remainingMs)
+  }).catch(async function* ($, e, next) {
+    if (next.called || e.agentId === undefined || options.codex !== true) return yield* next(e)
+    if ((await externalRole(externalPorts($), external, e.agentId)) === 'other') return yield* next(e)
+    return yield* externalRefusal(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    await attempt('codex session end', $, () => endAll(externalPorts($), external))
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'harness' }, async ($, e) => {
     if (e.args.trim() === 'scope') {
@@ -1239,6 +1348,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) {
       const agentId = e.agentId
+      await attempt('codex cleanup', $, () => cleanupAgent(externalPorts($), external, agentId))
       await attempt('turn complete', $, async () => {
         const cwd = await $.session.cwd()
         const outcome = await onWorkerTurnComplete($, gate, { agentId, answer: e.answer, reason: e.reason }, cwd)
