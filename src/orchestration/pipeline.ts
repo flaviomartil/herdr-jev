@@ -52,7 +52,7 @@ export async function runPipeline(plan: PipelinePlan, options: RunOptions) {
   }
   if (Buffer.byteLength(plan.task) > 16_384) throw new Error("handoff_task_too_large");
   if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 1000 || options.timeoutMs > 3_600_000) throw new Error("invalid_timeout");
-  if (process.env.HERDR_ENV !== "1") return { mode: "preview", stages: plan.executionStages };
+  if (process.env.HERDR_ENV !== "1") return { mode: "preview", stages: plan.executionStages, ...(plan.consultStage ? { consult: plan.consultStage } : {}) };
   const run = externalRun("create", { client: plan.client, model: options.delegation.model,
     availableModels: options.delegation.availableModels ?? [], role: options.delegation.role ?? "advisor",
     work: "substantive", cwd: options.cwd ?? process.cwd(), objectiveDigest: digest(plan.task),

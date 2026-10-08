@@ -1,4 +1,5 @@
 import type {
+  HarnessConsult,
   HarnessHumanAsk,
   HarnessModelRole,
   HarnessPlan,
@@ -17,6 +18,16 @@ export type TriageResult = {
   needsResearch: boolean
   effort: string | null
 }
+
+export type ConsultTarget = {
+  model: string
+  cliModel: string
+  effort: string | null
+}
+
+export const CONSULT_REPORT_LIMIT = 4000
+
+const CONSULT_STATES: readonly HarnessConsult['state'][] = ['running', 'done', 'failed']
 
 export type ReviewResult = {
   status: string | null
@@ -156,6 +167,16 @@ export function normalizeModels(raw: unknown): HarnessRoleTable | null {
   if (!isRecord(raw)) return null
   if (raw.client !== undefined && raw.client !== 'claude') return null
   return normalizeRoleTable(raw.roles)
+}
+
+export function normalizeConsult(raw: unknown): ConsultTarget | null {
+  if (!isRecord(raw) || raw.mode !== 'delegate' || !isRecord(raw.consult)) return null
+  const consult = raw.consult
+  if (consult.client !== undefined && consult.client !== 'claude') return null
+  const model = text(consult.model)
+  const cliModel = text(consult.cliModel) ?? model
+  if (model === null || cliModel === null) return null
+  return { model, cliModel, effort: text(consult.effort) }
 }
 
 export function normalizeReview(raw: unknown): ReviewResult | null {
@@ -390,6 +411,7 @@ export function readyTasks(plan: HarnessPlan): HarnessTask[] {
     task =>
       task.state === 'proposed' &&
       task.role !== 'advisor' &&
+      task.consult === undefined &&
       task.deps.every(dep => open.has(dep)),
   )
 }
@@ -568,6 +590,13 @@ export function roleLabel(role: HarnessRole, model: string | null, effort: strin
   return `${role}/${shortModel(model)}${effort === null ? '' : `/${effort}`}${writes ? ' writes' : ''}`
 }
 
+export function consultLine(consult: HarnessConsult): string {
+  const head = `  consult ${shortModel(consult.model)}${consult.effort === null ? '' : `/${consult.effort}`} read-only [${consult.state}]`
+  if (consult.state === 'running') return `${head}${consult.agentId === undefined ? '' : ` agent ${consult.agentId}`}`
+  if (consult.state === 'failed') return `${head}: ${consult.note ?? 'no recommendation'}`
+  return `${head}, recommendation for you to weigh (you decide; run this task with harness_run taskId):\n${consult.report ?? ''}`
+}
+
 export function summarize(plan: HarnessPlan): string {
   const counts = countTasks(plan)
   const lines = [
@@ -581,6 +610,7 @@ export function summarize(plan: HarnessPlan): string {
     const verdict = task.verdict === undefined ? '' : ` verdict ${task.verdict}`
     const agent = task.agentId === undefined ? '' : ` agent ${task.agentId}`
     lines.push(`${STATE_GLYPH[task.state]} ${task.id} [${task.state}] ${task.title} (${label})${deps}${verdict}${agent}`)
+    if (task.consult !== undefined) lines.push(consultLine(task.consult))
   }
   return lines.join('\n')
 }
@@ -597,6 +627,23 @@ function optionalString(value: unknown): string | undefined {
 
 function optionalNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function parseConsult(raw: unknown): HarnessConsult | undefined {
+  if (!isRecord(raw)) return undefined
+  const model = text(raw.model)
+  const cliModel = text(raw.cliModel)
+  const state = CONSULT_STATES.find(one => one === raw.state)
+  if (model === null || cliModel === null || state === undefined) return undefined
+  return {
+    model,
+    cliModel,
+    effort: text(raw.effort),
+    state,
+    agentId: optionalString(raw.agentId),
+    report: optionalString(raw.report),
+    note: optionalString(raw.note),
+  }
 }
 
 function parseTask(raw: unknown): HarnessTask | null {
@@ -632,6 +679,7 @@ function parseTask(raw: unknown): HarnessTask | null {
     note: optionalString(raw.note),
     report: optionalString(raw.report),
     reviewReport: optionalString(raw.reviewReport),
+    consult: parseConsult(raw.consult),
   }
 }
 
