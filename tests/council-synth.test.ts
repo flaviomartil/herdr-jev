@@ -259,17 +259,17 @@ describe("council synth limits", () => {
 
   test("text sent to Jev is limited to 300 characters of detail", async () => {
     const jev = fakeJev();
-    await synthesize([finding("A", "codex", { detail: "d".repeat(1000) })], { jev });
+    await synthesize([finding("A", "codex", { detail: "q".repeat(1000) })], { jev });
     const sent = jev.calls[0]!.state.findings.f0;
     expect(sent.detail.length).toBeLessThanOrEqual(300);
     expect(Object.keys(sent).sort()).toEqual(["detail", "location", "member", "title"]);
   });
 
-  test("secrets in title and detail are redacted before reaching Jev", async () => {
+  test("secrets in title, detail and path are redacted before reaching Jev", async () => {
     const jev = fakeJev();
     const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
     await synthesize(
-      [finding(`leaks ${secret} in src/${secret}.ts`, "codex", { detail: `token ${secret} here` })],
+      [finding(`leaks ${secret}`, "codex", { detail: `token ${secret} here`, path: `src/${secret}.ts` })],
       { jev },
     );
     expect(JSON.stringify(jev.calls)).not.toContain(secret);
@@ -349,8 +349,8 @@ describe("council synth invalid answers and failures", () => {
   });
 
   test("a round 2 group too large for one request is shrunk and still checked", async () => {
-    const a = finding("A", "codex", { detail: "d".repeat(300), path: `src/${"a".repeat(150)}.ts` });
-    const b = finding("B", "kimi", { detail: "d".repeat(300), path: `src/${"b".repeat(150)}.ts` });
+    const a = finding("A", "codex", { detail: "q".repeat(300), path: `src/${"a".repeat(150)}.ts` });
+    const b = finding("B", "kimi", { detail: "q".repeat(300), path: `src/${"b".repeat(150)}.ts` });
     const jev = fakeJev({ same: (t) => (t === "B" ? "A" : "new") });
     const out = await synthesize([a, b], { jev, limits: { maxChars: 1100 } });
     for (const call of jev.calls) expect(call.chars).toBeLessThanOrEqual(1100);
