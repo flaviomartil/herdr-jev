@@ -29,7 +29,7 @@ import { resolveRoleMatrix } from "./pipelines/roles.js";
 import { createHerdrClient, readHerdrObservedState } from "./herdr/client.js";
 import { checkHarnessStatus, externalRun, harnessCommand, harnessModelCatalog, listHarnessRuns, readUsageQuota } from "./harness/bridge.js";
 import { formatReviewReport, runReview } from "./harness/review.js";
-import { exitAfterFlush, renderReview, runCouncilCommand, startCouncilAlongside, type CouncilAlongside } from "./council/command.js";
+import { exitAfterFlush, renderReview, runCouncilCommand, startCouncilAlongside, trackShutdownSignals, type CouncilAlongside, type ShutdownTracker } from "./council/command.js";
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
 import { resolveHerdrContext } from "./herdr/context.js";
 import { resolvePeerStage, converseWithPeer } from "./herdr/peer.js";
@@ -577,21 +577,29 @@ program
   .option("--session <id>", "Review session id; generated when omitted")
   .option("--model <id>", "Exact current model used to resolve the delegation profile")
   .option("--available-models <ids>", "Verified available exact model IDs, comma-separated")
-  .option("--council", "Also consult the review council (codex, kimi, antigravity) on the same base; advisory only, never changes the status or exit code")
+  .option("--council", "Also consult the review council (codex, kimi, antigravity) on the same base; advisory only, never changes the status or exit code. The diff is sent to the provider of each selected CLI and the finding text to TypeSafe")
   .option("--council-members <list>", "Council members, comma-separated from codex,kimi,antigravity; implies --council and cannot add a client the cross-harness configuration excludes")
+  .option("--council-timeout <ms>", "Deadline for each council member in milliseconds; defaults to 8 minutes")
+  .option("--council-wait <ms>", "How long to wait for the council after the review has settled, in milliseconds; the council is then cancelled and the review is printed", "60000")
   .option("--json", "Output the full report as JSON")
-  .action(async (options: { scopes?: string; timeoutMs: string; verifyCommandJson?: string; base?: string; client?: string; cwd?: string; session?: string; model?: string; availableModels?: string; json?: boolean; council?: boolean; councilMembers?: string }) => {
+  .action(async (options: { scopes?: string; timeoutMs: string; verifyCommandJson?: string; base?: string; client?: string; cwd?: string; session?: string; model?: string; availableModels?: string; json?: boolean; council?: boolean; councilMembers?: string; councilTimeout?: string; councilWait?: string }) => {
     let alongside: CouncilAlongside | undefined;
+    let tracker: ShutdownTracker | undefined;
     try {
       const start = options.cwd ?? process.cwd();
       const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8" });
       const cwd = top.status === 0 && top.stdout.trim() ? top.stdout.trim() : start;
       const context = await resolveHerdrContext({ client: options.client, model: options.model, availableModels: options.availableModels?.split(",").filter(Boolean) });
-      if (options.council || options.councilMembers !== undefined) alongside = startCouncilAlongside({ members: options.councilMembers, base: options.base }, { cwd, client: context.client });
+      if (options.council || options.councilMembers !== undefined) {
+        tracker = trackShutdownSignals();
+        alongside = startCouncilAlongside({ members: options.councilMembers, base: options.base, timeout: options.councilTimeout, wait: options.councilWait }, { cwd, client: context.client });
+      }
       const report = await runReview({ cwd, client: context.client, session: options.session, scopes: options.scopes, timeoutMs: Number(options.timeoutMs),
         verifyCommandJson: options.verifyCommandJson, base: options.base, excludeEnv: envFileKeys(), model: options.model ?? context.delegation.model,
         availableModels: options.availableModels?.split(",").filter(Boolean) ?? context.delegation.availableModels });
-      const council = alongside ? await alongside.promise : undefined;
+      const interrupted = tracker?.code() !== undefined;
+      if (interrupted) alongside?.abort();
+      const council = alongside && !interrupted ? await alongside.settle() : undefined;
       console.log(renderReview(report, formatReviewReport(report), council, options.json));
       if (report.status !== "ready") process.exitCode = 1;
     } catch (error) {
@@ -601,23 +609,24 @@ program
       console.log(options.json ? JSON.stringify({ error: message }) : `Review failed: ${message}`);
       process.exitCode = 1;
     }
-    if (alongside) exitAfterFlush(Number(process.exitCode ?? 0));
+    if (alongside) exitAfterFlush(tracker?.code() ?? Number(process.exitCode ?? 0));
   });
 
 program
   .command("council")
-  .description("Ask codex, kimi and antigravity to review the current diff in isolated directories and summarize where they agree; advisory only")
+  .description("Ask codex, kimi and antigravity to review the current diff in isolated directories and summarize where they agree; advisory only. The diff is sent to the provider of each selected CLI and the finding text to TypeSafe")
+  .option("--client <client>", "Client of the current session, which is never a member of its own council; defaults to the caller agent")
   .option("--council-members <list>", "Members, comma-separated from codex,kimi,antigravity; cannot add a client the cross-harness configuration excludes")
   .addOption(new Option("--members <list>").hideHelp())
   .option("--base <ref>", "Review the changes since this ref (merge base with HEAD) plus the working tree; defaults to the working tree against HEAD")
   .option("--question <text>", "Ask the members a question about the diff instead of a general review")
   .option("--timeout <ms>", "Deadline for each member in milliseconds")
   .option("--json", "Output the run and the summary as JSON")
-  .action(async (options: { councilMembers?: string; members?: string; base?: string; question?: string; timeout?: string; json?: boolean }) => {
+  .action(async (options: { client?: string; councilMembers?: string; members?: string; base?: string; question?: string; timeout?: string; json?: boolean }) => {
     const controller = new AbortController();
     let code = 2;
     try {
-      const context = await resolveHerdrContext({});
+      const context = await resolveHerdrContext({ client: options.client });
       const result = await runCouncilCommand({ members: options.councilMembers ?? options.members, base: options.base, question: options.question, timeout: options.timeout, json: options.json }, { cwd: process.cwd(), client: context.client }, {}, controller.signal);
       console.log(result.output);
       code = result.exitCode;

@@ -456,8 +456,11 @@ The output is one flat JSON object, with no nesting:
 
 ```sh
 herdr-jev review [--scopes "name=path1,path2;name2=path3"] [--timeout-ms <ms>] [--verify-command-json <path>] [--base <ref>]
-  [--client <client>] [--cwd <path>] [--session <id>] [--model <id>] [--available-models <ids>] [--json]
+  [--client <client>] [--cwd <path>] [--session <id>] [--model <id>] [--available-models <ids>]
+  [--council] [--council-members <list>] [--council-timeout <ms>] [--council-wait <ms>] [--json]
 ```
+
+`--council`, `--council-members`, `--council-timeout` and `--council-wait` add the advisory review council described under [Review council](#review-council). The council never changes the printed status or the exit code. Using it sends the diff to the provider of each selected CLI and the finding text to TypeSafe.
 
 Runs the Harness review gate on the current repository:
 
@@ -780,7 +783,7 @@ Accepted residuals, which the redactor does not remove:
 - an Azure SAS `sig=` value
 - values that start with `./` or `~/`
 
-A quoted literal after `||` or `??` is redacted when the assignment target is secret-named, as in `const password = process.env.DB_PASSWORD || "<pw>"`.
+A quoted literal after `||` or `??` is redacted when the assignment target is secret-named, as in `const password = process.env.DB_PASSWORD || "<pw>"`. The literal survives after a call (`getenv("X") || "<pw>"`), in a chained fallback (`a || b || "<pw>"`) and after a parenthesised expression (`(a) || "<pw>"`). Title, detail and path are cut to 2,000, 4,000 and 500 characters before redaction.
 
 ## Testing
 
@@ -806,8 +809,11 @@ bun run smoke
 `src/council` reviews one diff with several external CLIs (codex, kimi, agy) in parallel. Each member runs in its own review directory under `<state dir>/council`, never in your working tree.
 
 **Commands**
-- `herdr-jev council [--council-members codex,kimi,antigravity] [--base <ref>] [--question <text>] [--timeout <ms>] [--json]` runs the council on the current repository, groups the findings and prints the summary (or `{ run, summary, notes }` with `--json`). Without `--base` it reviews the working tree against `HEAD`. It exits 0 when the council ran, whatever it found, and 2 when it did not run (fewer than two members, empty diff, cancelled, invalid option).
-- `herdr-jev review --council [--council-members ...]` runs the review exactly as before and also runs the council on the same base, in parallel. The council text is appended under its own heading and the JSON report gains a `council` field. It is advisory: it never changes the review `status`, the exit code or anything recorded in the Harness, and a council failure appears as a note.
+- `herdr-jev council [--client <client>] [--council-members codex,kimi,antigravity] [--base <ref>] [--question <text>] [--timeout <ms>] [--json]` runs the council on the current repository, groups the findings and prints the summary (or `{ run, summary, notes }` with `--json`). Without `--base` it reviews the working tree against `HEAD`. It exits 0 when the council ran, whatever it found, and 2 when it did not run (fewer than two members, empty diff, cancelled, invalid option).
+- `herdr-jev review --council [--council-members ...] [--council-timeout <ms>] [--council-wait <ms>]` runs the review exactly as before and also runs the council on the same base, in parallel. The council text is appended under its own heading and the JSON report gains a `council` field. It is advisory: it never changes the review `status`, the exit code (an interrupt still exits 128 plus the signal number) or anything recorded in the Harness, and a council failure appears as a note. `--council-timeout` bounds each member (default 8 minutes). `--council-wait` (default 60000) is how long to wait for the council after the review has settled; when it elapses the council is cancelled, the note reads `cancelled (review finished first)` and the review is printed at once.
+- Data leaves your machine: the diff is sent to the provider of each selected CLI (codex, kimi, agy) and the finding text is sent to TypeSafe for grouping. `--json` prints findings, reasons and notes after the same redaction as the text report, so the `run` object holds redacted copies.
+- `--client` names the session client, which is never a member of its own council; outside a Herdr pane it defaults to `claude`.
+- The council refuses to run (`state_dir_inside_repo`) when the state directory is inside the reviewed repository and not ignored by it, because its review directories would show up as untracked files.
 - Members come from the cross-harness configuration (`HERDR_JEV_CROSS_HARNESS`) for the session client, which is never a member of its own council. `--council-members` narrows that set; a requested member the configuration excludes is dropped and the output says so. With cross-harness delegation off, no council runs.
 - The council runs only on the flag or the command; no triage rule starts it.
 

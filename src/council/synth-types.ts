@@ -20,6 +20,7 @@ export interface SynthLimits {
 
 export interface SynthOptions {
   jev?: JevLike;
+  apiKey?: string | null;
   threshold?: number;
   contradictionThreshold?: number;
   deadlineMs?: number;

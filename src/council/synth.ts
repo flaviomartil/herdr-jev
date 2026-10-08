@@ -88,14 +88,22 @@ export function normalizeSeverity(value: unknown): CouncilFinding["severity"] {
   return Object.hasOwn(SEVERITY_ALIASES, key) ? SEVERITY_ALIASES[key]! : "medium";
 }
 
-function sanitize(finding: CouncilFinding): CouncilFinding {
+const RAW_PATH_CAP = 500;
+const RAW_TITLE_CAP = 2000;
+const RAW_DETAIL_CAP = 4000;
+
+function capped(value: unknown, max: number): string {
+  return String(value ?? "").slice(0, max);
+}
+
+export function sanitizeFinding(finding: CouncilFinding): CouncilFinding {
   const severity = normalizeSeverity(finding.severity);
   const out: CouncilFinding = {
     member: finding.member,
-    path: pathText(finding.path, 500),
+    path: pathText(capped(finding.path, RAW_PATH_CAP), RAW_PATH_CAP),
     severity,
-    title: safe(finding.title, 2000),
-    detail: safeBlock(finding.detail, 4000),
+    title: safe(capped(finding.title, RAW_TITLE_CAP), RAW_TITLE_CAP),
+    detail: safeBlock(capped(finding.detail, RAW_DETAIL_CAP), RAW_DETAIL_CAP),
   };
   if (typeof finding.line === "number" && Number.isFinite(finding.line)) out.line = finding.line;
   return out;
@@ -394,7 +402,7 @@ export async function synthesize(
   input: CouncilFinding[],
   opts: SynthOptions = {},
 ): Promise<CouncilSummary> {
-  const findings = input.map(sanitize);
+  const findings = input.map(sanitizeFinding);
   const limits = resolveLimits(opts.limits);
   const threshold = opts.threshold ?? SYNTH_DEFAULT_THRESHOLD;
   const contradictionThreshold = opts.contradictionThreshold ?? SYNTH_CONTRADICTION_THRESHOLD;
@@ -405,7 +413,7 @@ export async function synthesize(
 
   let jev = opts.jev;
   if (!jev) {
-    const apiKey = resolveTypeSafeApiKey();
+    const apiKey = opts.apiKey !== undefined ? opts.apiKey : resolveTypeSafeApiKey();
     if (!apiKey) {
       return rawSummary(findings, [unavailable("missing_key: TYPESAFE_API_KEY is not set or resolved from Vault")]);
     }

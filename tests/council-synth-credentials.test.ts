@@ -160,13 +160,42 @@ describe("council redactor, credential shapes and prose", () => {
     expect(redact('const name = process.env.NAME || "default-name"')).toBe('const name = process.env.NAME || "default-name"');
   });
 
+  test("the sk- shape is linear on a run made of many sk- starts", () => {
+    const started = performance.now();
+    const many = "sk-".repeat(70_000);
+    expect(redact(many)).toBe(many);
+    expect(redact(`${many}9`)).toBe("[REDACTED]");
+    expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  test("the fallback rule leaves a literal after a call, a chained fallback or a parenthesised expression", () => {
+    for (const text of [
+      'const password = getenv("DB_PASSWORD") || "Sup3rSecretPw99"',
+      'const password = process.env.A || process.env.B || "Sup3rSecretPw99"',
+      'const password = (process.env.A) || "Sup3rSecretPw99"',
+    ]) {
+      expect(redact(text)).toContain("Sup3rSecretPw99");
+    }
+  });
+
+  test("finding text is capped before it reaches the redactor", async () => {
+    const huge = `password = x${" || a".repeat(200_000)} || "pw"`;
+    const started = performance.now();
+    const summary = await synthesize([{ member: "codex", path: "a".repeat(1_000_000), severity: "high", title: huge, detail: huge }], { jev: fakeJev() });
+    expect(performance.now() - started).toBeLessThan(5_000);
+    const item = summary.unique[0] ?? summary.agreements[0] ?? summary.notes[0]!;
+    expect(item.findings[0]!.title.length).toBeLessThanOrEqual(2000);
+    expect(item.findings[0]!.detail.length).toBeLessThanOrEqual(4000);
+    expect(item.findings[0]!.path.length).toBeLessThanOrEqual(500);
+  });
+
   test("the sk- shape is linear in the length of the run", () => {
-    const started = Date.now();
+    const started = performance.now();
     const long = `sk-${"z".repeat(200_000)}`;
     expect(redact(long)).toBe(long);
     expect(redact(`${long}1`)).toBe("[REDACTED]");
     expect(redact(`key sk-proj-${"ab1".repeat(10)}.json`)).toBe(`key sk-proj-${"ab1".repeat(10)}.json`);
-    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(performance.now() - started).toBeLessThan(5_000);
   });
 
   test("redacting twice equals redacting once on the prose and credential sets", () => {

@@ -4,6 +4,7 @@ import { resolveStateDir } from "../herdr/state-dir.js";
 import { commandOf, DIFF_CAP, MEMBER_BINARIES, MEMBER_NAMES, PROMPT_FILE_NAME, VERSION_SIGNATURES } from "./members.js";
 import { parseMemberOutput } from "./parse.js";
 import { acquireRepoLock, councilInterruptedSince, STALE_AGE_MS, sweepStale } from "./scope.js";
+import { stateDirInsideRepo } from "./state-guard.js";
 import { defaultSpawn, findTimeoutCommand, type ProcessOutput, type SpawnedProcess, type SpawnFn } from "./spawn.js";
 import type { CouncilMemberName, CouncilMemberResult, CouncilRun } from "./types.js";
 import { buildReviewPatch, createReviewWorktree, resolveRepoRoot, type ReviewPatch } from "./review-dir.js";
@@ -191,6 +192,7 @@ export async function runCouncil(opts: RunCouncilOptions): Promise<CouncilRun> {
   } catch (error) {
     return stopped(candidates, results, "no diff", { note: `cannot read the diff: ${message(error)}`.slice(0, 400) });
   }
+  if (stateDirInsideRepo(stateDir, repoRoot)) return stopped(candidates, results, "state_dir_inside_repo", { note: "state_dir_inside_repo: the state directory is inside the reviewed repository and is not ignored; its review directories would show as untracked files. Set HERDR_JEV_STATE_DIR outside the repository or ignore it" });
   const lock = acquireRepoLock(stateDir, repoRoot, STALE_AGE_MS);
   if (!lock) return stopped(candidates, results, "council already running", { note: "a council run is already in progress for this repository" });
 
