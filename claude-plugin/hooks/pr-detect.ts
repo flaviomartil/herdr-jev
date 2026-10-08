@@ -709,6 +709,29 @@ export function directoryPlan(cmds: readonly Cmd[]): DirectoryPlan {
   return { kind: 'unknown', why: 'the command changes directory in a way the gate does not follow' }
 }
 
+function isLeadingCd(cmd: Cmd): boolean {
+  const target = cmd.words[1]
+  return (
+    cmd.depth === 0 &&
+    !cmd.sub &&
+    cmd.end === '&&' &&
+    cmd.words.length === 2 &&
+    cmd.words[0]?.text === 'cd' &&
+    target !== undefined &&
+    target.literal &&
+    target.text.length > 0 &&
+    !target.text.startsWith('-')
+  )
+}
+
+function isAnchoredReview(cmds: readonly Cmd[]): boolean {
+  const reviewIndex = cmds.findIndex(cmd => detectReview(cmd.words) !== null)
+  if (reviewIndex < 0) return false
+  const review = cmds[reviewIndex] as Cmd
+  if (review.depth !== 0 || review.sub) return false
+  return cmds.every((cmd, index) => index === reviewIndex || (index === 0 && reviewIndex === 1 && isLeadingCd(cmd)))
+}
+
 export function analyze(command: string): Analysis {
   const cmds = lex(command)
   const commands: PrCommand[] = []
@@ -719,6 +742,7 @@ export function analyze(command: string): Analysis {
     const run = detectReview(cmd.words)
     if (run !== null) review = run
   }
+  if (review !== null && !isAnchoredReview(cmds)) review = null
   return { pr: commands.length === 0 ? null : { commands, directory: directoryPlan(cmds) }, review }
 }
 

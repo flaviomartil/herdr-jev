@@ -1138,6 +1138,19 @@ test('session.end kills and deletes only this session runs and leaves another se
   expect(fake.removed.length).toBeGreaterThan(0)
 })
 
+test('session.end sweeps the runs of the session id the event carries, not the current one', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  await startEngine($)
+  seen.saved.set('codex-agent:sess-old:agent-z', liveEntry('7777'))
+  seen.saved.set(`${SELF}agent-self`, liveEntry('7778'))
+  await $.session.end({ reason: 'clear', sessionId: 'sess-old', resume: {} } as never)
+  await seen.clock.settle()
+  expect(fake.kills.map(call => call[0])).toEqual(['7777'])
+  expect(seen.saved.has('codex-agent:sess-old:agent-z')).toBe(false)
+  expect((seen.saved.get(`${SELF}agent-self`) as AgentState).run?.pid).toBe('7778')
+})
+
 test('a session with codex disabled never touches any stored run when it ends', async ($, on) => {
   const seen = wire(on)
   const fake = installEngine(on, seen)

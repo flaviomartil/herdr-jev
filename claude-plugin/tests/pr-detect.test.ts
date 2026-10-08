@@ -309,6 +309,20 @@ test('herdr-jev review is recognised through wrappers, with its json flag', () =
   expect(review('git commit -m "herdr-jev review"')).toBeNull()
   expect(review('cat <<EOF\nherdr-jev review\nEOF')).toBeNull()
   expect(analyze('herdr-jev review && gh pr create').pr).not.toBeNull()
+  expect(analyze('herdr-jev review && gh pr create').review).toBeNull()
+})
+
+test('a review is recorded only when every other command in the call is a leading literal cd', () => {
+  const review = (command: string) => analyze(command).review
+  expect(review('cd /repo && herdr-jev review')).toEqual({ json: false })
+  expect(review('cd /repo && herdr-jev review --json')).toEqual({ json: true })
+  expect(review('cat notes; herdr-jev review')).toBeNull()
+  expect(review('herdr-jev review; cat notes')).toBeNull()
+  expect(review('herdr-jev review | tee out')).toBeNull()
+  expect(review('cd /repo && cat notes && herdr-jev review')).toBeNull()
+  expect(review('cd $DIR && herdr-jev review')).toBeNull()
+  expect(review('cd /a; herdr-jev review')).toBeNull()
+  expect(review('echo $(herdr-jev review)')).toBeNull()
 })
 
 test('a lone parenthesis scan and function markers stay linear', () => {
