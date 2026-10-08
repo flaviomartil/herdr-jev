@@ -447,7 +447,7 @@ function sweepStale(parent: string): void {
       const threshold = Math.max(STALE_FLOOR_MS, 3 * (meta?.timeoutMs ?? DEFAULT_PROVE_TIMEOUT_MS));
       if (Date.now() - startedAt < threshold) continue;
       if (meta && ownerIsLive(meta)) continue;
-      if (meta && dirStat && killableOrphan(meta.pid, dir)) {
+      if (meta && dirStat?.isDirectory() && killableOrphan(meta.pid, dir)) {
         try {
           process.kill(-meta.pid!, "SIGKILL");
         } catch {
