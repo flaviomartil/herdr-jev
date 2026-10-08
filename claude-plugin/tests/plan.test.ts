@@ -248,8 +248,14 @@ test('normalizeReview derives its detail from status and per-scope judges, with 
       verify: { status: 'ready' },
       judges: [{ scope: 'core', status: 'ready' }, { scope: 'ui', status: null, error: 'timeout' }],
     }),
-  ).toEqual({ status: 'pending_judge', detail: 'verify ready, core ready, ui timeout', error: null })
-  expect(normalizeReview({ error: 'invalid_verify_command' })).toEqual({ status: null, detail: null, error: 'invalid_verify_command' })
+  ).toEqual({ status: 'pending_judge', detail: 'verify ready, core ready, ui timeout', error: null, identity: null })
+  expect(normalizeReview({ error: 'invalid_verify_command' })).toEqual({ status: null, detail: null, error: 'invalid_verify_command', identity: null })
+  expect(normalizeReview({ status: 'ready', session: 'jev-review-ab12', client: 'claude', cwd: '/work/demo' })?.identity).toEqual({
+    client: 'claude',
+    session: 'jev-review-ab12',
+    cwd: '/work/demo',
+  })
+  expect(normalizeReview({ status: 'ready', session: 'x' })?.identity).toBeNull()
   expect(bar(3, 6)).toBe('█████░░░░░')
   expect(bar(0, 0)).toBe('░░░░░░░░░░')
 })

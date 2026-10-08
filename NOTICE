@@ -12,9 +12,28 @@ src/council/synth.ts and src/council/format.ts (two-round Jev scoring, clusterin
 "same as #k", contradiction check, request packing and the 9 question / 14,000 character /
 20 finding calibration).
 
+claude-code-mods (https://github.com/pourya7/claude-code-mods)
+
+PR gate of the harness Claude Code mod (claude-plugin/hooks/pr-detect.ts and claude-plugin/hooks/pr-gate.ts)
+
+Parts of the shell reading (heredoc, quoted text and command substitution handling,
+the command-start pattern, the unquote helper and the leading cd detection) are
+adapted from co-op/hooks/review.ts of pourya7/claude-code-mods, used under the MIT License.
+
+Claims of the harness Claude Code mod (claude-plugin/hooks/claims.ts) adapts the claim
+detection and evidence classification of the anti-cheat mod of pourya7/claude-code-mods,
+used under the MIT License.
+
+pi-agent-for-claude (https://github.com/FazalAAli/pi-agent-for-claude)
+
+Used in: claude-plugin/hooks/external.ts (the harness:codex subagent adapts the
+turn.step, progress tool, hand-back and abort mechanism of its hooks/register.ts).
+
 MIT License
 
 Copyright (c) 2026 apolenkov
+Copyright (c) 2026 Pourya
+Copyright (c) 2026 Fazal Ali
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
