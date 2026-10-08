@@ -124,6 +124,13 @@ const prose = [
 
 
 
+const REDACTED_PROSE = new Map<string, string>([
+  [
+    "apiKey = process.env.KEY ?? 'test-key' falls back to a hardcoded key in production",
+    "apiKey = process.env.KEY ?? [REDACTED] falls back to a hardcoded key in production",
+  ],
+]);
+
 const RESIDUAL = new Set([
   "yaml, short unquoted password",
   "aws secret access key in prose",
@@ -141,9 +148,25 @@ describe("council redactor, credential shapes and prose", () => {
   });
 
   test("no prose sample is changed", () => {
-    const changed = prose.filter((p) => safe(p, 600) !== p);
+    const changed = prose.filter((p) => safe(p, 600) !== (REDACTED_PROSE.get(p) ?? p));
     expect(changed).toEqual([]);
     expect(prose.length).toBe(54);
+    expect(REDACTED_PROSE.size).toBe(1);
+  });
+
+  test("a quoted literal after a fallback operator is redacted when the target is secret-named", () => {
+    expect(redact('const password = process.env.DB_PASSWORD || "Sup3rSecretPw"')).toBe("const password = process.env.DB_PASSWORD || [REDACTED]");
+    expect(redact("token: cfg.token ?? 'abcd-1234-efgh'")).toBe("token: cfg.token ?? [REDACTED]");
+    expect(redact('const name = process.env.NAME || "default-name"')).toBe('const name = process.env.NAME || "default-name"');
+  });
+
+  test("the sk- shape is linear in the length of the run", () => {
+    const started = Date.now();
+    const long = `sk-${"z".repeat(200_000)}`;
+    expect(redact(long)).toBe(long);
+    expect(redact(`${long}1`)).toBe("[REDACTED]");
+    expect(redact(`key sk-proj-${"ab1".repeat(10)}.json`)).toBe(`key sk-proj-${"ab1".repeat(10)}.json`);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   test("redacting twice equals redacting once on the prose and credential sets", () => {

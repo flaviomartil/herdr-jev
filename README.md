@@ -773,6 +773,14 @@ Accepted residuals, which the redactor does not remove:
 - a URL password that contains `@`
 - keys longer than 80 characters
 - letters-and-dots values such as `token=abc.def.ghi`
+- quoted literals passed as call arguments, such as `client.login("admin", "<pw>")`, `os.getenv("X", "<pw>")` and `define('X', '<pw>')`
+- "the password is <pw>" in prose
+- `curl -u user:<pw>` and `sshpass -p <pw>`
+- `Authorization: Token <t>`
+- an Azure SAS `sig=` value
+- values that start with `./` or `~/`
+
+A quoted literal after `||` or `??` is redacted when the assignment target is secret-named, as in `const password = process.env.DB_PASSWORD || "<pw>"`.
 
 ## Testing
 
@@ -802,6 +810,7 @@ bun run smoke
 - Files behind a git filter (LFS, git-crypt and the like) appear in it as stored in the repository, not as checked out: the filter drivers are disabled for the export.
 - It shares nothing with your repository: no alternates, no remote, no copy of your object store, no config, no hooks (`--template=` and `core.hooksPath=/dev/null`), and no path to your repository stored under `.git`. A member that runs `git stash`, `git config`, `git update-ref` or `git log -p --all` inside it changes or reads only the throwaway repository, which holds one commit without your history.
 - Sensitive paths never reach it. Every changed path, tracked or not, is checked against the `SENSITIVE_FILES` patterns in `src/harness/review.ts` plus `.npmrc`, `.netrc`, `.pypirc`, `.envrc`, `.git-credentials`, `.env-*` and `*.tfvars` (case-insensitive). A match is left out of the patch and the prompt, and tracked matches are deleted from the exported tree, so they are also unreadable through git. The skipped paths come back in `CouncilRun.skippedPaths` and are counted in `CouncilRun.note`. Names such as `src/auth/credentials.ts` or `tests/secret.test.ts` are not matched. Untracked files over 5 MB are left out and reported too.
+- Members start with a scrubbed environment: every variable entry that points into the repository, including through a symlink, is dropped or filtered (`PATH` keeps its other entries), and `PWD` is the review directory. Nothing is scrubbed when the repository root contains `HOME`, so a repository rooted at `HOME` leaves `HOME` and `PATH` intact. Scrubbed variable names, never values, appear in the member note.
 - The directory is mode 0700 and the prompt file 0600. It is removed after every member, stale ones are swept at the start of a run, and a signal or exit handler removes the rest. Members are bounded by a timeout, by the parent's signal handlers and, when `timeout` is on PATH, by `timeout -k 1`. If the parent is killed outright, members live until the timeout plus 5 seconds, and the review directories and the lock stay behind until the next run sweeps them (after 2 hours). Without `timeout`, the run note says members are unbounded.
 
 **What it does not guarantee**

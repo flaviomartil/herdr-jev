@@ -54,11 +54,22 @@ function section(title: string, items: CouncilItem[], alsoDetail = false): strin
 
 function memberLine(result: CouncilMemberResult): string {
   const seconds = (result.durationMs / 1000).toFixed(1);
+  const note = result.note ? ` (${safe(result.note, MESSAGE_MAX)})` : "";
   if (result.status === "done") {
-    return `- ${result.member}: done, ${result.findings.length} finding(s), ${seconds}s`;
+    return `- ${result.member}: done, ${result.findings.length} finding(s), ${seconds}s${note}`;
   }
   const reason = result.reason ? `: ${safe(result.reason, MESSAGE_MAX)}` : "";
-  return `- ${result.member}: ${result.status}${reason}`;
+  return `- ${result.member}: ${result.status}${reason}${note}`;
+}
+
+const SKIPPED_PATHS_SHOWN = 10;
+
+function skippedPathsLine(run: CouncilRun): string | undefined {
+  const paths = run.skippedPaths;
+  if (!paths || paths.length === 0) return undefined;
+  const shown = paths.slice(0, SKIPPED_PATHS_SHOWN).map((path) => quotePath(path, LOCATION_MAX)).join(", ");
+  const more = paths.length > SKIPPED_PATHS_SHOWN ? `, and ${paths.length - SKIPPED_PATHS_SHOWN} more` : "";
+  return `Left out of the review (${paths.length}): ${shown}${more}`;
 }
 
 export function formatCouncilSummary(summary: CouncilSummary, run: CouncilRun): string {
@@ -94,6 +105,9 @@ export function formatCouncilSummary(summary: CouncilSummary, run: CouncilRun): 
   }
 
   if (run.ran && run.note) lines.push("", `Run note: ${safe(run.note, MESSAGE_MAX)}`);
+
+  const left = skippedPathsLine(run);
+  if (left) lines.push("", left);
 
   if (run.members.length) {
     lines.push("", "Members", ...run.members.map(memberLine));

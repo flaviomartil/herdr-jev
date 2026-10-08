@@ -2,7 +2,7 @@ import { choice, noul } from "@typesafe-ai/sdk";
 import { routingAnswersStatus } from "../routing/questions.js";
 import { resolveTypeSafeApiKey } from "../triage/client.js";
 import { JevError, ResilientJevClient } from "../triage/jev-client.js";
-import { place, plain, safe, safeBlock, pathText } from "./text.js";
+import { clip, place, plain, safe, safeBlock, pathText } from "./text.js";
 import type { CouncilFinding, CouncilMemberName } from "./types.js";
 import type {
   CouncilItem,
@@ -101,6 +101,17 @@ function sanitize(finding: CouncilFinding): CouncilFinding {
   return out;
 }
 
+const flattened = new WeakMap<CouncilFinding, { title: string; detail: string }>();
+
+function flat(finding: CouncilFinding): { title: string; detail: string } {
+  let entry = flattened.get(finding);
+  if (!entry) {
+    entry = { title: safe(finding.title, 2000), detail: safe(finding.detail, 4000) };
+    flattened.set(finding, entry);
+  }
+  return entry;
+}
+
 function render(
   finding: CouncilFinding,
   limits: SynthLimits,
@@ -110,9 +121,9 @@ function render(
   const out: RenderedFinding = {
     member: finding.member,
     location: place(finding.path, finding.line, cfg.location),
-    title: safe(finding.title, cfg.title),
+    title: clip(flat(finding).title, cfg.title),
   };
-  if (withDetail) out.detail = safe(finding.detail, limits.maxDetailChars);
+  if (withDetail) out.detail = clip(flat(finding).detail, limits.maxDetailChars);
   return out;
 }
 

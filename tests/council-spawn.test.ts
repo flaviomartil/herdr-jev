@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { scrubbedEnv } from "../src/council/env.js";
 import { councilScope } from "../src/council/scope.js";
 import { defaultSpawn, findTimeoutCommand } from "../src/council/spawn.js";
 
@@ -125,6 +126,23 @@ describe("council default spawn", () => {
     } finally {
       process.env.PATH = saved;
     }
+  });
+
+  it("scrubs entries that reach the repository through a symlink, in either direction", () => {
+    const real = join(dir, "real-repo");
+    const link = join(dir, "linked-repo");
+    mkdirSync(join(real, "bin"), { recursive: true });
+    symlinkSync(real, link);
+    const env = { HOME: "/home/nobody", PATH: `/usr/bin:${join(link, "bin")}`, VIA_REAL: join(real, "bin"), OTHER: "/usr/bin", MISSING: join(dir, "missing", "bin") };
+    const throughLink = scrubbedEnv(dir, [real], env);
+    expect(throughLink.env.PATH).toBe("/usr/bin");
+    expect(throughLink.env.VIA_REAL).toBeUndefined();
+    expect([...throughLink.scrubbed].sort()).toEqual(["PATH", "VIA_REAL"]);
+    const throughReal = scrubbedEnv(dir, [link], env);
+    expect(throughReal.env.PATH).toBe("/usr/bin");
+    expect(throughReal.env.VIA_REAL).toBeUndefined();
+    expect(throughReal.env.OTHER).toBe("/usr/bin");
+    expect(throughReal.env.MISSING).toBe(join(dir, "missing", "bin"));
   });
 
   it("leaves HOME and PATH intact when the repository is rooted at HOME", async () => {
