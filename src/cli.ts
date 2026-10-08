@@ -614,10 +614,11 @@ program
       const start = process.cwd();
       const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8" });
       const cwd = top.status === 0 && top.stdout.trim() ? top.stdout.trim() : start;
-      const testCommand = options.testCommandJson ? readCommandJson(options.testCommandJson, "test_command") : detectVerifyCommand(cwd);
+      const detected = options.testCommandJson ? null : detectVerifyCommand(cwd);
+      const testCommand = options.testCommandJson ? readCommandJson(options.testCommandJson, "test_command") : detected;
       if (!testCommand) throw new Error("no_test_command: pass --test-command-json or add a test script to package.json");
       const setupCommand = options.setupCommandJson ? readCommandJson(options.setupCommandJson, "setup_command") : undefined;
-      const report = await runProve({ cwd: start, base: options.base, testCommand, setupCommand, testFiles: options.testFile, timeoutMs: Number(options.timeout), signal: controller.signal });
+      const report = await runProve({ cwd: start, base: options.base, testCommand, setupCommand, testFiles: options.testFile, testAtRoot: detected !== null, timeoutMs: Number(options.timeout), signal: controller.signal });
       console.log(options.json ? JSON.stringify(report, null, 2) : formatProveReport(report));
       if (report.verdict !== "proven") process.exitCode = 1;
     } catch (error) {
