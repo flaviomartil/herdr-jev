@@ -154,7 +154,7 @@ function newFake(): Fake {
     }
     if (script === SCRIPTS.start) {
       fake.started.push(args)
-      return out('4242\n')
+      return out('4242\n7777\n')
     }
     if (script === SCRIPTS.tail) {
       fake.tails += 1
@@ -238,7 +238,7 @@ function harness(over: Partial<Ports> = {}, env: StateEnv = { stateDir: STATE, h
       if (value === null) store.delete(id)
       else store.set(id, JSON.parse(JSON.stringify(value)) as AgentState)
     },
-    liveAgents: async () => [...store.entries()].filter(([, value]) => value.run !== null).map(([id]) => id),
+    sessionAgents: async () => [...store.keys()],
     notify: text => {
       notes.push(text)
     },
@@ -527,8 +527,12 @@ test('a run with changes writes a patch outside the repo, keeps no branch and re
   const path = patch.slice('--output='.length)
   const report = lastBlock(chunks)
   expect(report).toContain(`Patch (mode 0600): ${path}`)
-  expect(report).toContain(`Apply it with: git -C '${REPO}' apply '${path}'`)
-  expect(report).toContain('uncommitted work was not in it')
+  expect(report).toContain(`Check it first with: git -C '${REPO}' apply --stat --check '${path}'`)
+  expect(report).toContain(`Then apply it with: git -C '${REPO}' apply '${path}'`)
+  expect(report.indexOf('--stat --check')).toBeLessThan(report.indexOf('Then apply it with'))
+  expect(report).toContain('computed against HEAD')
+  expect(report).toContain('may add files and symlinks')
+  expect(report).toContain('uncommitted work was not in the copy')
   expect(report).toContain('hello.txt | 1 +')
   expect(report).toContain('— answered by codex, unknown model')
   expect(h.fake.removed).toContain(dir)
@@ -647,6 +651,7 @@ test('a step that outlives the budget ends on the progress tool, touches the lea
   expect(new Set(h.fake.leases)).toEqual(new Set([`${runDirOf(h.fake)}/lease`]))
   const saved = h.store.get('agent-1')
   expect(saved?.run?.pid).toBe('4242')
+  expect(saved?.run?.start).toBe('7777')
   expect(saved?.run?.read).toBeGreaterThanOrEqual(0)
 
   const rest = await h.drain('agent-1')
@@ -815,7 +820,8 @@ test('cleanup on a finished agent stops the run, settles it and tells the user',
   expect(h.store.get('agent-1')?.run).not.toBeNull()
   await cleanupAgent(h.ports, h.ext, 'agent-1')
   expect(h.fake.kills.at(-1)?.[0]).toBe('4242')
-  expect(h.store.get('agent-1')?.run).toBeNull()
+  expect(h.fake.kills.at(-1)?.[2]).toBe('7777')
+  expect(h.store.has('agent-1')).toBe(false)
   expect(h.notes.join('\n')).toContain('Patch (mode 0600):')
   const before = h.fake.kills.length
   await cleanupAgent(h.ports, h.ext, 'agent-1')
@@ -1009,7 +1015,7 @@ test('the spawn hook denies plan mode, nested, teammate and workflow spawns befo
   expect(seen.spawns).toHaveLength(0)
   const ok = await spawnCodex($, 'Do it')
   expect(ok.agentId).toBe('agent-1')
-  expect(seen.saved.has('codex-agent:agent-1')).toBe(true)
+  expect(seen.saved.has('codex-agent:sess-1:agent-1')).toBe(true)
 })
 
 test('a turn.step for any other agent and for the main loop is passed to next untouched', optioned, async ($, on) => {
@@ -1072,19 +1078,95 @@ test('through the engine a run streams across steps, a turn.complete kills a lef
   expect(JSON.stringify(gone)).toContain('internal to harness:codex')
 })
 
-test('session.end kills every live run', optioned, async ($, on) => {
+const SELF = 'codex-agent:sess-1:'
+const OTHER = 'codex-agent:sess-2:'
+
+const liveEntry = (pid: string): AgentState => ({
+  ...freshState('x'),
+  used: true,
+  runs: 1,
+  run: {
+    id: 1,
+    pid,
+    start: '555',
+    events: '/state/codex-runs/o/events',
+    errors: '/state/codex-runs/o/err',
+    lease: '/state/codex-runs/o/lease',
+    read: 0,
+    steps: 0,
+    ended: false,
+    failed: false,
+    aborted: false,
+    pending: null,
+    report: '',
+    problems: [],
+    thread: '',
+    model: '',
+    requested: null,
+    usage: { i: 0, o: 0, cr: 0, cw: 0 },
+    ws: {
+      root: STATE,
+      dir: '/state/codex-runs/o',
+      work: '/state/codex-runs/o/work',
+      tmp: '/state/codex-runs/o/tmp',
+      pristine: '/state/codex-runs/o/pristine.git',
+      repo: REPO,
+      head: HEAD,
+      base: BASE,
+      patch: '/state/codex-patches/o.patch',
+    },
+    note: null,
+  },
+})
+
+test('session.end kills and deletes only this session runs and leaves another session untouched', optioned, async ($, on) => {
   const seen = wire(on)
   const fake = installEngine(on, seen)
   fake.batches = Array.from({ length: 80 }, () => [] as string[])
   await startEngine($)
   const spawned = await spawnCodex($, 'Read note.txt')
   await engineStep($, seen, spawned.agentId ?? '')
+  seen.saved.set(`${OTHER}agent-x`, liveEntry('9999'))
+  seen.saved.set('codex-agent:agent-legacy', liveEntry('9998'))
+  expect(seen.saved.has(`${SELF}${spawned.agentId}`)).toBe(true)
   expect(fake.kills).toHaveLength(0)
   await $.session.end({ reason: 'other', sessionId: 'sess-1', resume: {} } as never)
   await seen.clock.settle()
   expect(fake.kills.map(call => call[0])).toEqual(['4242'])
-  expect((seen.saved.get(`codex-agent:${spawned.agentId}`) as AgentState | undefined)?.run).toBeNull()
+  expect(seen.saved.has(`${SELF}${spawned.agentId}`)).toBe(false)
+  expect((seen.saved.get(`${OTHER}agent-x`) as AgentState).run?.pid).toBe('9999')
+  expect((seen.saved.get('codex-agent:agent-legacy') as AgentState).run?.pid).toBe('9998')
   expect(fake.removed.length).toBeGreaterThan(0)
+})
+
+test('a session with codex disabled never touches any stored run when it ends', async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  await startEngine($)
+  seen.saved.set(`${OTHER}agent-x`, liveEntry('9999'))
+  seen.saved.set(`${SELF}agent-y`, liveEntry('9997'))
+  await $.session.end({ reason: 'other', sessionId: 'sess-1', resume: {} } as never)
+  await seen.clock.settle()
+  expect(fake.kills).toEqual([])
+  expect(fake.git).toEqual([])
+  expect(seen.saved.has(`${OTHER}agent-x`)).toBe(true)
+  expect(seen.saved.has(`${SELF}agent-y`)).toBe(true)
+})
+
+test('entries are keyed by session and removed when the agent turn completes', optioned, async ($, on) => {
+  const seen = wire(on)
+  const fake = installEngine(on, seen)
+  fake.batches = [[...READ]]
+  await startEngine($)
+  const spawned = await spawnCodex($, 'Read note.txt')
+  const agentId = spawned.agentId ?? ''
+  expect([...seen.saved.keys()].filter(key => key.startsWith('codex-agent:'))).toEqual([`${SELF}${agentId}`])
+  const done = await engineStep($, seen, agentId)
+  expect(done.result.stopReason).toBe('end_turn')
+  expect(seen.saved.has(`${SELF}${agentId}`)).toBe(true)
+  await finish($, agentId, 'done')
+  await seen.clock.settle()
+  expect([...seen.saved.keys()].filter(key => key.startsWith('codex-agent:'))).toEqual([])
 })
 
 test('the launcher and kill scripts avoid constructs the system sh rejects', () => {
