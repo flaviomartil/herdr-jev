@@ -8,28 +8,31 @@ const NAME_ONLY =
 const KEYWORD = /^(?:undefined|null|true|false|nil|none|void|nan|include|omit|same-origin)$/i;
 const SHA_CONTEXT =
   /(?:commit|sha|sha1|rev|revision|hash|ref|(?:introduced|regressed|fixed|broken|added|changed|reverted)\s+(?:in|by|at))\W{0,4}$/i;
-const DOTTED_IDENTIFIER = /^[A-Za-z_$][A-Za-z_$]*(?:\.[A-Za-z_$][A-Za-z_$]*)+[!?]?(?:\.[A-Za-z_$]+)*$/;
+const DOTTED_IDENTIFIER = /^[A-Za-z_$][A-Za-z_$]*[0-9]*(?:[!?]?\.[A-Za-z_$][A-Za-z_$]*[0-9]*)+$/;
 const FILE_PATH = /^(?:~|\.{1,2})?\/[A-Za-z0-9_.\/-]+$/;
 
 const PREFIX_SHAPES: RegExp[] = [
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{16,}/g,
   /\bglpat-[A-Za-z0-9_-]{16,}/g,
-  /\bsk-[A-Za-z0-9_-]{16,}/g,
+  /\bsk-(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-]|\.[A-Za-z0-9])/g,
   /\bxox[baprs]-[A-Za-z0-9-]{10,}/g,
   /\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/g,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g,
 ];
 
 const PEM_HEADER = /-----BEGIN [A-Z0-9 ]{2,40}-----/g;
-const URL_USERINFO = /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{1,20}:\/\/[^\s:@/]{1,128}:)[^\s@/]{1,256}@/g;
+const URL_USERINFO = /(?<![A-Za-z0-9+.-])([A-Za-z][A-Za-z0-9+.-]{1,20}:\/\/[^\s:@/]{0,128}:)[^\s@/]{1,256}@/g;
 const BASIC = /\b(Basic[ \t]+)([A-Za-z0-9+/]{8,}={0,2})(?![A-Za-z0-9+/=])/g;
+const AUTH_BEFORE = /authorization\W{0,4}$/i;
 const BEARER = /\b(Bearer[ \t]+)(?=[A-Za-z0-9._~+/-]*\d)[A-Za-z0-9._~+/-]{16,}=*/gi;
 const HEX_RUN = /(?<![A-Za-z0-9])[0-9a-fA-F]{32,}(?![A-Za-z0-9])/g;
 const ALNUM_RUN = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{32,}(?![A-Za-z0-9_-])/g;
-const VALUE = `("[^"]{4,}"|'[^']{4,}'|[^\\s"'\`,;()\\]}]{6,})`;
+const VALUE_CAP = 256;
+const VALUE = `("[^"]{4,}"|'[^']{4,}'|[^\\s"'\`,;()\\]}]{6,${VALUE_CAP}})`;
+const VALUE_REST = /[^\s"'`,;()\]}]*/y;
 const KEYED = new RegExp(
-  `(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,80})(["'\\]]{0,2}[ \\t]*(?:=>|[!=]==?|:=|[:=])[ \\t]*)${VALUE}`,
+  `(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]{1,80})(["'\\]]{0,2}[ \\t]*(?:=>|[!=]==?|:=|[:=])[ \\t]*(?:\\n[ \\t]+)?)${VALUE}`,
   "g",
 );
 const FLAG = new RegExp(`(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]{1,60})([ \\t]+)${VALUE}`, "g");
@@ -112,11 +115,39 @@ function secretValue(separator: string, value: string): boolean {
   if (/^[\d:.,-]+$/.test(inner)) return false;
   if (/^[A-Za-z_$.]+$/.test(inner)) return false;
   if (DOTTED_IDENTIFIER.test(inner)) return false;
-  if (FILE_PATH.test(inner)) return false;
+  if (FILE_PATH.test(inner) && !/[^/]{25,}/.test(inner)) return false;
   if (inner.length >= 16) return true;
   if (!/\d/.test(inner)) return false;
   if (/^[A-Z0-9/_.-]+$/.test(inner)) return false;
   return (/[a-z]/.test(inner) && /[A-Z]/.test(inner)) || /[!@#$%^&*+?~]/.test(inner);
+}
+
+function redactKeyed(text: string, pattern: RegExp, fixedSeparator?: string): string {
+  let out = "";
+  let last = 0;
+  pattern.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const name = match[1] ?? "";
+    const separator = match[2] ?? "";
+    const value = match[3] ?? "";
+    const judged = fixedSeparator ?? separator;
+    const capped = value.length === VALUE_CAP && !value.startsWith('"') && !value.startsWith("'");
+    const secret = NAME.test(name) && (capped ? !/[!=]=|=>/.test(judged) : secretValue(judged, value));
+    if (!secret) {
+      pattern.lastIndex = match.index + name.length;
+      continue;
+    }
+    let end = match.index + match[0].length;
+    if (capped) {
+      VALUE_REST.lastIndex = end;
+      end += VALUE_REST.exec(text)?.[0].length ?? 0;
+    }
+    out += text.slice(last, match.index) + name + separator + REDACTED;
+    last = end;
+    pattern.lastIndex = end;
+  }
+  return out + text.slice(last);
 }
 
 export function redactShapes(text: string): string {
@@ -125,19 +156,17 @@ export function redactShapes(text: string): string {
   return out;
 }
 
-export function redact(text: string): string {
+function redactOnce(text: string): string {
   let out = redactShapes(text);
   out = out.replace(URL_USERINFO, `$1${REDACTED}@`);
-  out = out.replace(BASIC, (match, head: string, token: string) =>
-    /[0-9+/=]/.test(token) || /[A-Z]/.test(token.slice(1)) ? `${head}${REDACTED}` : match,
-  );
+  out = out.replace(BASIC, (match, head: string, token: string, offset: number, whole: string) => {
+    const afterAuth = AUTH_BEFORE.test(whole.slice(Math.max(0, offset - 24), offset));
+    if (afterAuth) return /[0-9+/=]/.test(token) || /[A-Z]/.test(token.slice(1)) ? `${head}${REDACTED}` : match;
+    return token.length >= 16 && /[0-9=]/.test(token) ? `${head}${REDACTED}` : match;
+  });
   out = out.replace(BEARER, `$1${REDACTED}`);
-  out = out.replace(KEYED, (match, name: string, separator: string, value: string) =>
-    NAME.test(name) && secretValue(separator, value) ? `${name}${separator}${REDACTED}` : match,
-  );
-  out = out.replace(FLAG, (match, name: string, gap: string, value: string) =>
-    NAME.test(name) && secretValue(":", value) ? `${name}${gap}${REDACTED}` : match,
-  );
+  out = redactKeyed(out, KEYED);
+  out = redactKeyed(out, FLAG, ":");
   out = out.replace(HEX_RUN, (match, offset: number, whole: string) => {
     if (match.length === 40 && SHA_CONTEXT.test(whole.slice(Math.max(0, offset - 24), offset))) return match;
     return REDACTED;
@@ -147,6 +176,16 @@ export function redact(text: string): string {
     return /[A-Z]/.test(match) && /[a-z]/.test(match) && digits >= 3 ? REDACTED : match;
   });
   return out;
+}
+
+export function redact(text: string): string {
+  let current = text;
+  for (let pass = 0; pass < 3; pass++) {
+    const next = redactOnce(current);
+    if (next === current) break;
+    current = next;
+  }
+  return current;
 }
 
 export function plain(text: unknown, max: number): string {
