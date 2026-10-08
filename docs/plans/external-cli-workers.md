@@ -79,11 +79,11 @@ Todo worker externo roda em um diretório de revisão descartável, nunca na ár
 4. Síntese vai para o advisor e para o pane. O status do gate não muda por causa dela.
 5. Advisor decide: aceitar, devolver ao implementer com os achados, ou descartar o worktree.
 
-Condições para o conselho disparar, copiadas do agent-council:
+Condições para o conselho disparar, copiadas do agent-council. No modo `auto` (opt-in) o gatilho exige ainda triage `moderate` ou `architectural` sobre o resumo da tarefa, e existe diff; `--council` e `council` simples ignoram o hash e o cooldown (pedido explícito):
 
 - pelo menos dois membros executáveis; com menos, não roda e diz o motivo;
-- hash do diff diferente do último revisado;
-- cooldown vencido (padrão 10 min);
+- hash do diff diferente do último revisado (guardado por repositório em `<state dir>/council-auto`; **construído** no modo `auto`);
+- cooldown vencido (padrão 10 min, `--council-cooldown <ms>`, `0` desliga; **construído** no modo `auto`);
 - nenhuma rodada em andamento (single flight por claim atômico);
 - nenhum worker da mesma tarefa ainda rodando.
 
@@ -228,7 +228,7 @@ Depois do protótipo `harness:codex`:
 | --- | --- | --- |
 | 4.0 | profile `claude-opus-5` e papel `consult`; depois a matriz por dificuldade em `harness.yml` | `delegation-plan` para sessão Opus devolve `delegate`; `herdr-jev plan` escolhe candidato por complexidade e respeita quota |
 | 4a | adapters de revisão para codex, kimi e agy; `run.ts`; `parse.ts`; diretório de revisão. **Construída, pendente de validação ao vivo** (`docs/plans/council-live-validation.md`) | cada adapter validado em execução real com um diff conhecido; cancelamento mata os filhos; `bun test` verde |
-| 4b | `synth.ts`, `review --council`, comando `council`; os membros vêm da configuração cross-harness (`HERDR_JEV_CROSS_HARNESS`), não do profile. **Construída, pendente de validação ao vivo** (`docs/plans/council-live-validation.md`); o gatilho automático por triage NÃO foi construído: o conselho roda só com `review --council` ou `herdr-jev council` | tarefa `moderate` dispara o conselho sozinha; `routine` não dispara; status do gate inalterado com e sem conselho |
+| 4b | `synth.ts`, `review --council`, comando `council`; os membros vêm da configuração cross-harness (`HERDR_JEV_CROSS_HARNESS`), não do profile. **Construída, pendente de validação ao vivo** (`docs/plans/council-live-validation.md`); o gatilho automático por triage está construído como opt-in por chamada: `review --council auto --task`, `council --auto --task` e `--council auto` em `route` e `run-resume` (README, seção Review council); sem a opção, o conselho roda só com `review --council` ou `herdr-jev council` | tarefa `moderate` dispara o conselho sozinha; `routine` não dispara; status do gate inalterado com e sem conselho |
 | 4c.0 | protótipo da terceira via só para Codex: tipo de agente `harness:codex`, troca de `turn.step`, worktree, assinatura | uma tarefa pequena implementada pelo Codex aparece como subagente, transmite ao vivo e termina com a assinatura; com hooks desligados o agente recusa em vez de responder como Claude |
 | 4c | `work --client codex` em worktree | tarefa de exemplo implementada pelo Codex, revisada por Opus e conselho sem o Codex, worktree removido |
 | 4d | implementação por kimi e agy | idem 4c para cada um |
