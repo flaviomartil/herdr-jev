@@ -51,6 +51,18 @@
       "title": "Refresh the harness review automatically",
       "description": "Run the herdr-jev review once when every task is done or approved and at least one is approved.",
       "default": false
+    },
+    "codex": {
+      "type": "boolean",
+      "title": "Enable harness:codex",
+      "description": "Registers and offers the harness:codex subagent, which runs the Codex CLI in a throwaway copy of the repository and returns a patch. Off by default: Codex can read anything you can.",
+      "default": false
+    },
+    "codexMaxMinutes": {
+      "type": "number",
+      "title": "harness:codex max minutes",
+      "description": "Longest a Codex run may last before it is killed.",
+      "default": 30
     }
   }
 }
