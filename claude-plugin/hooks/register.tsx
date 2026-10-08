@@ -8,12 +8,13 @@ import type {
   HarnessHumanAsk,
   HarnessPlan,
   HarnessReview,
+  HarnessRoleTable,
   HarnessTask,
   HarnessWorkerRow,
 } from '../types'
 import { registerClaims } from './claims'
-import { autoReview, autoRun, cliConfig, maxWorkers, runModels, runReview, runTriage } from './cli'
-import type { RunPort } from './cli'
+import { autoReview, autoRun, availableModels, cliConfig, maxWorkers, runConsultPlan, runModels, runReview, runTriage } from './cli'
+import type { CliConfig, RunPort } from './cli'
 import {
   agentSpec,
   cleanupAgent,
@@ -59,7 +60,7 @@ import {
 import { registerPrGate } from './pr-gate'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
-import type { Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
+import type { ConsultTarget, Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
 import {
   addCost,
   costText,
@@ -99,9 +100,11 @@ import {
 import type { Receipt, SkillReason } from './scope'
 import {
   createGate,
+  decideConsultTurn,
   decideReviewTurn,
   decideWorkerTurn,
   launchAgent,
+  launchConsult,
   registerKinds,
   resolveLaunch,
 } from './workers'
@@ -616,6 +619,9 @@ async function runTasks($: EngineInterface, ctx: RunContext): Promise<string> {
     const task = findTask(plan, ctx.taskId)
     if (task === undefined) return `Unknown task ${ctx.taskId}.`
 
+    if (task.consult?.state === 'running') {
+      return `${task.id} waits for its read-only consult${task.consult.agentId === undefined ? '' : ` (agent ${task.consult.agentId})`}; read the recommendation with harness_status, then decide.`
+    }
     if (task.role === 'advisor') {
       if (task.state === 'done') return `${task.id} already done.`
       await patchTask($, task.id, current => ({ ...current, state: 'done', endedAt: now }))
@@ -682,6 +688,9 @@ async function onWorkerTurnComplete(
   const plan = await read($, planAtom)
   if (plan === null) return idle
 
+  const consulted = plan.tasks.find(one => one.consult?.state === 'running' && one.consult.agentId === turn.agentId)
+  if (consulted !== undefined) return finishConsult($, consulted, turn)
+
   const task = plan.tasks.find(one => one.agentId === turn.agentId || one.reviewAgentId === turn.agentId)
   if (task === undefined) return idle
 
@@ -726,6 +735,94 @@ async function onWorkerTurnComplete(
     allVerified: after !== null && isAllVerified(after),
     settled: SETTLING.includes(move.state),
   }
+}
+
+async function finishConsult(
+  $: EngineInterface,
+  task: HarnessTask,
+  turn: { agentId: string; answer: string; reason: string },
+): Promise<TurnOutcome> {
+  const move = decideConsultTurn(turn)
+  const moved = await claimTask(
+    $,
+    task.id,
+    current => current.consult?.state === 'running' && current.consult.agentId === turn.agentId,
+    current => (current.consult === undefined ? current : { ...current, consult: { ...current.consult, ...move } }),
+  )
+  await dropWorker($, turn.agentId)
+  if (!moved) return { toast: null, allVerified: false, settled: false }
+  const label = fit(task.title, 40)
+  return {
+    toast: move.state === 'done'
+      ? `harness: consult ready for "${label}"; read it with harness_status and decide`
+      : `harness: consult for "${label}" failed (${move.note ?? 'unknown'})`,
+    allVerified: false,
+    settled: false,
+  }
+}
+
+async function resolveConsults(
+  run: RunPort,
+  config: CliConfig,
+  tasks: readonly HarnessTask[],
+  triages: readonly (TriageResult | null)[],
+  roles: HarnessRoleTable | null,
+  sessionModel: string,
+): Promise<{ targets: Map<string, ConsultTarget>; failures: string[] }> {
+  const targets = new Map<string, ConsultTarget>()
+  const failures: string[] = []
+  if (sessionModel.length === 0) return { targets, failures }
+  const available = availableModels(sessionModel, roles)
+  const complexities = [...new Set(triages.flatMap(triage => (triage === null ? [] : [triage.complexity])))]
+  const answers = new Map(
+    await Promise.all(
+      complexities.map(async complexity => {
+        const answer = await runConsultPlan(run, config, { model: sessionModel, complexity, availableModels: available })
+        if (!answer.ok) failures.push(answer.reason)
+        return [complexity, answer.ok ? answer.value : null] as const
+      }),
+    ),
+  )
+  tasks.forEach((task, index) => {
+    const complexity = triages[index]?.complexity
+    const target = complexity === undefined ? null : (answers.get(complexity) ?? null)
+    if (target !== null) targets.set(task.id, target)
+  })
+  return { targets, failures }
+}
+
+async function startConsults($: EngineInterface, gate: Gate, cwd: string): Promise<string[]> {
+  const plan = await read($, planAtom)
+  if (plan === null) return []
+  const lines: string[] = []
+  for (const task of plan.tasks) {
+    const consult = task.consult
+    if (consult === undefined || consult.state !== 'running' || consult.agentId !== undefined) continue
+    const outcome = await launchConsult(launchPorts($), gate, plan, task, consult, cwd)
+    const now = await $.clock.now()
+    if (!outcome.ok) {
+      await patchTask($, task.id, current =>
+        current.consult === undefined ? current : { ...current, consult: { ...current.consult, state: 'failed', note: `consult not started: ${outcome.reason}` } },
+      )
+      lines.push(`${task.id} consult not started: ${outcome.reason}.`)
+      continue
+    }
+    await patchTask($, task.id, current =>
+      current.consult === undefined ? current : { ...current, consult: { ...current.consult, agentId: outcome.agentId } },
+    )
+    await setWorker($, {
+      taskId: task.id,
+      agentId: outcome.agentId,
+      role: 'advisor',
+      writes: false,
+      model: consult.model,
+      lastTool: null,
+      toolCount: 0,
+      startedAt: now,
+    })
+    lines.push(`${task.id} read-only consult started on ${consult.model} as agent ${outcome.agentId}; it does not start until you decide with harness_run.`)
+  }
+  return lines
 }
 
 async function noteToolCall($: EngineInterface, agentId: string, summary: string): Promise<void> {
@@ -779,7 +876,19 @@ async function reconcile($: EngineInterface, cwd: string): Promise<void> {
   const now = await $.clock.now()
   const added: HarnessHumanAsk[] = []
 
-  const tasks: HarnessTask[] = plan.tasks.map(task => {
+  const tasks: HarnessTask[] = plan.tasks.map(original => {
+    const task = original.consult?.state === 'running' && !active(original.consult.agentId)
+      ? {
+          ...original,
+          consult: {
+            ...original.consult,
+            state: 'failed' as const,
+            note: completed(original.consult.agentId)
+              ? 'consult finished while the mod was not listening; its recommendation was not captured'
+              : 'consult agent is gone',
+          },
+        }
+      : original
     if (task.state === 'running' && !active(task.agentId)) {
       if (completed(task.agentId)) {
         const note = 'worker finished while the mod was not listening; check its result'
@@ -962,7 +1071,16 @@ async function createPlan(
   )
 
   const built = buildPlan(input.objective, input.tasks, triages, models.ok ? models.value : null, model)
-  const plan = { ...built, at: await $.clock.now() }
+  const consults = await resolveConsults(runPort($), config, built.tasks, triages, models.ok ? models.value : null, model)
+  for (const reason of consults.failures) $.ui.log(`harness: consult lookup failed: ${reason}`, { to: 'debug' })
+  const plan: HarnessPlan = {
+    ...built,
+    tasks: built.tasks.map(task => {
+      const target = consults.targets.get(task.id)
+      return target === undefined ? task : { ...task, consult: { ...target, state: 'running' as const } }
+    }),
+    at: await $.clock.now(),
+  }
   const missing = missingRoles(plan)
   if (models.ok && missing.length > 0) {
     failures.push(`herdr-jev models list has no model for ${missing.join(', ')}; those roles are not spawned`)
@@ -981,7 +1099,10 @@ async function createPlan(
   await save($, cwd)
   void refreshScope($, options, runtime, cwd, input.objective)
 
-  const head = `${summarize(plan)}${note === null ? '' : `\nHerdr-Jev notes (plan marked stale): ${note}`}`
+  const consulting = await startConsults($, gate, cwd)
+  if (consulting.length > 0) await save($, cwd)
+  const summary = summarize((await read($, planAtom)) ?? plan)
+  const head = `${summary}${note === null ? '' : `\nHerdr-Jev notes (plan marked stale): ${note}`}${consulting.length === 0 ? '' : `\nConsult:\n${consulting.join('\n')}`}`
   if (!autoRun(options)) return head
 
   const started = await runTasks($, { cwd, maxWorkers: maxWorkers(options), gate })
@@ -1344,7 +1465,7 @@ export const register: Register = (on, options) => {
       $.tool.register({
         name: 'harness_plan',
         description:
-          'Plan an objective as bounded tasks. Herdr-Jev assigns each task a role and the models come from herdr-jev models list (reader or mechanic for small work, implementer for code, advisor for architectural work); implementer and mechanic tasks get an independent review by the reviewer from Herdr-Jev. Returns the plan with stable task ids. Main session only.',
+          'Plan an objective as bounded tasks. Herdr-Jev assigns each task a role and the models come from herdr-jev models list (reader or mechanic for small work, implementer for code, advisor for architectural work); implementer and mechanic tasks get an independent review by the reviewer from Herdr-Jev. When the AI Harness delegation plan returns a consult stage for the complexity of a task, a read-only consultant runs first and that task waits for you: read its recommendation with harness_status, then decide and start it with harness_run taskId. Returns the plan with stable task ids. Main session only.',
         inputSchema: PLAN_SCHEMA,
       }),
     )
@@ -1352,7 +1473,7 @@ export const register: Register = (on, options) => {
       $.tool.register({
         name: 'harness_run',
         description:
-          'Start harness workers as background subagents. With taskId, run that task (an advisor task is marked done instead). Without it, run every proposed task whose dependencies are done, up to the worker limit. Safe to call twice: a running task returns its existing agent id. Main session only.',
+          'Start harness workers as background subagents. With taskId, run that task (an advisor task is marked done instead). Without it, run every proposed task whose dependencies are done and that has no consult, up to the worker limit. Safe to call twice: a running task returns its existing agent id. Main session only.',
         inputSchema: RUN_SCHEMA,
       }),
     )
@@ -1392,6 +1513,9 @@ export const register: Register = (on, options) => {
     next.called ? next(e) : { isOffered: false },
   )
   on('agent.offer', { agent: 'harness:mechanic' }, () => ({ isOffered: false })).catch(($, e, next) =>
+    next.called ? next(e) : { isOffered: false },
+  )
+  on('agent.offer', { agent: 'harness:consultant' }, () => ({ isOffered: false })).catch(($, e, next) =>
     next.called ? next(e) : { isOffered: false },
   )
 

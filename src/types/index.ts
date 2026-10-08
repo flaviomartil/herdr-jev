@@ -37,6 +37,7 @@ export interface PipelinePlan {
   autoImprovement: boolean;
   delegation?: import("../harness/bridge.js").HarnessDecision;
   executionStages?: StageSpec[];
+  consultStage?: StageSpec;
   routing?: { complexity: TaskComplexity; effort: ReasoningEffort; availableClients: string[] };
 }
 

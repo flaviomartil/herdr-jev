@@ -61,6 +61,13 @@ export function planExecution(
         description: `AI Harness profile: ${delegation.profile.id}` };
     }) : [];
 
+  const consult = delegation.mode === "delegate" ? delegation.consult : undefined;
+  const consultClient = delegation.mode === "delegate" ? consult?.client ?? delegation.profile.client : undefined;
+  const consultStage: StageSpec | undefined = consult && consultClient ? { role: "advisor", client: consultClient, model: consult.model,
+    ...(consult.cliModel ? { cliModel: consult.cliModel } : {}), effort: consult.effort ?? "standard",
+    extraFlags: consult.effort && consultClient === "codex" ? ["-c", `model_reasoning_effort="${consult.effort}"`] : [],
+    description: "AI Harness consult: read-only recommendation before the implementer; the advisor decides" } : undefined;
+
   return {
     task,
     client,
@@ -70,6 +77,7 @@ export function planExecution(
     autoImprovement: true,
     delegation,
     executionStages,
+    ...(consultStage ? { consultStage } : {}),
     routing,
   };
 }
