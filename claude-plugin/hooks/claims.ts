@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { On } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
 import type { ClaimCheck, ClaimEntry, ClaimKind, ClaimWarning } from '../types'
 
@@ -8,6 +8,7 @@ const warningsAtom = atom({ plugin: 'harness', key: 'claimWarnings' } as const, 
 
 export const LOG_LIMIT = 200
 export const SHOWN_WARNINGS = 3
+export const COMMAND_LIMIT = 80
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'NotebookEdit'])
 
@@ -18,17 +19,17 @@ const LINKS =
   '(?:\\s+(?:all|now|still|fully|are|is|were|was|todos?|todas?|agora|ainda|est[aá]|est[aã]o|ficou|ficaram|foi|foram|j[aá]|tamb[eé]m))*'
 const PASSED =
   '(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|clean(?:ly)?|ok|passa(?:m|ndo)?|passou|passaram|verdes?|limp[oa]s?|sucesso|aprovad[oa]s?|funcion(?:a|am|ou|aram))'
-const TAIL = `${LINKS}\\s+${PASSED}${RIGHT}`
+const ADVERB = '(?:\\s+(?:now|again|too|locally|agora|novamente|localmente))?'
+const STOP_MARKS = '[.,;!)\\]*_✅✔]'
+const JOINERS = '\\s+(?:and|but|e|mas)(?![\\p{L}\\p{N}_])'
+const END = `(?=\\s*(?:[:]|${STOP_MARKS}|$)|${JOINERS})`
+const END_V = `(?=\\s*(?:${STOP_MARKS}|$)|${JOINERS})`
+const TAIL = `${LINKS}\\s+${PASSED}${ADVERB}${END}`
 
 const pattern = (source: string) => new RegExp(source, 'iu')
 
 const CLAIM_PATTERNS: readonly [ClaimKind, RegExp][] = [
-  [
-    'ci',
-    pattern(
-      `${LEFT}(?:(?:the |o |a )?CI|(?:all |todos os |os )?(?<!type[- ])checks|(?:the |o |a )?pipeline)${TAIL}`,
-    ),
-  ],
+  ['ci', pattern(`${LEFT}(?:(?:the |o |a )?CI|(?:the |o |a )?pipeline)${TAIL}`)],
   [
     'lint',
     pattern(
@@ -42,53 +43,56 @@ const CLAIM_PATTERNS: readonly [ClaimKind, RegExp][] = [
       `${LEFT}(?:(?:the|all|os|as|todos|todas)\\s+)*(?:\\d+\\s+)?(?:(?:unit|integration|e2e|new|unit[aá]rios?|novos?)\\s+)?(?:tests?|specs?|test suite|suite|testes?|su[ií]tes?)(?:\\s+(?:unit[aá]rios?|de integra[cç][aã]o|e2e|novos?))?${TAIL}`,
     ),
   ],
+  ['verified', pattern(`${LEFT}(?:(?:all|todos os|os)\\s+)?(?<!type[- ])checks${TAIL}`)],
   [
     'verified',
     pattern(
-      `${LEFT}(?:verified|confirmed)(?:\\s+(?:that|it|this|the fix|the change))*\\s+(?:works?|is working|fixed|fixes it)${RIGHT}`,
-    ),
-  ],
-  [
-    'verified',
-    pattern(`${LEFT}(?:i|we)(?:'ve|\\s+have)?\\s+(?:(?:now|also|fully|successfully|already)\\s+)*verified${RIGHT}`),
-  ],
-  [
-    'verified',
-    pattern(
-      `(?:^|${LEFT}(?:is|are|was|were|been|now|fully)\\s+)(?:(?:now|fully|all|successfully)\\s+)*verified${RIGHT}(?!\\s+(?:by|with|against|via|using|from|email|account|domain|users?|badge|address|status)${RIGHT})`,
+      `${LEFT}(?:verified|confirmed)(?:\\s+(?:that|it|this|the fix|the change))*\\s+(?:works?|is working|fixed|fixes it)${END_V}`,
     ),
   ],
   [
     'verified',
     pattern(
-      `${LEFT}(?:verifiquei|confirmei)(?:\\s+que)?(?:\\s+(?:isso|tudo|ele|ela|a\\s+corre[cç][aã]o|o\\s+(?:fix|conserto)|a\\s+mudan[cç]a))*\\s+(?:funciona|est[aá]\\s+funcionando|corrigid[oa]|passa)${RIGHT}`,
-    ),
-  ],
-  ['verified', pattern(`${LEFT}verifiquei\\s+tudo${RIGHT}`)],
-  [
-    'verified',
-    pattern(
-      `(?:^|${LEFT}(?:est[aá]|ficou|foi|tudo|j[aá]|totalmente|devidamente|agora)\\s+)(?:(?:j[aá]|totalmente|devidamente|agora)\\s+)*verificad[oa]s?${RIGHT}`,
+      `${LEFT}(?:i|we)(?:'ve|\\s+have)?\\s+(?:(?:now|also|fully|successfully|already)\\s+)*verified(?:\\s+(?:it|this|everything|the fix|the change|the result))?${END_V}`,
     ),
   ],
   [
     'verified',
     pattern(
-      `(?:^|${LEFT}(?:e|mas|ent[aã]o|tudo|isso|ele|ela|todos|todas)\\s+)(?:(?:isso|tudo)\\s+)?(?:passou|passaram)${RIGHT}(?!\\s+(?:d[oae]s?|n[oa]s?|pel[oa]s?|por|para|a|um|uma|de)${RIGHT})`,
+      `(?:^|${LEFT}(?:is|are|was|were|been|now|fully)\\s+)(?:(?:now|fully|all|successfully)\\s+)*verified${END_V}`,
     ),
   ],
   [
     'verified',
-    pattern(`${LEFT}(?:everything${LINKS}\\s+(?:green|pass(?:es|ed|ing)?|ok)|all green)${RIGHT}`),
+    pattern(
+      `${LEFT}(?:verifiquei|confirmei)(?:\\s+que)?(?:\\s+(?:isso|tudo|ele|ela|a\\s+corre[cç][aã]o|o\\s+(?:fix|conserto)|a\\s+mudan[cç]a))*\\s+(?:funciona|est[aá]\\s+funcionando|corrigid[oa]|passa)${END_V}`,
+    ),
   ],
+  ['verified', pattern(`${LEFT}verifiquei\\s+tudo${END_V}`)],
+  [
+    'verified',
+    pattern(
+      `(?:^|${LEFT}(?:est[aá]|ficou|foi|tudo|j[aá]|totalmente|devidamente|agora)\\s+)(?:(?:j[aá]|totalmente|devidamente|agora)\\s+)*verificad[oa]s?${END_V}`,
+    ),
+  ],
+  ['verified', pattern(`${LEFT}(?:tudo|todos|todas)\\s+(?:j[aá]\\s+)?(?:passou|passaram)${END_V}`)],
+  ['verified', pattern(`${LEFT}(?:everything${LINKS}\\s+(?:green|pass(?:es|ed|ing)?|ok)|all green)${END_V}`)],
 ]
 
 const CONDITION = pattern(
-  `${LEFT}(?:unless|until|once|if|whether|make sure|ensure|assuming|se|quando|at[eé]|assim que|caso|desde que|garanta|garantir|certifique|certificar)${RIGHT}`,
+  `${LEFT}(?:unless|until|once|if|whether|make sure|ensure|assuming|before|so that|to make|to get|confirm|check that|verify that|earlier|previously|se|quando|at[eé]|assim que|caso|desde que|antes|para que|garanta|garantir|certifique|certificar|confirme|verifique|anteriormente|mais cedo)${RIGHT}`,
 )
 
 const NEGATION = pattern(
   `${LEFT}(?:not|no|never|none|nor|without|fail(?:s|ed|ing)?|yet|should|shall|will|would|could|might|may|must|expect(?:ed)?|hope|probably|likely|need(?:s|ed)?|cannot|can be|pending|n[aã]o|nunca|nenhum[a]?|nem|sem|falh(?:a|ou|aram|ando)|deve(?:m|ria|riam)?|poder[aá]|talvez|provavelmente|espero|precis(?:a|am|o)|falta(?:m)?|pendente)${RIGHT}|n't${RIGHT}`,
+)
+
+const REPORTED = pattern(
+  `${LEFT}(?:says?|said|reports?|reported|according to|disse|diz|relatou|segundo)${RIGHT}`,
+)
+
+const LABELLED = pattern(
+  '^(?:[-*]\\s*\\[ \\]|\\||(?:acceptance criteria|criteria|dod|definition of done|goal|todo|next|crit[eé]rios?(?: de aceite)?|objetivo|pr[oó]ximos? passos?)(?![\\p{L}\\p{N}_]))',
 )
 
 const NEAR_WORDS = 4
@@ -120,7 +124,7 @@ const sentencesOf = (answer: string) =>
   withoutQuoted(answer)
     .split(/(?<=[.!?])\s+|\n+/)
     .map(sentence => sentence.trim())
-    .filter(sentence => sentence.length > 0 && !sentence.endsWith('?'))
+    .filter(sentence => sentence.length > 0 && !sentence.endsWith('?') && !LABELLED.test(sentence))
 
 export type Claim = { kind: ClaimKind; quote: string }
 
@@ -131,6 +135,7 @@ export function detectClaims(answer: string): Claim[] {
       if (claims.has(kind)) continue
       const match = regex.exec(sentence)
       if (match === null) continue
+      if (REPORTED.test(sentence.slice(0, match.index))) continue
       const clause = clauseBefore(sentence, match.index)
       if (CONDITION.test(`${clause} ${match[0]}`)) continue
       if (NEGATION.test(`${nearBefore(clause)} ${match[0]}`)) continue
@@ -140,58 +145,230 @@ export function detectClaims(answer: string): Claim[] {
   return [...claims.values()]
 }
 
-const CHECK_PATTERNS: readonly [ClaimCheck, RegExp][] = [
-  [
-    'test',
-    /\b(pytest|jest|vitest|mocha|go test|cargo test|deno test|dotnet test|php artisan test|claude plugin test|(npm|pnpm|yarn|bun)( run)? test|just test|make test|rspec|phpunit|mvn( \S+)* test|gradlew? test)\b/,
-  ],
-  ['lint', /\b(eslint|ruff|tsc|mypy|pyright|lint|typecheck|type-check|biome|clippy|go vet|cargo check|phpstan|psalm|flake8)\b/],
-  [
-    'build',
-    /\b((npm|pnpm|yarn|bun)( run)? build|cargo build|go build|make build|gradle( \S+)* build|mvn( \S+)* (package|install)|docker build|vite build|next build)\b/,
-  ],
-  ['ci', /\b(gh pr checks|gh run (view|watch|list)|gh pr view)\b|check-runs|statusCheckRollup/],
-  ['push', /\bgit( -C \S+)? push\b/],
-]
+const SEPARATOR = /(\|\||&&|\|&|\||;|\n)/
 
 const stripQuoted = (command: string) =>
   command.replace(/'[^']*'|"[^"]*"/g, '""').replace(/(^|\s)#.*$/gm, '$1')
 
-const READS_ONLY = /^\s*(grep|rg|ag|echo|printf|cat|less|head|tail|which|type|man)\b/
+const PREFIX = /^(?:rtk(?:\s+-u)?|sudo|time|env|nice|\w+=\S*)\s+/
+
+type Segment = { program: string; args: string[]; text: string }
+
+function segmentOf(raw: string): Segment {
+  let text = raw.trim()
+  for (let round = 0; round < 8; round += 1) {
+    const next = text.replace(PREFIX, '')
+    if (next === text) break
+    text = next
+  }
+  const tokens = text.split(/\s+/).filter(token => token.length > 0)
+  const program = (tokens[0] ?? '').replace(/^.*\//, '')
+  return { program, args: tokens.slice(1), text }
+}
+
+function segmentsOf(command: string): Segment[] {
+  return stripQuoted(command)
+    .split(SEPARATOR)
+    .filter((_, index) => index % 2 === 0)
+    .map(segmentOf)
+    .filter(segment => segment.program.length > 0)
+}
+
+const NON_RUNNERS = new Set([
+  'grep', 'rg', 'ag', 'echo', 'printf', 'cat', 'less', 'head', 'tail', 'which', 'type', 'man', 'ls', 'command',
+  'find', 'sed', 'awk', 'hash', 'whereis', 'stat', 'file', 'wc', 'diff', 'cut', 'sort', 'tr', 'pwd', 'cd',
+  'pip', 'pip3', 'pipx', 'test', '[', '[[',
+])
 
 const INSTALLS =
-  /^\s*(sudo\s+)?((npm|pnpm|yarn|bun)\s+(install|i|add|ci|remove|rm|uninstall|update|upgrade)\b|(pip3?|pipx|uv\s+pip|uv\s+tool|python3?\s+-m\s+pip)\s+install\b|uv\s+(add|remove|sync)\b|poetry\s+(add|install|remove)\b|cargo\s+(install|add)\b|go\s+(install|get)\b|(brew|gem|apt|apt-get|dnf|yum|apk)\s+(install|add)\b)/
+  /^(?:(?:pip3?|pipx|uv\s+pip|uv\s+tool|python3?\s+-m\s+pip)\s+install\b|uv\s+(?:add|remove|sync)\b|poetry\s+(?:add|install|remove)\b|cargo\s+(?:install|add)\b|go\s+(?:install|get)\b|(?:brew|gem|apt|apt-get|dnf|yum|apk)\s+(?:install|add)\b|composer\s+(?:install|require|update|remove)\b)/
 
-const SEPARATOR = /(\|\||&&|\|&|\||;|\n)/
+const PACKAGE_MANAGERS = new Set(['npm', 'pnpm', 'yarn', 'bun'])
+
+const PM_NON_RUN = new Set([
+  'install', 'i', 'add', 'ci', 'remove', 'rm', 'uninstall', 'update', 'upgrade', 'publish', 'pack', 'link', 'unlink',
+  'view', 'info', 'why', 'ls', 'list', 'outdated', 'audit', 'init', 'create',
+])
+
+const SCRIPT_KINDS: readonly [RegExp, ClaimCheck][] = [
+  [/^(?:test|tests|smoke|e2e|spec|test:[\w:.-]+)$/, 'test'],
+  [/^(?:typecheck|type-check|tsc|lint|check|(?:lint|typecheck|check):[\w:.-]+)$/, 'lint'],
+  [/^build(?::[\w:.-]+)?$/, 'build'],
+]
+
+function scriptKind(args: readonly string[]): ClaimCheck | null {
+  for (const arg of args) {
+    if (arg.startsWith('-')) continue
+    if (PM_NON_RUN.has(arg)) return null
+    const found = SCRIPT_KINDS.find(([regex]) => regex.test(arg))
+    if (found !== undefined) return found[1]
+  }
+  return null
+}
+
+const TEST_RUNNERS =
+  /\b(?:pytest|jest|vitest|mocha|phpunit|rspec|playwright test|go test|cargo (?:test|nextest)|deno test|dotnet test|php artisan test|node --test|python3? -m (?:unittest|pytest)|claude plugin test|composer (?:run(?:-script)? )?test|make (?:test|check)|just test|mvn(?: \S+)* test|gradlew?(?: \S+)* test|ai-harness review-verify|herdr-jev (?:review|prove))\b|(?:^|[\s/])pest\b/
+
+const LINT_RUNNERS =
+  /\b(?:eslint|ruff(?! format)|tsc|mypy|pyright|biome|clippy|go vet|cargo check|phpstan|psalm|flake8|golangci-lint|astro check|php -l|claude plugin validate|prettier --check)(?![\w-])/
+
+const BUILD_RUNNERS =
+  /\b(?:cargo build|go build|make build|gradlew?(?: \S+)* build|mvn(?: \S+)* (?:package|install)|docker(?: compose)? build|vite build|next build|astro build)\b/
+
+const CI_READS =
+  /\b(?:gh pr checks|gh run (?:view|watch|list)|gh pr view|az pipelines|az repos pr show|az devops)\b|check-runs|statusCheckRollup/
+
+const CHECK_ORDER: readonly ClaimCheck[] = ['test', 'lint', 'build', 'ci', 'push']
+
+function checksOf(segment: Segment): ClaimCheck[] {
+  const { program, args, text } = segment
+  if (NON_RUNNERS.has(program)) return []
+  if (program === 'git') {
+    const sub = gitCommand(args)
+    return sub !== null && sub.name === 'push' && !sub.flags.some(flag => flag === '--dry-run' || /^-[a-z]*n[a-z]*$/.test(flag))
+      ? ['push']
+      : []
+  }
+  if (INSTALLS.test(text) || /\s--(?:version|help)(?:\s|$)/.test(text)) return []
+  const found = new Set<ClaimCheck>()
+  if (PACKAGE_MANAGERS.has(program)) {
+    if (args.some(arg => PM_NON_RUN.has(arg))) return []
+    const kind = scriptKind(args)
+    if (kind !== null) found.add(kind)
+  }
+  if (TEST_RUNNERS.test(text)) found.add('test')
+  if (LINT_RUNNERS.test(text)) found.add('lint')
+  if (BUILD_RUNNERS.test(text)) found.add('build')
+  if (CI_READS.test(text)) found.add('ci')
+  return CHECK_ORDER.filter(check => found.has(check))
+}
 
 export function classifyCommand(command: string): ClaimCheck[] {
   const found = new Set<ClaimCheck>()
-  for (const [index, segment] of stripQuoted(command).split(SEPARATOR).entries()) {
-    if (index % 2 === 1 || READS_ONLY.test(segment) || INSTALLS.test(segment)) continue
-    for (const [check, regex] of CHECK_PATTERNS) if (regex.test(segment)) found.add(check)
-  }
-  return CHECK_PATTERNS.map(([check]) => check).filter(check => found.has(check))
+  for (const segment of segmentsOf(command)) for (const check of checksOf(segment)) found.add(check)
+  return CHECK_ORDER.filter(check => found.has(check))
 }
+
+function gitCommand(args: readonly string[]): { name: string; rest: string[]; flags: string[] } | null {
+  let index = 0
+  while (index < args.length) {
+    const arg = args[index] ?? ''
+    if (['-C', '-c', '--git-dir', '--work-tree'].includes(arg)) {
+      index += 2
+      continue
+    }
+    if (arg.startsWith('-')) {
+      index += 1
+      continue
+    }
+    const rest = args.slice(index + 1)
+    return { name: arg, rest, flags: rest.filter(one => one.startsWith('-')) }
+  }
+  return null
+}
+
+const OFF_TREE = /^(?:\/tmp|\/var\/tmp|\/dev)(?:\/|$)/
+const isOffTree = (path: string) => OFF_TREE.test(path)
 
 const REDIRECT = /(?<![=\-<>])(?:\d+|&)?>>?\s*(&?)([^\s;&|<>()]*)/g
-const WRITERS =
-  /(?:^|[\s;&|(])(?:tee|mv|cp|rm|touch|truncate|ln|dd|patch)\s|\b(?:sed|perl)\b[^|;&]*\s-[a-zA-Z]*i\b|\bgit\s+(?:apply|am|checkout|switch|restore|reset|stash|merge|rebase|cherry-pick|revert|pull|clean|mv|rm)\b|--(?:fix|write)\b|\bgofmt\s+-w\b|\bcargo\s+fmt\b|\bruff\s+format\b/
+const IN_PLACE = /^-[a-zA-Z]*i[a-zA-Z]*$|^--in-place(?:=.*)?$/
 
-export function isMutatingCommand(command: string): boolean {
-  const text = stripQuoted(command)
-  if (WRITERS.test(text)) return true
-  for (const match of text.matchAll(REDIRECT)) {
-    const target = match[2] ?? ''
-    if (match[1] === '&' || target === '' || target.startsWith('/dev/')) continue
-    return true
+function gitMutates(args: readonly string[]): boolean {
+  const git = gitCommand(args)
+  if (git === null) return false
+  const { name, rest, flags } = git
+  const has = (...names: string[]) => flags.some(flag => names.includes(flag))
+  switch (name) {
+    case 'checkout':
+      return !has('-b', '-B', '--orphan')
+    case 'switch':
+      return !has('-c', '-C', '--create', '--force-create')
+    case 'restore':
+      return !has('--staged') || has('--worktree', '-W')
+    case 'reset':
+      return has('--hard', '--merge', '--keep')
+    case 'merge':
+    case 'rebase':
+    case 'cherry-pick':
+    case 'revert':
+    case 'pull':
+    case 'am':
+    case 'mv':
+      return true
+    case 'apply':
+      return !has('--check', '--stat', '--numstat', '--summary')
+    case 'rm':
+      return !has('--cached')
+    case 'clean':
+      return !(has('--dry-run') || flags.some(flag => /^-[a-z]*n[a-z]*$/.test(flag)))
+    case 'stash': {
+      const verb = rest.find(one => !one.startsWith('-'))
+      return verb === undefined || ['push', 'save', 'pop', 'apply'].includes(verb)
+    }
+    default:
+      return false
   }
-  return false
 }
 
-export function appendEntry(
-  log: readonly ClaimEntry[],
-  entry: { type: 'edit'; path: string } | { type: 'run'; checks: ClaimCheck[]; command: string; isOk: boolean; isInterrupted: boolean },
-): ClaimEntry[] {
+function segmentMutates(segment: Segment): boolean {
+  const { program, args, text } = segment
+  if (program === 'test' || program === '[' || program === '[[') return false
+  for (const match of text.matchAll(REDIRECT)) {
+    const target = match[2] ?? ''
+    if (match[1] === '&' || target === '' || isOffTree(target)) continue
+    return true
+  }
+  const paths = args.filter(arg => !arg.startsWith('-') && !/^[<>&\d]/.test(arg))
+  switch (program) {
+    case 'xargs': {
+      const start = args.findIndex(arg => !arg.startsWith('-'))
+      return start >= 0 && segmentMutates(segmentOf(args.slice(start).join(' ')))
+    }
+    case 'git':
+      return gitMutates(args)
+    case 'patch':
+      return true
+    case 'tee':
+    case 'rm':
+    case 'rmdir':
+    case 'unlink':
+    case 'touch':
+    case 'truncate':
+      return paths.some(path => !isOffTree(path))
+    case 'cp':
+    case 'mv':
+    case 'install':
+    case 'ln':
+    case 'rsync': {
+      const target = paths[paths.length - 1]
+      return target !== undefined && paths.length > 1 && !isOffTree(target)
+    }
+    case 'dd':
+      return args.some(arg => arg.startsWith('of=') && !isOffTree(arg.slice(3)))
+    case 'sed':
+    case 'perl':
+      return args.some(arg => IN_PLACE.test(arg))
+    default:
+      break
+  }
+  return (
+    /--(?:fix|write)(?![\w-])/.test(text) ||
+    /\bgofmt\s+-w\b/.test(text) ||
+    (/\bcargo\s+fmt\b/.test(text) && !/--check/.test(text)) ||
+    (/\bruff\s+format\b/.test(text) && !/--(?:check|diff)/.test(text))
+  )
+}
+
+export function isMutatingCommand(command: string, isReadOnly = false): boolean {
+  if (isReadOnly) return false
+  return segmentsOf(command).some(segmentMutates)
+}
+
+type EntryInput =
+  | { type: 'edit'; path: string; agentId?: string }
+  | { type: 'run'; checks: ClaimCheck[]; command: string; isOk: boolean; isInterrupted: boolean; agentId?: string }
+
+export function appendEntry(log: readonly ClaimEntry[], entry: EntryInput): ClaimEntry[] {
   const seq = (log[log.length - 1]?.seq ?? 0) + 1
   return [...log, { ...entry, seq } as ClaimEntry].slice(-LOG_LIMIT)
 }
@@ -216,9 +393,13 @@ export function unverifiedClaims(claims: readonly Claim[], log: readonly ClaimEn
     const { checks, noun } = EVIDENCE[claim.kind]
     const isCi = claim.kind === 'ci'
     const since = isCi ? lastSeq(log, isPush) : lastSeq(log, entry => entry.type === 'edit')
+    if (!isCi && since === undefined) return []
     const runs = log.filter(
       (entry): entry is Extract<ClaimEntry, { type: 'run' }> =>
-        entry.type === 'run' && entry.seq > (since ?? 0) && entry.checks.some(check => checks.includes(check)),
+        entry.type === 'run' &&
+        entry.seq > (since ?? 0) &&
+        entry.checks.some(check => checks.includes(check)) &&
+        (entry.agentId === undefined || entry.isOk),
     )
     const last = runs[runs.length - 1]
     if (last === undefined) {
@@ -239,46 +420,84 @@ export const warningLine = (warning: ClaimWarning) => `unverified: "${warning.qu
 
 type RunResult = { interrupted?: unknown }
 
+function debug($: EngineInterface, label: string, error: unknown): void {
+  try {
+    const message = error instanceof Error ? error.message : String(error)
+    $.ui.log(`harness: claims ${label} failed: ${message.slice(0, 160)}`, { to: 'debug' })
+  } catch {
+    return
+  }
+}
+
+function isTracked(path: string, cwd: string): boolean {
+  if (/\.md$/i.test(path)) return false
+  if (!path.startsWith('/')) return true
+  const root = cwd.endsWith('/') ? cwd : `${cwd}/`
+  return path === cwd || path.startsWith(root)
+}
+
+type RecordInput = { tool: string; agentId?: string } & Record<string, unknown>
+
+async function record(
+  $: EngineInterface,
+  input: RecordInput,
+  ran: { isError?: boolean; isReadOnly?: boolean; result?: unknown },
+): Promise<void> {
+  const agentId = typeof input.agentId === 'string' ? input.agentId : undefined
+  if (EDIT_TOOLS.has(input.tool)) {
+    if (ran.isError === true) return
+    const path = String(input.file_path ?? input.notebook_path ?? '')
+    if (!isTracked(path, await $.session.cwd())) return
+    await update($, logAtom, entries => appendEntry(entries ?? [], { type: 'edit', path, ...(agentId === undefined ? {} : { agentId }) }))
+    return
+  }
+  if (input.tool !== 'Bash') return
+  const command = String(input.command ?? '')
+  const result = typeof ran.result === 'object' && ran.result !== null ? (ran.result as RunResult) : {}
+  const isInterrupted = result.interrupted === true
+  const isOk = ran.isError !== true && !isInterrupted
+  let checks = classifyCommand(command)
+  if (!isOk && checks.length > 1) checks = []
+  const isMutating = agentId === undefined && isMutatingCommand(command, ran.isReadOnly === true)
+  if (checks.length === 0 && !isMutating) return
+  const short = shorten(command, COMMAND_LIMIT)
+  await update($, logAtom, entries => {
+    let all = entries ?? []
+    if (isMutating) all = appendEntry(all, { type: 'edit', path: short })
+    if (checks.length > 0) {
+      all = appendEntry(all, {
+        type: 'run',
+        checks,
+        command: short,
+        isOk,
+        isInterrupted,
+        ...(agentId === undefined ? {} : { agentId }),
+      })
+    }
+    return all
+  })
+}
+
 export function registerClaims(on: On): void {
   on('tool.call', { tool: ['Edit', 'Write', 'NotebookEdit', 'Bash'] }, async ($, e, next) => {
     const ran = await next(e)
+    if (ran.deny !== undefined) return ran
     try {
-      if (ran.deny !== undefined) return ran
-      const input = e as unknown as Record<string, unknown>
-      if (EDIT_TOOLS.has(e.tool)) {
-        if (ran.isError === true) return ran
-        const path = String(input.file_path ?? input.notebook_path ?? '')
-        await update($, logAtom, entries => appendEntry(entries ?? [], { type: 'edit', path }))
-        return ran
-      }
-      if (e.tool !== 'Bash') return ran
-      const command = String(input.command ?? '')
-      const checks = classifyCommand(command)
-      const isMutating = isMutatingCommand(command)
-      if (checks.length === 0 && !isMutating) return ran
-      const result = typeof ran.result === 'object' && ran.result !== null ? (ran.result as RunResult) : {}
-      const isInterrupted = result.interrupted === true
-      await update($, logAtom, entries => {
-        let all = entries ?? []
-        if (isMutating) all = appendEntry(all, { type: 'edit', path: shorten(command, 80) })
-        if (checks.length > 0) {
-          all = appendEntry(all, { type: 'run', checks, command, isOk: ran.isError !== true && !isInterrupted, isInterrupted })
-        }
-        return all
-      })
-    } catch {
-      return ran
+      await record($, e as unknown as RecordInput, ran)
+    } catch (error) {
+      debug($, 'record', error)
     }
     return ran
   }).catch(($, e, next) => next(e))
 
-  on('prompt.submit', { origin: { kind: /^(?:composer|bridge|sdk)$/ } }, async ($, e, next) => {
+  on('turn.start', async ($, e, next) => {
+    const started = await next(e)
     try {
       await update($, warningsAtom, current => ((current ?? []).length === 0 ? current : []))
-    } catch {
-      return next(e)
+    } catch (error) {
+      debug($, 'clear', error)
     }
-    return next(e)
+    return started
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', { reason: 'answer' }, async ($, e, next) => {
@@ -287,8 +506,9 @@ export function registerClaims(on: On): void {
     try {
       const warnings = unverifiedClaims(detectClaims(e.answer), await read($, logAtom))
       await update($, warningsAtom, () => warnings)
-    } catch {
-      return completed
+      if (warnings.length > 0) $.ui.log(warnings.map(warningLine).join('\n'))
+    } catch (error) {
+      debug($, 'check', error)
     }
     return completed
   }).catch(($, e, next) => next(e))
@@ -299,10 +519,14 @@ export function registerClaims(on: On): void {
     if (e.props.hasSurvey || warnings.length === 0) return rendered
     const { Box, Text } = $.ui.resolve(e)
     const hidden = warnings.length - SHOWN_WARNINGS
-    const lines = warnings.slice(0, SHOWN_WARNINGS).map((warning, index) =>
-      Text({ color: 'warning', wrap: 'truncate-end', children: warningLine(warning) }),
-    )
+    const lines = warnings
+      .slice(0, SHOWN_WARNINGS)
+      .map(warning => Text({ color: 'warning', wrap: 'truncate-end', children: warningLine(warning) }))
     if (hidden > 0) lines.push(Text({ dimColor: true, children: `+${hidden} more unverified` }))
-    return Box({ key: 'claims', flexDirection: 'column', paddingX: 1, children: [rendered, ...lines] })
+    return Box({
+      key: 'claims',
+      flexDirection: 'column',
+      children: [rendered, Box({ flexDirection: 'column', paddingX: 1, children: lines })],
+    })
   }).catch(($, e, next) => next(e))
 }
