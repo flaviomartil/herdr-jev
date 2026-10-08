@@ -284,8 +284,9 @@ function dropHeredocs(command: string): string {
 }
 
 function segmentsOf(command: string): Segment[] {
-  if (command.length > COMMAND_SIZE_LIMIT) return []
-  return stripQuoted(unwrapShells(dropHeredocs(command)))
+  const body = dropHeredocs(command)
+  if (body.length > COMMAND_SIZE_LIMIT) return []
+  return stripQuoted(unwrapShells(body))
     .split(SEPARATOR)
     .filter((_, index) => index % 2 === 0)
     .map(segmentOf)
@@ -468,7 +469,7 @@ function segmentMutates(segment: Segment, cwd: string | undefined, depth = 0): b
       return args.some(arg => arg.startsWith('of=') && !isOffTree(arg.slice(3)))
     case 'sed':
     case 'perl':
-      return args.some(arg => IN_PLACE.test(arg))
+      return args.some(arg => arg.length < 64 && IN_PLACE.test(arg))
     default:
       break
   }

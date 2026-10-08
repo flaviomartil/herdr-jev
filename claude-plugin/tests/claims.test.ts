@@ -489,6 +489,14 @@ test('quoted scratch targets are off the tree', () => {
   expect(classifyCommand('bun test > "/tmp/test.log" 2>&1')).toEqual(['test'])
 })
 
+test('the size limit is measured without heredoc bodies', () => {
+  const body = `${'x\n'.repeat(35_000)}`
+  expect(isMutatingCommand(`bun test\ncat > src/big.ts <<'EOF'\n${body}EOF\n`)).toBe(true)
+  expect(classifyCommand(`cat > /tmp/fixture.json <<'EOF'\n${body}EOF\nbun test`)).toEqual(['test'])
+  expect(classifyCommand(`cat > /tmp/fixture.json <<'EOF'\n${body}EOF\ngit push origin main`)).toEqual(['push'])
+  expect(classifyCommand(`cat > /tmp/fixture.json <<'EOF'\n${'x\n'.repeat(35_000)}EOF\n${'a '.repeat(40_000)}&& bun test`)).toEqual([])
+})
+
 test('pathological commands are bounded', () => {
   const spaces = `bun${' '.repeat(64_000)}test`
   const xargs = 'xargs '.repeat(10_000)
@@ -503,6 +511,9 @@ test('pathological commands are bounded', () => {
   expect(classifyCommand(huge)).toEqual([])
   expect(isMutatingCommand(`${huge} && rm src/a.ts`)).toBe(false)
   expect(Date.now() - started).toBeLessThan(5000)
+  const started2 = Date.now()
+  isMutatingCommand(`sed -${'i'.repeat(60_000)} s/a/b/ src/a.ts`)
+  expect(Date.now() - started2).toBeLessThan(5000)
   expect(classifyCommand(`${'a '.repeat(10_000)}&& bun test`)).toEqual(['test'])
   expect(isMutatingCommand('xargs xargs xargs rm src/a.ts')).toBe(true)
 })
