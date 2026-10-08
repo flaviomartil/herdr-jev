@@ -34,7 +34,7 @@ export type Seen = {
   skills: { name: string; source: string }[]
   failUsage: boolean
   surfaces: string[]
-  alive: { id: string; status: string }[]
+  alive: { id: string; status: string; type?: string }[]
   registered: string[]
   specs: SpecSeen[]
   failCli: boolean
@@ -55,6 +55,7 @@ export type Seen = {
   toplevel: string | null
   remotes: string
   failRegister: boolean
+  runHook: ((argv: string[], init: { cwd?: string; stdin?: string; timeoutMs?: number } | undefined) => Promise<{ exitCode: number; stdout: string; stderr: string } | undefined>) | null
   descriptions: Map<string, string>
   gitDiff: string
   gitStat: string
@@ -138,7 +139,7 @@ export function pendingReport(): Record<string, unknown> {
 
 export function wire(on: On, extra: { model?: string; session?: string; store?: Record<string, unknown> } = {}): Seen {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, statusBody: { status: 'ready' }, statusRaw: null, statusExit: 0, failStatus: false, inits: [], toplevel: null, remotes: '', failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [] }
+  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, runHook: null, statusBody: { status: 'ready' }, statusRaw: null, statusExit: 0, failStatus: false, inits: [], toplevel: null, remotes: '', failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [] }
 
   on('store.get', (_$, e) => ({ value: seen.saved.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -154,7 +155,10 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     seen.state.set(`${e.plugin}.${e.key}`, e.value)
     return next(e)
   })
-  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.start', (_$, e) => {
+    seen.registered.push('session.start:bottom')
+    return { cwd: e.cwd }
+  })
   on('prompt.attachment', (_$, e) => ({ text: e.text }))
   on('agent.offer', () => ({ isOffered: true }))
   on('prompt.submit', (_$, e) => ({ text: e.text }))
@@ -192,7 +196,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
   on('tool.register', (_$, e) => {
     seen.descriptions.set(e.name, e.description)
     seen.registered.push(`tool:${e.name}`)
-    return { value: { tool: e.name } }
+    return { value: { tool: `mcp__harness__${e.name}` } }
   })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('agent.register', (_$, e) => {
@@ -213,7 +217,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     value: seen.alive.map(one => ({
       id: one.id,
       description: '',
-      type: 'harness:implementer',
+      type: one.type ?? 'harness:implementer',
       status: one.status as 'running',
     })),
     }
@@ -231,7 +235,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
       cwd: e.cwd,
     })
     const agentId = `agent-${seen.spawns.length}`
-    seen.alive.push({ id: agentId, status: 'running' })
+    seen.alive.push({ id: agentId, status: 'running', type: typeof kind === 'string' ? kind : undefined })
     const answer = { model: e.model ?? 'sonnet', agentId, result: { agentId, resolvedModel: e.model ?? 'sonnet' } }
     return answer
   })
@@ -242,6 +246,10 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     const done = (exitCode: number, stdout: string, stderr = '') => ({
       value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
     })
+    if (seen.runHook !== null) {
+      const hooked = await seen.runHook([...e.argv], e.init)
+      if (hooked !== undefined) return done(hooked.exitCode, hooked.stdout, hooked.stderr)
+    }
     if (e.argv[0] === 'ai-harness' && sub === 'skill-select') {
       if (seen.failSelect) return done(2, '', 'select down')
       return done(0, JSON.stringify(seen.skillSelect))

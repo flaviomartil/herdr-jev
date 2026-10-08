@@ -636,17 +636,6 @@ export function registerClaims(on: On): void {
     return started
   }).catch(($, e, next) => next(e))
 
-  on('session.end', { reason: 'clear' }, async ($, e, next) => {
-    const ended = await next(e)
-    try {
-      await update($, warningsAtom, () => [])
-      await update($, logAtom, () => [])
-    } catch (error) {
-      debug($, 'reset', error)
-    }
-    return ended
-  }).catch(($, e, next) => next(e))
-
   on('turn.complete', { reason: 'answer' }, async ($, e, next) => {
     const completed = await next(e)
     if (e.agentId !== undefined) return completed
