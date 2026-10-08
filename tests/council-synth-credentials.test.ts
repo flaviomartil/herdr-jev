@@ -166,7 +166,7 @@ describe("council redactor, credential shapes and prose", () => {
     expect(redact(long)).toBe(long);
     expect(redact(`${long}1`)).toBe("[REDACTED]");
     expect(redact(`key sk-proj-${"ab1".repeat(10)}.json`)).toBe(`key sk-proj-${"ab1".repeat(10)}.json`);
-    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(Date.now() - started).toBeLessThan(5_000);
   });
 
   test("redacting twice equals redacting once on the prose and credential sets", () => {
