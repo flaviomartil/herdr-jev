@@ -79,7 +79,16 @@ kill -s KILL -- "-$$"
 `
 
 export const SCRIPTS = {
-  start: 'umask 077\nnohup setsid sh "$@" >/dev/null 2>&1 </dev/null &\necho $!',
+  start: String.raw`umask 077
+nohup setsid sh "$@" >/dev/null 2>&1 </dev/null &
+p=$!
+st=$(sed 's/.*) //' "/proc/$p/stat" 2>/dev/null | cut -d' ' -f20)
+if [ -z "$st" ]; then
+  kill -s KILL -- "-$p" 2>/dev/null
+  exit 1
+fi
+echo "$p"
+echo "$st"`,
   write: 'umask 077; mkdir -p "$1" && cat > "$2"',
   mkdir: 'umask 077; mkdir -p "$1"',
   tail: String.raw`touch -- "$4" 2>/dev/null
@@ -96,6 +105,11 @@ tail -n +"$2" "$1" 2>/dev/null
 esac
 live() { ps -e -o pgid=,stat= 2>/dev/null | awk -v g="$1" '$1 == g && $2 !~ /^Z/ { f = 1 } END { exit !f }'; }
 live "$1" || { echo gone; exit 0; }
+if [ -e "/proc/$1" ]; then
+  pg=$(ps -o pgid= -p "$1" 2>/dev/null | tr -d ' ')
+  st=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20)
+  [ -n "$3" ] && [ "$pg" = "$1" ] && [ "$st" = "$3" ] || { echo gone; exit 0; }
+fi
 polls=$2
 [ -n "$polls" ] || polls=20
 kill -s TERM -- "-$1" 2>/dev/null
@@ -163,6 +177,7 @@ export type Workspace = {
 export type Run = {
   id: number
   pid: string
+  start: string
   events: string
   errors: string
   lease: string
@@ -221,7 +236,7 @@ export type Ports = {
   agentType: (agentId: string) => Promise<string | undefined>
   loadState: (agentId: string) => Promise<AgentState | null>
   saveState: (agentId: string, state: AgentState | null) => Promise<void>
-  liveAgents: () => Promise<string[]>
+  sessionAgents: () => Promise<string[]>
   notify: (text: string) => void
 }
 
@@ -707,9 +722,9 @@ export async function exportTree(ports: Ports, cwd: string, agentId: string, non
   }
 }
 
-async function killGroup(ports: Ports, pid: string, polls = 20): Promise<boolean> {
+async function killGroup(ports: Ports, run: Pick<Run, 'pid' | 'start'>, polls = 20): Promise<boolean> {
   try {
-    const result = await runSh(ports, SCRIPTS.kill, [pid, String(polls)], { timeoutMs: 30_000 })
+    const result = await runSh(ports, SCRIPTS.kill, [run.pid, String(polls), run.start ?? ''], { timeoutMs: 30_000 })
     return result.stdout.trim().split('\n').at(-1) === 'gone'
   } catch {
     return false
@@ -742,15 +757,16 @@ export async function settleWorkspace(ports: Ports, ext: External, ws: Workspace
     await removeDir(ports, ws)
     return [
       `Patch (mode 0600): ${ws.patch}`,
-      `Apply it with: git -C ${quote(ws.repo)} apply ${quote(ws.patch)}`,
-      `The copy was exported from HEAD ${ws.head.slice(0, 7)}; uncommitted work was not in it. Nothing was applied to ${ws.repo}.`,
+      `Check it first with: git -C ${quote(ws.repo)} apply --stat --check ${quote(ws.patch)}`,
+      `Then apply it with: git -C ${quote(ws.repo)} apply ${quote(ws.patch)}`,
+      `The patch was computed against HEAD ${ws.head.slice(0, 7)}; uncommitted work was not in the copy and is excluded. It may add files and symlinks, so read the --stat output before applying. Nothing was applied to ${ws.repo}.`,
       `git diff --stat:\n${clip(stat.out, STAT_LIMIT)}`,
     ].join('\n')
   })
 }
 
 export async function stopAndSettle(ports: Ports, ext: External, run: Run, polls = 20): Promise<string> {
-  const stopped = await killGroup(ports, run.pid, polls)
+  const stopped = await killGroup(ports, run, polls)
   if (!stopped) {
     return `Codex could not be stopped (process group ${run.pid}). Its copy was left untouched at ${run.ws.dir}. Stop it with: kill -s KILL -- -${run.pid}`
   }
@@ -862,6 +878,7 @@ async function launch(ports: Ports, ext: External, agentId: string, state: Agent
   const run: Run = {
     id,
     pid: '',
+    start: '',
     events: `${ws.dir}/events`,
     errors: `${ws.dir}/err`,
     lease: `${ws.dir}/lease`,
@@ -899,11 +916,13 @@ async function launch(ports: Ports, ext: External, agentId: string, state: Agent
       FILTER,
       ...codexArgv(ws.work, ws.tmp, parsed.model),
     ])
-    run.pid = started.stdout.trim()
+    const [pid = '', start = ''] = started.stdout.trim().split('\n')
+    run.pid = pid.trim()
+    run.start = start.trim()
   } catch (error) {
     return await abandon(`Codex could not be started: ${clip(error instanceof Error ? error.message : String(error), 200)}`)
   }
-  if (!/^\d+$/.test(run.pid)) return await abandon('Codex could not be started: no process id came back.')
+  if (!/^\d+$/.test(run.pid) || !/^\d+$/.test(run.start)) return await abandon('Codex could not be started: no process id came back.')
   return { ok: true, run }
 }
 
@@ -1125,17 +1144,18 @@ export async function progressCall(ports: Ports, agentId: string | undefined): P
 
 export async function cleanupAgent(ports: Ports, ext: External, agentId: string, polls = 20): Promise<void> {
   const state = await ports.loadState(agentId)
-  if (state?.run == null) return
-  const run = state.run
-  const text = await stopAndSettle(ports, ext, run, polls)
-  state.run = null
-  state.lastReport = text
-  await ports.saveState(agentId, state)
-  ports.notify(`harness:codex stopped. ${text}`)
+  if (state === null) return
+  if (state.run !== null) {
+    const text = await stopAndSettle(ports, ext, state.run, polls)
+    state.run = null
+    state.lastReport = text
+    ports.notify(`harness:codex stopped. ${text}`)
+  }
+  await ports.saveState(agentId, null)
 }
 
 export async function endAll(ports: Ports, ext: External): Promise<void> {
-  const ids = await ports.liveAgents()
+  const ids = await ports.sessionAgents()
   for (const id of ids) {
     await cleanupAgent(ports, ext, id, 4).catch(() => undefined)
   }

@@ -195,6 +195,10 @@ const launchPorts = ($: EngineInterface): LaunchPorts => ({
 
 const CODEX_STORE_PREFIX = 'codex-agent:'
 
+async function codexPrefix($: EngineInterface): Promise<string> {
+  return `${CODEX_STORE_PREFIX}${await $.session.id()}:`
+}
+
 const externalPorts = ($: EngineInterface): Ports => ({
   run: (argv, init) => $.process.run(argv, init),
   now: () => $.clock.now(),
@@ -220,19 +224,14 @@ const externalPorts = ($: EngineInterface): Ports => ({
     return Array.isArray(rows) ? rows.filter(row => row.role === 'user').map(row => row.text) : null
   },
   agentType: async agentId => (await $.agent.list()).find(one => one.id === agentId)?.type,
-  loadState: async agentId => ((await $.store.get(`${CODEX_STORE_PREFIX}${agentId}`)) as AgentState | undefined) ?? null,
+  loadState: async agentId => ((await $.store.get(`${await codexPrefix($)}${agentId}`)) as AgentState | undefined) ?? null,
   saveState: async (agentId, state) => {
-    if (state === null) await $.store.delete(`${CODEX_STORE_PREFIX}${agentId}`)
-    else await $.store.set(`${CODEX_STORE_PREFIX}${agentId}`, state)
+    if (state === null) await $.store.delete(`${await codexPrefix($)}${agentId}`)
+    else await $.store.set(`${await codexPrefix($)}${agentId}`, state)
   },
-  liveAgents: async () => {
-    const keys = (await $.store.keys()).filter(key => key.startsWith(CODEX_STORE_PREFIX))
-    const live: string[] = []
-    for (const key of keys) {
-      const state = (await $.store.get(key)) as AgentState | undefined
-      if (state?.run != null) live.push(key.slice(CODEX_STORE_PREFIX.length))
-    }
-    return live
+  sessionAgents: async () => {
+    const prefix = await codexPrefix($)
+    return (await $.store.keys()).filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length))
   },
   notify: text => {
     $.ui.toast(text.slice(0, 600), { timeoutMs: 15000 })
@@ -1230,7 +1229,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    await attempt('codex session end', $, () => endAll(externalPorts($), external))
+    if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($), external))
     return next(e)
   }).catch(($, e, next) => next(e))
 

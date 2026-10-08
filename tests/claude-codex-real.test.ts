@@ -118,7 +118,7 @@ function ports(store: Map<string, AgentState>, notes: string[], extraEnv: Record
       if (value === null) store.delete(id);
       else store.set(id, JSON.parse(JSON.stringify(value)) as AgentState);
     },
-    liveAgents: async () => [...store.entries()].filter(([, value]) => value.run !== null).map(([id]) => id),
+    sessionAgents: async () => [...store.keys()],
     notify: text => {
       notes.push(text);
     },
@@ -141,6 +141,14 @@ async function drain(p: Ports, ext: ReturnType<typeof createExternal>, agentId: 
     }
   }
   throw new Error(`run did not finish: ${last}`);
+}
+
+function firstLine(text: string): string {
+  return text.trim().split("\n")[0] ?? "";
+}
+
+function stamp(text: string): string {
+  return text.trim().split("\n")[1] ?? "";
 }
 
 function start(runDir: string, max: string, argv: string[], extraEnv: Record<string, string> = {}): Promise<RunResult> {
@@ -168,7 +176,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  for (const pgid of spawned) spawnSync("sh", ["-c", SCRIPTS.kill, "sh", pgid, "4"]);
+  for (const pgid of spawned) spawnSync("sh", ["-c", 'kill -s KILL -- "-$1" 2>/dev/null', "sh", pgid]);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -183,7 +191,7 @@ test("SCRIPTS.kill stops every process of the launched group under the system sh
   stub("codex", HANG);
   const runDir = join(root, "run1");
   const started = await start(runDir, "600", ["codex"], { STUB_PIDS: join(root, "pids") });
-  const pgid = started.stdout.trim();
+  const pgid = firstLine(started.stdout);
   expect(pgid).toMatch(/^\d+$/);
   spawned.push(pgid);
   await new Promise(resolve => setTimeout(resolve, 800));
@@ -193,7 +201,7 @@ test("SCRIPTS.kill stops every process of the launched group under the system sh
   expect(sid[1]).toBe(pgid);
   const members = spawnSync("sh", ["-c", "ps -e -o pgid=,args= | awk -v g=\"$1\" '$1 == g'", "sh", pgid], { encoding: "utf8" }).stdout;
   expect(members).toContain("sleep 600");
-  const killed = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "20"]);
+  const killed = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "20", stamp(started.stdout)]);
   expect(killed.stdout.trim()).toBe("gone");
   expect(await waitGone(pgid, 3000)).toBe(true);
   const left = spawnSync("sh", ["-c", "ps -e -o args= | grep -c '^sleep 60[01]$'"], { encoding: "utf8" }).stdout.trim();
@@ -206,20 +214,66 @@ cat >/dev/null
 while :; do sleep 1; done`);
   const runDir = join(root, "run2");
   const started = await start(runDir, "600", ["codex"]);
-  const pgid = started.stdout.trim();
+  const pgid = firstLine(started.stdout);
   spawned.push(pgid);
   await new Promise(resolve => setTimeout(resolve, 800));
-  const killed = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "4"]);
+  const killed = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "4", stamp(started.stdout)]);
   expect(killed.stdout.trim()).toBe("gone");
   expect(await waitGone(pgid, 3000)).toBe(true);
 }, 30000);
 
 test("SCRIPTS.kill refuses pids that are not a real group", async () => {
   for (const bad of ["", "0", "1", "-1", "abc", "1 2"]) {
-    const out = await run(["sh", "-c", SCRIPTS.kill, "sh", bad, "1"]);
+    const out = await run(["sh", "-c", SCRIPTS.kill, "sh", bad, "1", "12345"]);
     expect(out.stdout.trim()).toBe("gone");
     expect(out.exitCode).toBe(0);
   }
+});
+
+test("SCRIPTS.kill with pid 0 or 1 signals nothing and leaves a live bystander alone", async () => {
+  const bystander = spawn("sleep", ["300"], { detached: true, stdio: "ignore" });
+  bystander.unref();
+  const pid = String(bystander.pid);
+  try {
+    for (const bad of ["0", "1"]) {
+      const out = await run(["sh", "-c", SCRIPTS.kill, "sh", bad, "1", "1"]);
+      expect(out.stdout.trim()).toBe("gone");
+    }
+    expect(alive(pid)).toBe(true);
+    expect(spawnSync("sh", ["-c", 'kill -s 0 "$1"', "sh", String(process.pid)]).status).toBe(0);
+  } finally {
+    spawnSync("sh", ["-c", 'kill -s KILL -- "-$1" 2>/dev/null', "sh", pid]);
+  }
+});
+
+test("SCRIPTS.kill skips a live group whose leader start time differs and kills it when it matches", async () => {
+  stub("codex", HANG);
+  const runDir = join(root, "run-stamp");
+  const started = await start(runDir, "600", ["codex"], { STUB_PIDS: join(root, "pids") });
+  const pgid = firstLine(started.stdout);
+  spawned.push(pgid);
+  await new Promise(resolve => setTimeout(resolve, 800));
+  expect(alive(pgid)).toBe(true);
+  const real = stamp(started.stdout);
+  expect(real).toMatch(/^\d+$/);
+  for (const wrong of ["", String(Number(real) + 1)]) {
+    const skipped = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "4", wrong]);
+    expect(skipped.stdout.trim()).toBe("gone");
+    expect(alive(pgid)).toBe(true);
+  }
+  const killed = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "20", real]);
+  expect(killed.stdout.trim()).toBe("gone");
+  expect(await waitGone(pgid, 3000)).toBe(true);
+}, 30000);
+
+test("SCRIPTS.start reports the launcher start time, which matches /proc", async () => {
+  stub("codex", HANG);
+  const runDir = join(root, "run-proc");
+  const started = await start(runDir, "600", ["codex"], { STUB_PIDS: join(root, "pids") });
+  const pgid = firstLine(started.stdout);
+  spawned.push(pgid);
+  const fromProc = spawnSync("sh", ["-c", "sed 's/.*) //' /proc/$1/stat | cut -d' ' -f20", "sh", pgid], { encoding: "utf8" }).stdout.trim();
+  expect(stamp(started.stdout)).toBe(fromProc);
 });
 
 test("the launcher passes argv literally and never evaluates it", async () => {
@@ -229,7 +283,7 @@ printf '%s\\n' "$@" > "$STUB_ARGS"`);
   const marker = join(root, "pwned");
   const argument = `$(touch ${marker}); touch ${marker}; \`touch ${marker}\``;
   const started = await start(runDir, "30", ["codex", argument, "two words"], { STUB_ARGS: join(root, "args") });
-  spawned.push(started.stdout.trim());
+  spawned.push(firstLine(started.stdout));
   await new Promise(resolve => setTimeout(resolve, 1500));
   expect(existsSync(marker)).toBe(false);
   const args = readFileSync(join(root, "args"), "utf8").split("\n");
@@ -254,7 +308,7 @@ test("the launcher scrubs git variables, OLDPWD and variables holding the repo p
     LEAK_UNDER: `${repo}/sub`,
     KEEP_NEAR: `${repo}-other`,
   });
-  spawned.push(started.stdout.trim());
+  spawned.push(firstLine(started.stdout));
   await new Promise(resolve => setTimeout(resolve, 1500));
   const env = readFileSync(join(root, "env"), "utf8");
   for (const name of ["GIT_INDEX_FILE", "GIT_DIR", "GIT_WORK_TREE", "GIT_PREFIX", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "OLDPWD", "LEAK_REPO", "LEAK_UNDER"]) {
@@ -269,7 +323,7 @@ test("a stale lease makes the detached launcher kill its own group", async () =>
   stub("codex", HANG);
   const runDir = join(root, "run5");
   const started = await start(runDir, "600", ["codex"], { STUB_PIDS: join(root, "pids") });
-  const pgid = started.stdout.trim();
+  const pgid = firstLine(started.stdout);
   spawned.push(pgid);
   await new Promise(resolve => setTimeout(resolve, 800));
   expect(alive(pgid)).toBe(true);
@@ -282,7 +336,7 @@ test("the max runtime ends a run whose children outlive the codex process", asyn
   stub("codex", HANG);
   const runDir = join(root, "run6");
   const started = await start(runDir, "1", ["codex"], { STUB_PIDS: join(root, "pids") });
-  const pgid = started.stdout.trim();
+  const pgid = firstLine(started.stdout);
   spawned.push(pgid);
   await new Promise(resolve => setTimeout(resolve, 600));
   expect(alive(pgid)).toBe(true);
@@ -375,7 +429,11 @@ test("a stub codex that edits files and rewrites git state in its cwd leaves the
   expect(body).toContain("+changed");
   expect(body).toContain("fresh.txt");
   expect(body).not.toContain("evil");
+  expect(text).toContain(`git -C '${repo}' apply --stat --check '${patch}'`);
   expect(text).toContain(`git -C '${repo}' apply '${patch}'`);
+  expect(text.indexOf("--stat --check")).toBeLessThan(text.indexOf(`apply '${patch}'`));
+  expect(text).toContain("uncommitted work");
+  expect(text).toContain("may add files and symlinks");
   expect(text).toContain("a.txt");
   expect(text).toContain("— answered by codex, requested gpt-test, unconfirmed");
   expect(text).toContain("done editing");
