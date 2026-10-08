@@ -305,7 +305,7 @@ herdr-jev calibrate -s 15 -w
 | :--- | :--- |
 | `triage <task> [-j, --json]` | Classifies complexity (`trivial`, `routine`, `moderate`, `architectural`), research need, effort (`standard`, `high`, `xhigh`) and recommended pipeline (`direct` or `triad`). `--json` prints the raw decision. |
 | `plan <task>` | Prints the execution plan: advisory `stages` and the canonical `executionStages` that `route` may launch. Options: `-c, --client`, `--source-pane`, `-t, --triad`, `--model`, `--available-models`, `--cross-harness`, `-j, --json`. |
-| `route <task>` | Triages, plans and launches the canonical stages in Herdr panes, then prints the result as JSON. Exits with code 1 when the plan resolves to direct execution, on error, or when a stage ends `failed`, `unknown` or `blocked`. Options: `-c, --client`, `--source-pane`, `--tab`, `--split`, `--cwd`, `-t, --triad`, `--model`, `--available-models`, `--timeout-ms` (default `900000`), `--verify-command-json`, `--wait`, `-d, --direction`, `--cross-harness`. `--no-split` is rejected; use `--tab` or `--split`, not both. |
+| `route <task>` | Triages, plans and launches the canonical stages in Herdr panes, then prints the result as JSON. Exits with code 1 when the plan resolves to direct execution, on error, or when a stage ends `failed`, `unknown` or `blocked`. Options: `-c, --client`, `--source-pane`, `--tab`, `--split`, `--cwd`, `-t, --triad`, `--model`, `--available-models`, `--timeout-ms` (default `900000`), `--verify-command-json`, `--wait`, `-d, --direction`, `--cross-harness`, `--council off\|auto`. `--no-split` is rejected; use `--tab` or `--split`, not both. |
 | `context [--json]` | Resolves the source pane, workspace and repository and prints them as JSON without launching anything. |
 | `route-turn <turn>` | Pre-flight turn routing, described in [its own section](#pre-flight-turn-routing--resilient-engine-route-turn). Options: `-j, --json`, `--prompt`, `--cold`, `--deadline <ms>`. |
 | `prewarm` | Opens the TypeSafe connection pool ahead of real turns. |
@@ -320,7 +320,7 @@ Runs live in the existing Harness ledger; Herdr-Jev projects them to `~/.local/s
 | Command | Purpose |
 | :--- | :--- |
 | `run-status <id>` and `runs get <id>` | Reconcile deadlines, refresh the sanitized projection and print `{run, projection}` as JSON. Nothing is redispatched. |
-| `run-resume <id>` | Observes the existing attempt and continues verified dependencies. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`, `--cross-harness`. |
+| `run-resume <id>` | Observes the existing attempt and continues verified dependencies. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`, `--cross-harness`, `--council off\|auto`. |
 | `runs list` | Lists recorded runs, newest first, merging the local projections with `ai-harness external-run --action list`. Each entry shows its kind (`pipeline` or `worker`) after the id; `--json` adds `kind` and `source` (`local`, `harness` or `both`). Options: `--limit <n>` (a non-negative integer, default 20; anything else prints `{"error":"invalid_limit"}` on stderr and exits 1), `--json`. Fields the Harness supplies are printed without terminal control sequences and line breaks, and malformed harness entries are skipped or shown without stages instead of aborting the list. |
 | `runs retry <id> --from-failed` | Retries only `failed`, `unknown` and `blocked` stages. `--from-failed` is required. Options: `--timeout-ms`, `--verify-command-json`, `--cwd`, `--cross-harness`. |
 
@@ -457,10 +457,10 @@ The output is one flat JSON object, with no nesting:
 ```sh
 herdr-jev review [--scopes "name=path1,path2;name2=path3"] [--timeout-ms <ms>] [--verify-command-json <path>] [--base <ref>]
   [--client <client>] [--cwd <path>] [--session <id>] [--model <id>] [--available-models <ids>]
-  [--council] [--council-members <list>] [--council-timeout <ms>] [--council-wait <ms>] [--json]
+  [--council [auto]] [--task <text>] [--council-cooldown <ms>] [--council-members <list>] [--council-timeout <ms>] [--council-wait <ms>] [--json]
 ```
 
-`--council`, `--council-members`, `--council-timeout` and `--council-wait` add the advisory review council described under [Review council](#review-council). The council never changes the printed status or the exit code. Using it sends the diff to the provider of each selected CLI and the finding text to TypeSafe.
+`--council`, `--council auto`, `--task`, `--council-cooldown`, `--council-members`, `--council-timeout` and `--council-wait` add the advisory review council described under [Review council](#review-council). The council never changes the printed status or the exit code. Using it sends the diff to the provider of each selected CLI and the finding text to TypeSafe.
 
 Runs the Harness review gate on the current repository:
 
@@ -838,7 +838,20 @@ bun run smoke
 - `--client` names the session client, which is never a member of its own council; outside a Herdr pane it defaults to `claude`.
 - The council refuses to run (`state_dir_inside_repo`) when the state directory is inside the reviewed repository and not ignored by it, because its review directories would show up as untracked files.
 - Members come from the cross-harness configuration (`HERDR_JEV_CROSS_HARNESS`) for the session client, which is never a member of its own council. `--council-members` narrows that set; a requested member the configuration excludes is dropped and the output says so. With cross-harness delegation off, no council runs.
-- The council runs only on the flag or the command; no triage rule starts it.
+- The council runs on the plain flag or the command, and on request by triage (below). Nothing starts it unless one of them is given.
+
+**Automatic trigger (opt-in per call)**
+- `herdr-jev review --council auto --task "<one-line summary>"` (also `--council=auto`) triages the summary with the same `triageTaskWithJev` call as `herdr-jev triage` and runs the council only when the complexity is `moderate` or `architectural`. Bare `--council` keeps meaning "always"; `--council-members` alone still implies it. `--council auto` combined with `--council-members` narrows the members and keeps the gate.
+- Without `--task`, `auto` uses the objective of the pipeline run named by `--session` (`<state dir>/<run id>/objective.md`, the file `route` writes). Any other session, or no objective, skips with `council skipped: no task summary`.
+- `herdr-jev council --auto --task "<summary>"` applies the same gate to the standalone command: it prints the reason and exits 2 when skipped (`{"skipped": "..."}` with `--json`).
+- Conditions, checked in this order, each skip printed as one line `council skipped: <reason>` (on `review`, appended to the text report; the JSON report gains `councilNote` instead of `council`):
+  - `no task summary`: nothing to triage; triage is not called.
+  - `triage trivial` or `triage routine`: no council. `triage unavailable`: no TypeSafe key, a deadline, a network or API failure, or the heuristic fallback of the triage; the review itself is not affected.
+  - `no diff`: nothing differs from the review base.
+  - `same diff as the last council run`: the hash of the diff equals the one stored for this repository.
+  - `cooldown, last council run <n>s ago (window <m>s)`: a council ran for this repository less than `--council-cooldown <ms>` ago (default 600000; `0` disables the cooldown, not the hash rule).
+- The last council run is stored as `{ diffHash, at }` in `<state dir>/council-auto/<hash of the repository toplevel>.json`, written whenever a council actually ran (plain `--council`, `council` and `auto` alike). Plain `--council` and plain `council` ignore the stored hash and the cooldown.
+- Pipeline: `route <task> --council auto` and `run-resume <id> --council auto` (default `off`) run the gated council beside the reviewer stage, using the run objective as the task summary, and append its text to the reviewer handoff file under `## Council (consultative only)` (or the skip note). The council never changes the stage state, the review gate or the verdict recorded in the Harness; if the review does not come out ready the council is cancelled and nothing is appended. While it runs the reviewer judge is awaited without blocking the process, so the council really runs in parallel with it.
 
 **What the review directory guarantees**
 - It is built from an exported tree, not a clone and not a `git worktree`: the base commit is written out with a temporary index, sensitive files are deleted, and a fresh repository is initialised there with a single commit and the task diff applied on top. `git status` shows ` M` for tracked changes and `??` for untracked files, which is what `codex exec review --uncommitted` reads.

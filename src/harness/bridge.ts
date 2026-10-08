@@ -96,23 +96,63 @@ export function resolveHarnessBinary(): string | undefined {
   return binary;
 }
 
+function parseHarnessResult<T>(args: string[], status: number | null, stdout: string, stderr: string): T {
+  let parsed: any;
+  let parseable = false;
+  try { parsed = JSON.parse(stdout); parseable = true; } catch {}
+  if (status !== 0) {
+    if (parseable && args[0]?.startsWith("review-") && typeof parsed?.status === "string") return parsed;
+    throw new Error(errorCode(stdout, stderr));
+  }
+  if (!parseable) throw new Error("invalid_harness_output");
+  if (parsed && typeof parsed === "object" && typeof parsed.error === "string") throw new Error(errorCode(stdout, ""));
+  return parsed;
+}
+
 export function harnessCommand<T = any>(args: string[], timeout = 15_000): T {
   const root = resolveHarnessRoot();
   const binary = resolveHarnessBinary();
   if (!binary || !root) throw new Error("harness_unavailable");
   const result = spawnSync(binary, [...args, "--root", root], { encoding: "utf8", timeout, maxBuffer: 1024 * 1024, env: process.env });
   if (result.error) throw new Error((result.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? "harness_command_timeout" : "harness_command_failed");
-  const stdout = result.stdout ?? "";
-  let parsed: any;
-  let parseable = false;
-  try { parsed = JSON.parse(stdout); parseable = true; } catch {}
-  if (result.status !== 0) {
-    if (parseable && args[0]?.startsWith("review-") && typeof parsed?.status === "string") return parsed;
-    throw new Error(errorCode(stdout, result.stderr ?? ""));
-  }
-  if (!parseable) throw new Error("invalid_harness_output");
-  if (parsed && typeof parsed === "object" && typeof parsed.error === "string") throw new Error(errorCode(stdout, ""));
-  return parsed;
+  return parseHarnessResult<T>(args, result.status, result.stdout ?? "", result.stderr ?? "");
+}
+
+export function harnessCommandAsync<T = any>(args: string[], timeout = 15_000): Promise<T> {
+  const root = resolveHarnessRoot();
+  const binary = resolveHarnessBinary();
+  if (!binary || !root) return Promise.reject(new Error("harness_unavailable"));
+  return new Promise<T>((resolvePromise, reject) => {
+    const child = spawn(binary, [...args, "--root", root], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let size = 0;
+    let failure: string | undefined;
+    const stop = (reason: string) => {
+      failure ??= reason;
+      child.kill("SIGKILL");
+    };
+    const timer = setTimeout(() => stop("harness_command_timeout"), timeout);
+    child.stdout.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 1024 * 1024) stop("harness_command_failed");
+      else out.push(chunk);
+    });
+    child.stderr.on("data", (chunk: Buffer) => err.push(chunk));
+    child.on("error", () => {
+      clearTimeout(timer);
+      reject(new Error(failure ?? "harness_command_failed"));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (failure) return reject(new Error(failure));
+      try {
+        resolvePromise(parseHarnessResult<T>(args, code, Buffer.concat(out).toString("utf8"), Buffer.concat(err).toString("utf8")));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 const STAGE_EFFORTS = ["standard", "high", "xhigh"] as const;
