@@ -109,6 +109,17 @@ if [ -e "/proc/$1" ]; then
   pg=$(ps -o pgid= -p "$1" 2>/dev/null | tr -d ' ')
   st=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -d' ' -f20)
   [ -n "$3" ] && [ "$pg" = "$1" ] && [ "$st" = "$3" ] || { echo gone; exit 0; }
+else
+  [ -n "$4" ] || { echo gone; exit 0; }
+  root=$(cd "$4" 2>/dev/null && pwd -P) || { echo gone; exit 0; }
+  own=1
+  for m in $(ps -e -o pid=,pgid= 2>/dev/null | awk -v g="$1" '$2 == g { print $1 }'); do
+    c=$(readlink "/proc/$m/cwd" 2>/dev/null)
+    case $c in
+      "$root"|"$root"/*) own=0 ;;
+    esac
+  done
+  [ "$own" = 0 ] || { echo gone; exit 0; }
 fi
 polls=$2
 [ -n "$polls" ] || polls=20
@@ -722,9 +733,9 @@ export async function exportTree(ports: Ports, cwd: string, agentId: string, non
   }
 }
 
-async function killGroup(ports: Ports, run: Pick<Run, 'pid' | 'start'>, polls = 20): Promise<boolean> {
+async function killGroup(ports: Ports, run: Pick<Run, 'pid' | 'start' | 'ws'>, polls = 20): Promise<boolean> {
   try {
-    const result = await runSh(ports, SCRIPTS.kill, [run.pid, String(polls), run.start ?? ''], { timeoutMs: 30_000 })
+    const result = await runSh(ports, SCRIPTS.kill, [run.pid, String(polls), run.start ?? '', run.ws.work], { timeoutMs: 30_000 })
     return result.stdout.trim().split('\n').at(-1) === 'gone'
   } catch {
     return false

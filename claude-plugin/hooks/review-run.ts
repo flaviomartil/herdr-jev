@@ -21,9 +21,9 @@ function accept(client: unknown, session: unknown, cwd: unknown, status: unknown
 export function parseReviewText(output: string): ReviewRecord | null {
   const header = /^Review session (\S+) \((\S+)\) in (\/[^\n]*?)[ \t]*$/m.exec(output)
   if (header === null) return null
-  let status: string | null = null
-  for (const match of output.matchAll(/^Status: ([a-z_]+)(?: \(.*\))?[ \t]*$/gm)) status = match[1] ?? null
-  return accept(header[2], header[1], header[3], status)
+  const lines = output.split('\n').map(line => line.replace(/\r$/, '')).filter(line => line.trim().length > 0)
+  const last = /^Status: ([a-z_]+)(?: \(.*\))?[ \t]*$/.exec(lines[lines.length - 1] ?? '')
+  return accept(header[2], header[1], header[3], last === null ? null : (last[1] ?? null))
 }
 
 export function parseReviewJson(output: string): ReviewRecord | null {

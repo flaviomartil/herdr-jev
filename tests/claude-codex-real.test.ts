@@ -266,6 +266,45 @@ test("SCRIPTS.kill skips a live group whose leader start time differs and kills 
   expect(await waitGone(pgid, 3000)).toBe(true);
 }, 30000);
 
+async function orphanGroup(cwd: string): Promise<string> {
+  const leader = spawn("sh", ["-c", "sleep 300 & sleep 301 & exit 0"], { cwd, detached: true, stdio: "ignore" });
+  leader.unref();
+  const pgid = String(leader.pid);
+  spawned.push(pgid);
+  const until = Date.now() + 3000;
+  while (Date.now() < until && (existsSync(`/proc/${pgid}`) || !alive(pgid))) await new Promise(resolve => setTimeout(resolve, 50));
+  return pgid;
+}
+
+test("SCRIPTS.kill with the leader gone signals nothing when no member runs inside the work directory", async () => {
+  const work = join(root, "run-work");
+  const elsewhere = join(root, "elsewhere");
+  mkdirSync(work);
+  mkdirSync(elsewhere);
+  const pgid = await orphanGroup(elsewhere);
+  expect(existsSync(`/proc/${pgid}`)).toBe(false);
+  expect(alive(pgid)).toBe(true);
+  for (const dir of [work, "", join(root, "missing")]) {
+    const out = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "4", "1", dir]);
+    expect(out.stdout.trim()).toBe("gone");
+    expect(alive(pgid)).toBe(true);
+  }
+  const old = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "4", "1"]);
+  expect(old.stdout.trim()).toBe("gone");
+  expect(alive(pgid)).toBe(true);
+}, 30000);
+
+test("SCRIPTS.kill with the leader gone stops a group whose member runs inside the work directory", async () => {
+  const work = join(root, "run-work2");
+  mkdirSync(join(work, "sub"), { recursive: true });
+  const pgid = await orphanGroup(join(work, "sub"));
+  expect(existsSync(`/proc/${pgid}`)).toBe(false);
+  expect(alive(pgid)).toBe(true);
+  const out = await run(["sh", "-c", SCRIPTS.kill, "sh", pgid, "20", "1", work]);
+  expect(out.stdout.trim()).toBe("gone");
+  expect(await waitGone(pgid, 3000)).toBe(true);
+}, 30000);
+
 test("SCRIPTS.start reports the launcher start time, which matches /proc", async () => {
   stub("codex", HANG);
   const runDir = join(root, "run-proc");

@@ -202,11 +202,11 @@ const launchPorts = ($: EngineInterface): LaunchPorts => ({
 
 const CODEX_STORE_PREFIX = 'codex-agent:'
 
-async function codexPrefix($: EngineInterface): Promise<string> {
-  return `${CODEX_STORE_PREFIX}${await $.session.id()}:`
+async function codexPrefix($: EngineInterface, sessionId?: string): Promise<string> {
+  return `${CODEX_STORE_PREFIX}${sessionId !== undefined && sessionId.length > 0 ? sessionId : await $.session.id()}:`
 }
 
-const externalPorts = ($: EngineInterface): Ports => ({
+const externalPorts = ($: EngineInterface, sessionId?: string): Ports => ({
   run: (argv, init) => $.process.run(argv, init),
   now: () => $.clock.now(),
   sleep: (ms, signal) => $.clock.sleep(ms, { signal }),
@@ -231,13 +231,13 @@ const externalPorts = ($: EngineInterface): Ports => ({
     return Array.isArray(rows) ? rows.filter(row => row.role === 'user').map(row => row.text) : null
   },
   agentType: async agentId => (await $.agent.list()).find(one => one.id === agentId)?.type,
-  loadState: async agentId => ((await $.store.get(`${await codexPrefix($)}${agentId}`)) as AgentState | undefined) ?? null,
+  loadState: async agentId => ((await $.store.get(`${await codexPrefix($, sessionId)}${agentId}`)) as AgentState | undefined) ?? null,
   saveState: async (agentId, state) => {
-    if (state === null) await $.store.delete(`${await codexPrefix($)}${agentId}`)
-    else await $.store.set(`${await codexPrefix($)}${agentId}`, state)
+    if (state === null) await $.store.delete(`${await codexPrefix($, sessionId)}${agentId}`)
+    else await $.store.set(`${await codexPrefix($, sessionId)}${agentId}`, state)
   },
   sessionAgents: async () => {
-    const prefix = await codexPrefix($)
+    const prefix = await codexPrefix($, sessionId)
     return (await $.store.keys()).filter(key => key.startsWith(prefix)).map(key => key.slice(prefix.length))
   },
   notify: text => {
@@ -1247,7 +1247,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($), external))
+    if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
     const ended = await next(e)
     if (e.reason === 'clear') {
       await attempt('claims reset', $, async () => {
