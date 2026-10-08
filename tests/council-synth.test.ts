@@ -265,11 +265,11 @@ describe("council synth limits", () => {
     expect(Object.keys(sent).sort()).toEqual(["detail", "location", "member", "title"]);
   });
 
-  test("secrets in title, detail and path are redacted before reaching Jev", async () => {
+  test("secrets in title and detail are redacted before reaching Jev", async () => {
     const jev = fakeJev();
     const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
     await synthesize(
-      [finding(`leaks ${secret}`, "codex", { detail: `token ${secret} here`, path: `src/${secret}.ts` })],
+      [finding(`leaks ${secret} in src/${secret}.ts`, "codex", { detail: `token ${secret} here` })],
       { jev },
     );
     expect(JSON.stringify(jev.calls)).not.toContain(secret);

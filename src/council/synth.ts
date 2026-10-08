@@ -2,7 +2,7 @@ import { choice, noul } from "@typesafe-ai/sdk";
 import { routingAnswersStatus } from "../routing/questions.js";
 import { resolveTypeSafeApiKey } from "../triage/client.js";
 import { JevError, ResilientJevClient } from "../triage/jev-client.js";
-import { flat } from "./text.js";
+import { place, plain, safe } from "./text.js";
 import type { CouncilFinding, CouncilMemberName } from "./types.js";
 import type {
   CouncilItem,
@@ -48,7 +48,6 @@ interface Cfg {
   ctxDetail: boolean;
   title: number;
   location: number;
-  onePerMember?: boolean;
 }
 
 const TIERS: Cfg[] = [
@@ -56,7 +55,6 @@ const TIERS: Cfg[] = [
   { ownDetail: true, ctxDetail: false, title: MAX_TITLE_CHARS, location: MAX_LOCATION_CHARS },
   { ownDetail: false, ctxDetail: false, title: 80, location: 80 },
   { ownDetail: false, ctxDetail: false, title: 30, location: 30 },
-  { ownDetail: false, ctxDetail: false, title: 30, location: 30, onePerMember: true },
 ];
 
 function resolveLimits(partial: SynthOptions["limits"]): SynthLimits {
@@ -68,8 +66,17 @@ function resolveLimits(partial: SynthOptions["limits"]): SynthLimits {
   };
 }
 
-function locationOf(finding: CouncilFinding): string {
-  return finding.line === undefined ? finding.path : `${finding.path}:${finding.line}`;
+function sanitize(finding: CouncilFinding): CouncilFinding {
+  const severity = SEVERITIES.includes(finding.severity) ? finding.severity : "medium";
+  const out: CouncilFinding = {
+    member: finding.member,
+    path: plain(finding.path, 500),
+    severity,
+    title: safe(finding.title, 2000),
+    detail: safe(finding.detail, 4000),
+  };
+  if (typeof finding.line === "number" && Number.isFinite(finding.line)) out.line = finding.line;
+  return out;
 }
 
 function render(
@@ -80,10 +87,10 @@ function render(
 ): RenderedFinding {
   const out: RenderedFinding = {
     member: finding.member,
-    location: flat(locationOf(finding), cfg.location),
-    title: flat(finding.title, cfg.title),
+    location: place(finding.path, finding.line, cfg.location),
+    title: plain(finding.title, cfg.title),
   };
-  if (withDetail) out.detail = flat(finding.detail, limits.maxDetailChars);
+  if (withDetail) out.detail = plain(finding.detail, limits.maxDetailChars);
   return out;
 }
 
@@ -151,6 +158,7 @@ interface Batch1 {
   start: number;
   end: number;
   packed?: Packed;
+  reduced?: boolean;
 }
 
 function planRound1(scored: CouncilFinding[], limits: SynthLimits): Batch1[] {
@@ -158,12 +166,14 @@ function planRound1(scored: CouncilFinding[], limits: SynthLimits): Batch1[] {
   let start = 0;
   while (start < scored.length) {
     let best: Packed | undefined;
+    let tier = 0;
     for (const cfg of TIERS) {
       const candidate = packRound1(scored, start, start, cfg, limits);
       if (fits(candidate, limits)) {
         best = candidate;
         break;
       }
+      tier += 1;
     }
     if (!best) {
       batches.push({ start, end: start });
@@ -177,7 +187,7 @@ function planRound1(scored: CouncilFinding[], limits: SynthLimits): Batch1[] {
       best = next;
       end += 1;
     }
-    batches.push({ start, end, packed: best });
+    batches.push({ start, end, packed: best, reduced: tier >= 2 });
     start = end + 1;
   }
   return batches;
@@ -194,17 +204,7 @@ function packRound2(
   const state: Record<string, RenderedFinding[]> = {};
   const questions: Questions = {};
   for (let g = from; g <= to; g++) {
-    let indices = groups[g]!;
-    if (cfg.onePerMember) {
-      const seen = new Set<CouncilMemberName>();
-      indices = indices.filter((i) => {
-        const m = scored[i]!.member;
-        if (seen.has(m)) return false;
-        seen.add(m);
-        return true;
-      });
-    }
-    state[`g${g}`] = indices.map((i) => render(scored[i]!, limits, cfg, cfg.ownDetail));
+    state[`g${g}`] = groups[g]!.map((i) => render(scored[i]!, limits, cfg, cfg.ownDetail));
     questions[contradictKey(g)] = noul(
       `Do the findings in \`groups.g${g}\` contradict each other, so that they cannot all be true of the same code?`,
     );
@@ -216,6 +216,7 @@ interface Batch2 {
   from: number;
   to: number;
   packed?: Packed;
+  reduced?: boolean;
 }
 
 function planRound2(groups: number[][], scored: CouncilFinding[], limits: SynthLimits): Batch2[] {
@@ -223,12 +224,14 @@ function planRound2(groups: number[][], scored: CouncilFinding[], limits: SynthL
   let from = 0;
   while (from < groups.length) {
     let best: Packed | undefined;
+    let tier = 0;
     for (const cfg of TIERS) {
       const candidate = packRound2(groups, from, from, scored, cfg, limits);
       if (fits(candidate, limits)) {
         best = candidate;
         break;
       }
+      tier += 1;
     }
     if (!best) {
       batches.push({ from, to: from });
@@ -242,7 +245,7 @@ function planRound2(groups: number[][], scored: CouncilFinding[], limits: SynthL
       best = next;
       to += 1;
     }
-    batches.push({ from, to, packed: best });
+    batches.push({ from, to, packed: best, reduced: tier >= 2 });
     from = to + 1;
   }
   return batches;
@@ -284,6 +287,10 @@ function scoringOrder(findings: CouncilFinding[]): number[] {
       }
     }
   }
+  const emitted = new Set(out);
+  findings.forEach((_, i) => {
+    if (!emitted.has(i)) out.push(i);
+  });
   return out;
 }
 
@@ -306,7 +313,7 @@ function buildItem(
   const members = [...new Set(ordered.map((i) => findings[i]!.member))].sort();
   const values = ordered.map((i) => reals?.get(i)).filter((v): v is number => v !== undefined);
   const real = values.length ? values.reduce((s, v) => s + v, 0) / values.length : undefined;
-  let text = flat(lead.title, MAX_TITLE_CHARS);
+  let text = plain(lead.title, MAX_TITLE_CHARS);
   if (contrast) {
     const seen = new Set<CouncilMemberName>();
     const parts: string[] = [];
@@ -314,13 +321,13 @@ function buildItem(
       const f = findings[i]!;
       if (seen.has(f.member)) continue;
       seen.add(f.member);
-      parts.push(`${f.member}: ${flat(f.title, MAX_TITLE_CHARS)}`);
+      parts.push(`${f.member}: ${plain(f.title, MAX_TITLE_CHARS)}`);
     }
     text = parts.join(" vs ");
   }
   const item: CouncilItem = {
     members,
-    location: flat(locationOf(lead), MAX_LOCATION_CHARS),
+    location: place(lead.path, lead.line, MAX_LOCATION_CHARS),
     text,
     severity: lead.severity,
     findings: ordered.map((i) => findings[i]!),
@@ -341,7 +348,7 @@ function rawSummary(findings: CouncilFinding[], messages: string[]): CouncilSumm
 }
 
 function unavailable(reason: string): string {
-  return `Jev unavailable (${flat(reason, MAX_MESSAGE_CHARS)}); findings are listed as reported, without scoring or grouping.`;
+  return `Jev unavailable (${safe(reason, MAX_MESSAGE_CHARS)}); findings are listed as reported, without scoring or grouping.`;
 }
 
 function pickedProbabilityOk(answer: { choice: string; probabilities?: Record<string, number> }): boolean {
@@ -351,9 +358,10 @@ function pickedProbabilityOk(answer: { choice: string; probabilities?: Record<st
 }
 
 export async function synthesize(
-  findings: CouncilFinding[],
+  input: CouncilFinding[],
   opts: SynthOptions = {},
 ): Promise<CouncilSummary> {
+  const findings = input.map(sanitize);
   const limits = resolveLimits(opts.limits);
   const threshold = opts.threshold ?? SYNTH_DEFAULT_THRESHOLD;
   const contradictionThreshold = opts.contradictionThreshold ?? SYNTH_CONTRADICTION_THRESHOLD;
@@ -404,6 +412,7 @@ async function run(
   let failedFindings = 0;
   let badScore = 0;
   let badGrouping = 0;
+  let reducedScored = 0;
 
   batches.forEach((batch, n) => {
     const outcome = outcomes[n];
@@ -417,6 +426,7 @@ async function run(
       return;
     }
     const { answers } = outcome;
+    if (batch.reduced) reducedScored += batch.end - batch.start + 1;
     for (let i = batch.start; i <= batch.end; i++) {
       if (!valid(answers, batch.packed.questions, realKey(i))) {
         badScore += 1;
@@ -455,7 +465,7 @@ async function run(
   const messages: string[] = [];
   if (errors.length) {
     messages.push(
-      `Jev failed for ${failedFindings} finding(s) (${flat(errors[0]!, MAX_MESSAGE_CHARS)}); they are listed alone, unscored and ungrouped.`,
+      `Jev failed for ${failedFindings} finding(s) (${safe(errors[0]!, MAX_MESSAGE_CHARS)}); they are listed alone, unscored and ungrouped.`,
     );
   }
   if (oversized) {
@@ -466,7 +476,12 @@ async function run(
   }
   if (badGrouping) {
     messages.push(
-      `${badGrouping} finding(s) had an invalid, uncertain or unusable Jev grouping answer and are listed alone, not grouped.`,
+      `${badGrouping} finding(s) had an invalid, uncertain or unusable Jev grouping answer and were not linked to an earlier finding.`,
+    );
+  }
+  if (reducedScored) {
+    messages.push(
+      `${reducedScored} finding(s) were scored on reduced text (no detail or shortened titles) to fit one Jev request.`,
     );
   }
   if (overflow.length) {
@@ -526,9 +541,11 @@ async function run(
   );
   const contradictory = new Set<number>();
   const unchecked = new Set<number>();
+  let reducedGroups = 0;
   round2.forEach((batch, n) => {
     const outcome = round2Outcomes[n];
     for (let g = batch.from; g <= batch.to; g++) {
+      if (batch.reduced && batch.packed && outcome && !("error" in outcome)) reducedGroups += 1;
       if (!batch.packed || !outcome || "error" in outcome) {
         unchecked.add(g);
         continue;
@@ -548,6 +565,9 @@ async function run(
       agreements.push({ ...buildItem(scored, indices, reals), contradictionChecked: !unchecked.has(g) });
     }
   });
+  if (reducedGroups) {
+    messages.push(`${reducedGroups} group(s) were checked for contradiction on reduced text (no detail or shortened titles).`);
+  }
   if (unchecked.size) {
     messages.push(
       `The contradiction check was unavailable for ${unchecked.size} group(s); they are listed as agreements and marked unchecked.`,
