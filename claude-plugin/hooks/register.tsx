@@ -39,6 +39,8 @@ import {
   summarize,
 } from './plan'
 import { registerPrGate } from './pr-gate'
+import { mergeReviewIds, reviewIdsKey } from './review-run'
+import type { ReviewIds } from './review-run'
 import type { Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
 import {
   agentReason,
@@ -911,10 +913,12 @@ async function refreshReview($: EngineInterface, options: PluginOptions, cwd: st
     const { status, detail, error, identity } = ran.value
     await setReview($, { ok: true, status, detail, reason: error, at })
     if (identity !== null) {
-      await update($, reviewIdsAtom, ids => ({
-        ...ids,
-        [identity.cwd]: { client: identity.client, session: identity.session, at },
-      }))
+      await update($, reviewIdsAtom, ids =>
+        mergeReviewIds(ids as ReviewIds, identity.cwd, { client: identity.client, session: identity.session, at, status }),
+      )
+      await attempt('store review ids', $, async () => {
+        await $.store.set(reviewIdsKey(await $.session.id()), await read($, reviewIdsAtom))
+      })
     }
     if (status !== 'ready') return `harness review ${status ?? 'unknown'}; approved tasks stay approved.`
 

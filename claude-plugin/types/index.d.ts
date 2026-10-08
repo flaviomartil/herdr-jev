@@ -91,6 +91,7 @@ export type HarnessReviewIdentity = {
   client: string
   session: string
   at: number
+  status: string | null
 }
 
 export type ScopeState = {
