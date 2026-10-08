@@ -145,6 +145,50 @@ Regras:
 
 Menor passo que já destrava o caso do exemplo: um profile `claude-opus-5` (executor Sonnet high, reviewer Opus xhigh) e um papel `consult` opcional apontando para Fable. Isso não depende das fases 4a a 4e.
 
+## 10a. Terceira via: subagente nativo com o modelo trocado
+
+Base: [pi-agent-for-claude](https://github.com/FazalAAli/pi-agent-for-claude) (MIT), lido em `hooks/register.ts`.
+
+O Claude Code inicia um subagente de verdade (id, transcript, linha em `$.agent.list()`); o mod troca só a requisição de modelo desse loop por uma execução destacada do CLI externo. O worker externo passa a aparecer na lista de tarefas e no pane do mod como qualquer subagente, com streaming, follow-up e uso de tokens, e funciona fora do Herdr.
+
+Mecanismo a copiar:
+
+- `agent.spawn`: guarda o prompt do spawn por `agentId` quando o tipo é o nosso.
+- `turn.step`: para esses `agentId`, não chama `next(e)`; inicia o CLI destacado (`nohup`), com a saída filtrada para um arquivo JSONL de eventos pequenos, e lê o arquivo em polling, emitindo chunks de texto e thinking.
+- Orçamento por hook: o engine dá 10 s por chamada e, estourando, conclui o passo com o modelo real. Cada passo transmite por até 7 s e termina numa tool no-op registrada pelo mod (`tool.register`), cujo resultado faz o engine abrir o próximo passo sobre a mesma execução.
+- Entrega: texto simples, ou `SubagentHandback` quando a sessão exige; o passo seguinte à entrega encerra com texto visível.
+- Abort: sinal do passo mata o processo destacado; `pump` nunca lança, porque um throw devolveria o passo ao modelo Claude por baixo.
+- Agente de fallback: a definição do agente usa Haiku e instrui a responder só "o mod não está ativo", para o caso de os function hooks estarem desligados.
+- Assinatura: a resposta termina com `— answered by <cli>, <provedor/modelo>` lido dos eventos do CLI.
+
+Adaptação para nós:
+
+| CLI | Modo de eventos | Sessão para follow-up |
+| --- | --- | --- |
+| codex | `codex exec --json` (JSONL) com `-C <worktree>` e `-s workspace-write` | `codex exec resume` |
+| agy | `agy --print --output-format stream-json` | `--conversation <id>` |
+| kimi | `kimi -p --output-format stream-json` | `-S <id>` |
+
+O formato dos eventos de cada CLI ainda precisa ser capturado e mapeado; só o do Pi é conhecido pelo código de referência.
+
+Diferenças obrigatórias em relação à referência:
+
+- O CLI externo roda fora das permissões do Claude Code. Na referência ele roda no cwd da sessão; aqui roda sempre no worktree da seção 5.
+- A referência depende de comportamento não documentado: o orçamento de 10 s, transcripts em `~/.claude/projects/**/agent-<id>.jsonl`, texto exato de mensagens do engine. Isolar isso num módulo e cobrir com teste que falhe alto quando o engine mudar.
+- Sem modo teammate (tmux, `ps`) na primeira versão.
+- Arquivos de eventos no diretório de estado do herdr-jev, não em `/tmp`.
+
+Uso por papel: o conselho de revisão (4a, 4b) continua em one-shot por argv; a implementação por CLI externa (4c, 4d) passa a usar esta via. O caminho por pane do Herdr continua existindo para quem trabalha dentro do Herdr.
+
+## 10b. Ideias de claude-mods
+
+Base: [diegocamara89/claude-mods](https://github.com/diegocamara89/claude-mods) (MIT, sem uso externo comprovado).
+
+- `revisor-com-prova`: anexa ao resultado de um revisor, como `context` visível só para o modelo, a regra "achado só vale com prova; reproduza antes de corrigir; aprovado sem achados é válido". Adotar na síntese do conselho (seção 7) e no retorno de `harness:reviewer`: o texto entregue ao advisor carrega essa regra.
+- `sonnet-por-padrao`: em `agent.spawn`, define o modelo de subagente criado sem modelo explícito, e envolve scripts de Workflow para o mesmo efeito. O mod já fixa modelo nos próprios agentes; o que vale copiar é aplicar a rota da seção 10 a subagentes genéricos que herdariam o modelo da sessão.
+- `painel-vivo`: mostra quota de 5 h e semanal e a saída ao vivo de Codex e agy no pane. Referência de UI para a Fase 3 do mod.
+- `lixeira` e `varredura-push` ficam fora do escopo: o harness já tem regras para ação destrutiva e para segredo.
+
 ## 11. Fases
 
 | Fase | Entrega | DoD |
@@ -152,6 +196,7 @@ Menor passo que já destrava o caso do exemplo: um profile `claude-opus-5` (exec
 | 4.0 | profile `claude-opus-5` e papel `consult`; depois a matriz por dificuldade em `harness.yml` | `delegation-plan` para sessão Opus devolve `delegate`; `herdr-jev plan` escolhe candidato por complexidade e respeita quota |
 | 4a | adapters de revisão para codex, kimi e agy; `run.ts`; `parse.ts`; worktree de revisão | cada adapter validado em execução real com um diff conhecido; cancelamento mata os filhos; `bun test` verde |
 | 4b | `synth.ts`, `review --council`, gatilho por triage, membros no profile | tarefa `moderate` dispara o conselho sozinha; `routine` não dispara; status do gate inalterado com e sem conselho |
+| 4c.0 | protótipo da terceira via só para Codex: tipo de agente `harness:codex`, troca de `turn.step`, worktree, assinatura | uma tarefa pequena implementada pelo Codex aparece como subagente, transmite ao vivo e termina com a assinatura; com hooks desligados o agente recusa em vez de responder como Claude |
 | 4c | `work --client codex` em worktree | tarefa de exemplo implementada pelo Codex, revisada por Opus e conselho sem o Codex, worktree removido |
 | 4d | implementação por kimi e agy | idem 4c para cada um |
 | 4e | effort por worker e linhas da lista de tarefas | effort do triage visível e aplicado em subagente nativo e em `agy` |
@@ -170,4 +215,4 @@ O mod só exibe o conselho no pane depois da 4b. Atividade de arquivo de worker 
 
 ## 13. Atribuição
 
-Código adaptado do agent-council e do effort-cycle mantém o aviso MIT de origem no arquivo ou em `NOTICE`. Os tipos do Claude Code que esses repositórios trazem não são MIT e não devem ser copiados.
+Código adaptado do agent-council, do effort-cycle, do pi-agent-for-claude e do claude-mods mantém o aviso MIT de origem no arquivo ou em `NOTICE`. Os tipos do Claude Code que esses repositórios trazem não são MIT e não devem ser copiados.
