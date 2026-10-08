@@ -28,7 +28,7 @@ export interface RunCouncilOptions {
   timeoutCommand?: string | null;
 }
 
-const CLIENT_ALIASES: Readonly<Record<string, CouncilMemberName>> = {
+export const CLIENT_ALIASES: Readonly<Record<string, CouncilMemberName>> = {
   codex: "codex",
   kimi: "kimi",
   antigravity: "antigravity",

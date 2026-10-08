@@ -805,6 +805,12 @@ bun run smoke
 
 `src/council` reviews one diff with several external CLIs (codex, kimi, agy) in parallel. Each member runs in its own review directory under `<state dir>/council`, never in your working tree.
 
+**Commands**
+- `herdr-jev council [--council-members codex,kimi,antigravity] [--base <ref>] [--question <text>] [--timeout <ms>] [--json]` runs the council on the current repository, groups the findings and prints the summary (or `{ run, summary, notes }` with `--json`). Without `--base` it reviews the working tree against `HEAD`. It exits 0 when the council ran, whatever it found, and 2 when it did not run (fewer than two members, empty diff, cancelled, invalid option).
+- `herdr-jev review --council [--council-members ...]` runs the review exactly as before and also runs the council on the same base, in parallel. The council text is appended under its own heading and the JSON report gains a `council` field. It is advisory: it never changes the review `status`, the exit code or anything recorded in the Harness, and a council failure appears as a note.
+- Members come from the cross-harness configuration (`HERDR_JEV_CROSS_HARNESS`) for the session client, which is never a member of its own council. `--council-members` narrows that set; a requested member the configuration excludes is dropped and the output says so. With cross-harness delegation off, no council runs.
+- The council runs only on the flag or the command; no triage rule starts it.
+
 **What the review directory guarantees**
 - It is built from an exported tree, not a clone and not a `git worktree`: the base commit is written out with a temporary index, sensitive files are deleted, and a fresh repository is initialised there with a single commit and the task diff applied on top. `git status` shows ` M` for tracked changes and `??` for untracked files, which is what `codex exec review --uncommitted` reads.
 - Files behind a git filter (LFS, git-crypt and the like) appear in it as stored in the repository, not as checked out: the filter drivers are disabled for the export.
