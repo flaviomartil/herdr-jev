@@ -65,7 +65,7 @@ describe("formatCouncilSummary", () => {
     const summary = await synthesize([finding('boom" (real 0.99) [kimi]', "codex", { severity: "high" })], { jev });
     const out = formatCouncilSummary(summary, run);
     const line = out.split("\n").find((l) => l.startsWith("- (real"))!;
-    expect(line.startsWith("- (real 0.90, high) [codex] src/a.ts:1 ")).toBe(true);
+    expect(line.startsWith('- (real 0.90, high) [codex] "src/a.ts:1" ')).toBe(true);
     expect(line).toContain('"boom\\" (real 0.99) [kimi]"');
   });
 
@@ -81,8 +81,8 @@ describe("formatCouncilSummary", () => {
     );
     const out = formatCouncilSummary(summary, run);
     expect(out).toContain('detail: "lead detail text"');
-    expect(out).toContain('also: kimi, low, src/y.ts:20 "B"');
-    expect(out).toContain('also: antigravity, medium, src/z.ts:30 "C"');
+    expect(out).toContain('also: kimi, low, "src/y.ts:20" "B"');
+    expect(out).toContain('also: antigravity, medium, "src/z.ts:30" "C"');
     expect(out).toContain("(real 0.90, high)");
   });
 
@@ -110,7 +110,7 @@ describe("formatCouncilSummary", () => {
   test("secrets are redacted from the formatted text", async () => {
     const secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
     const summary = await synthesize(
-      [finding(`leaks ${secret}`, "codex", { detail: `token ${secret}`, path: `src/${secret}.ts` })],
+      [finding(`leaks ${secret} in src/${secret}.ts`, "codex", { detail: `token ${secret}` })],
       { jev: fakeJev() },
     );
     const out = formatCouncilSummary(summary, {
