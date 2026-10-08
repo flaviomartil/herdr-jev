@@ -80,6 +80,24 @@ describe("council default spawn", () => {
     }
   });
 
+  it("gives the member the review directory as PWD, drops OLDPWD and scrubs variables pointing into the repository", async () => {
+    const saved = { PWD: process.env.PWD, OLDPWD: process.env.OLDPWD, REPO_HINT: process.env.REPO_HINT, PATH_HINT: process.env.PATH_HINT, OTHER: process.env.OTHER };
+    process.env.PWD = "/real/repo";
+    process.env.OLDPWD = "/real/repo/sub";
+    process.env.REPO_HINT = "/real/repo/src";
+    process.env.PATH_HINT = "/usr/bin:/real/repo/bin";
+    process.env.OTHER = "/real/repository-other";
+    try {
+      const out = await defaultSpawn(["sh", "-c", "echo \"[$PWD][$OLDPWD][$REPO_HINT][$PATH_HINT][$OTHER]\""], { cwd: dir, repoRoots: ["/real/repo"] }).result;
+      expect(out.stdout.trim()).toBe(`[${dir}][][][][/real/repository-other]`);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it("kills the whole process group", async () => {
     const proc = defaultSpawn(["sh", "-c", "sleep 30 & echo $!; wait"], { cwd: dir });
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -150,6 +168,32 @@ describe("council process scope", () => {
       expect(await until(() => !alive(grandchild))).toBe(true);
     }, 30000);
   }
+
+  it("runs the exit handler: removes review directories and kills members on a plain exit", async () => {
+    const { exited } = launch("exit", "SIGTERM");
+    await exited;
+    expect(existsSync(join(dir, "ready"))).toBe(true);
+    const grandchild = Number(readFileSync(join(dir, "pid"), "utf8").trim());
+    expect(await until(() => !existsSync(join(dir, "review-dir")))).toBe(true);
+    expect(await until(() => !alive(grandchild))).toBe(true);
+  }, 30000);
+
+  it("lets the process exit after a forced kill even when a grandchild in its own session holds the pipes", async () => {
+    const child = spawn(process.execPath, ["run", join(import.meta.dir, "fixtures/council-signal-child.ts"), dir, "leak"], { stdio: "ignore", env: { ...process.env } });
+    const closed = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+    expect(await until(() => existsSync(join(dir, "pid")))).toBe(true);
+    const leaked = Number(readFileSync(join(dir, "pid"), "utf8").trim());
+    try {
+      expect(await Promise.race([closed, new Promise((resolve) => setTimeout(() => resolve("hung"), 8000))])).toBe(0);
+    } finally {
+      try {
+        process.kill(leaked, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      child.kill("SIGKILL");
+    }
+  }, 30000);
 
   it("still exits on SIGTERM when another guard is registered in the same process", async () => {
     const { child, exited } = launch("both", "SIGTERM");

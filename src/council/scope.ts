@@ -122,6 +122,7 @@ export interface RepoLock {
 interface Holder {
   pid?: number;
   at?: number;
+  token?: string;
 }
 
 function readHolder(path: string): { raw: string; holder: Holder } | undefined {
@@ -181,13 +182,15 @@ export function acquireRepoLock(stateDir: string, repoRoot: string, maxAgeMs: nu
   const path = join(dir, `${name}.lock`);
   const guard = join(dir, `${name}.guard`);
   const tmp = join(dir, `${name}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
-  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now() }), { mode: 0o600 });
+  const token = randomBytes(8).toString("hex");
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), token }), { mode: 0o600 });
   const won = (): RepoLock => {
     const untrack = trackPath(path);
     return {
       release() {
         untrack();
-        rmSync(path, { force: true });
+        const current = readHolder(path);
+        if (current && current.holder.pid === process.pid && current.holder.token === token) rmSync(path, { force: true });
       },
     };
   };

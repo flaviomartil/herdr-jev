@@ -359,3 +359,70 @@ describe("council review directory", () => {
     rmSync(outside, { recursive: true, force: true });
   });
 });
+
+function configureFilter(): void {
+  git(repo, "config", "filter.fake.smudge", "sed s/STORED/EXPANDED/");
+  git(repo, "config", "filter.fake.clean", "sed s/EXPANDED/STORED/");
+  git(repo, "config", "filter.fake.required", "true");
+  writeIn(repo, ".gitattributes", "*.lfs filter=fake\n");
+  writeIn(repo, "asset.lfs", "STORED\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "filtered");
+  writeIn(repo, "asset.lfs", "EXPANDED\n");
+}
+
+describe("council review directory with git filters", () => {
+  it("holds the stored blob, not the filtered checkout", async () => {
+    configureFilter();
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+    expect(readFileSync(join(worktree.path, "asset.lfs"), "utf8")).toBe("STORED\n");
+    await worktree.remove();
+  });
+
+  it("shows only the real changes in git status", async () => {
+    configureFilter();
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+    expect(gitRaw(worktree.path, "status", "--porcelain")).toBe(" M src/a.ts\n");
+    await worktree.remove();
+  });
+
+  it("applies a patch that modifies a filtered file", async () => {
+    configureFilter();
+    writeIn(repo, "asset.lfs", "EXPANDED changed\n");
+    const patch = await buildReviewPatch(repo);
+    expect(patch.patch).toContain("+STORED changed");
+    const worktree = await createReviewWorktree(patch, "codex", state.stateDir);
+    expect(readFileSync(join(worktree.path, "asset.lfs"), "utf8")).toBe("STORED changed\n");
+    expect(gitRaw(worktree.path, "status", "--porcelain")).toBe(" M asset.lfs\n");
+    await worktree.remove();
+  });
+});
+
+describe("council review directory export details", () => {
+  it("never touches the user's own index or staged state", async () => {
+    writeIn(repo, "src/staged.ts", "export const s = 1;\n");
+    git(repo, "add", "src/staged.ts");
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    const indexPath = join(repo, ".git/index");
+    const status = gitRaw(repo, "status", "--porcelain");
+    const before = { index: readFileSync(indexPath), cached: git(repo, "diff", "--cached", "--name-status"), status };
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+    expect(readFileSync(indexPath).equals(before.index)).toBe(true);
+    expect(git(repo, "diff", "--cached", "--name-status")).toBe(before.cached);
+    expect(gitRaw(repo, "status", "--porcelain")).toBe(before.status);
+    expect(readdirSync(state.stateDir).filter((entry) => entry.endsWith(".index"))).toEqual([]);
+    expect(readdirSync(join(state.stateDir, "council")).filter((entry) => entry.endsWith(".index"))).toEqual([]);
+    await worktree.remove();
+  });
+
+  it("removes a tracked directory or submodule entry at a sensitive name", async () => {
+    git(repo, "update-index", "--add", "--cacheinfo", `160000,${git(repo, "rev-parse", "HEAD")},secrets`);
+    git(repo, "commit", "-q", "-m", "gitlink");
+    writeIn(repo, "src/a.ts", "export const a = 2;\n");
+    const worktree = await createReviewWorktree(await buildReviewPatch(repo), "codex", state.stateDir);
+    expect(existsSync(join(worktree.path, "secrets"))).toBe(false);
+    await worktree.remove();
+  });
+});

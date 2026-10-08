@@ -8,7 +8,14 @@ import { defaultSpawn } from "../../src/council/spawn.js";
 const dir = process.argv[2]!;
 const mode = process.argv[3] ?? "scope";
 
-if (mode === "lifetime") {
+if (mode === "leak") {
+  const proc = defaultSpawn(["sh", "-c", `setsid sleep 30 </dev/null & echo $! > ${join(dir, "pid")}; wait`], { cwd: dir, killGraceMs: 200 });
+  proc.result.then(() => undefined);
+  setTimeout(() => {
+    writeFileSync(join(dir, "ready"), "1");
+    proc.kill();
+  }, 600);
+} else if (mode === "lifetime") {
   const proc = defaultSpawn(["sh", "-c", `sleep 60 & echo $! > ${join(dir, "pid")}; wait`], { cwd: dir, lifetimeMs: 2000 });
   proc.result.then(() => undefined);
   setTimeout(() => writeFileSync(join(dir, "ready"), "1"), 600);
@@ -29,6 +36,9 @@ if (mode === "lifetime") {
     }
     registerProcessGuard(extra);
   }
-  setTimeout(() => writeFileSync(join(dir, "ready"), "1"), 500);
+  setTimeout(() => {
+    writeFileSync(join(dir, "ready"), "1");
+    if (mode === "exit") process.exit(0);
+  }, 500);
   setInterval(() => undefined, 1000);
 }

@@ -117,6 +117,37 @@ describe("council repo lock contention", () => {
     expect(existsSync(lockPath("/repo/content"))).toBe(false);
   });
 
+  it("never lets a reader see the lock without its content while locks are created", async () => {
+    const repo = "/repo/watch";
+    const out = join(state, "watch-out");
+    const endAt = Date.now() + 2500;
+    const watcher = spawn(process.execPath, ["run", join(import.meta.dir, "fixtures/council-lock-watch.ts"), lockPath(repo), out, String(endAt)], { stdio: "ignore", env: { ...process.env } });
+    const exited = new Promise<void>((resolve) => watcher.on("exit", () => resolve()));
+    while (!existsSync(out)) await new Promise((resolve) => setTimeout(resolve, 20));
+    while (Date.now() < endAt - 100) {
+      const lock = acquireRepoLock(state, repo);
+      lock?.release();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await exited;
+    const report = JSON.parse(readFileSync(out, "utf8"));
+    expect(report.seen).toBeGreaterThan(0);
+    expect(report.bad).toBe(0);
+  }, 30000);
+
+  it("releases only its own lock", () => {
+    const repo = "/repo/own";
+    const first = acquireRepoLock(state, repo);
+    expect(first).toBeDefined();
+    rmSync(lockPath(repo), { force: true });
+    const second = acquireRepoLock(state, repo);
+    expect(second).toBeDefined();
+    first?.release();
+    expect(existsSync(lockPath(repo))).toBe(true);
+    second?.release();
+    expect(existsSync(lockPath(repo))).toBe(false);
+  });
+
   it("clears a stale guard file left by a dead taker", () => {
     const repo = "/repo/guard";
     mkdirSync(join(state, "council-locks"), { recursive: true });

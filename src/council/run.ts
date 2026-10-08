@@ -129,7 +129,7 @@ async function runMember(member: CouncilMemberName, context: MemberContext): Pro
     if (context.signal?.aborted || councilInterruptedSince(context.startedAt)) {
       outcome = result(member, "failed", startedAt, "cancelled");
     } else {
-      const proc = context.spawn(command.argv, { cwd: worktree.path, stdin: command.stdin, lifetimeMs: context.timeoutMs + LIFETIME_MARGIN_MS, timeoutCommand: context.timeoutCommand });
+      const proc = context.spawn(command.argv, { cwd: worktree.path, stdin: command.stdin, lifetimeMs: context.timeoutMs + LIFETIME_MARGIN_MS, timeoutCommand: context.timeoutCommand, repoRoots: [context.patch.repoRoot] });
       const waited = await waitFor(proc, context.timeoutMs, context.signal);
       if (waited.kind === "timeout") outcome = result(member, "failed", startedAt, `timed out after ${describeDuration(context.timeoutMs)}`);
       else if (waited.kind === "aborted") outcome = result(member, "failed", startedAt, "cancelled");

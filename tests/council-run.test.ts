@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { runCouncil } from "../src/council/run.js";
+import { councilScope } from "../src/council/scope.js";
+import { defaultSpawn } from "../src/council/spawn.js";
 import { fakeSpawn, git, gitRaw, makeRepo, ok, writeIn } from "./council-helpers.js";
 import { createTestStateDir } from "./helpers.js";
 
@@ -338,6 +340,62 @@ describe("runCouncil limits", () => {
     } finally {
       process.env.GIT_CONFIG_GLOBAL = saved;
     }
+  });
+});
+
+describe("runCouncil interrupts and timers", () => {
+  it("reports a signal interrupt as cancelled", async () => {
+    const noop = () => undefined;
+    const others = process.listeners("SIGTERM");
+    process.removeAllListeners("SIGTERM");
+    process.on("SIGTERM", noop);
+    try {
+      const fake = fakeSpawn({ codex: () => "hang", kimi: () => "hang" });
+      let started = 0;
+      const spawn: typeof fake.spawn = (argv, options) => {
+        if (argv[1] === "--version") return fake.spawn(argv, options);
+        started += 1;
+        return defaultSpawn(["sleep", "30"], options);
+      };
+      const pending = runCouncil({ cwd: repo, spawn, stateDir: state.stateDir, members: ["codex", "kimi"] });
+      await until(() => started === 2);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      process.kill(process.pid, "SIGTERM");
+      const run = await pending;
+      expect(run.ran).toBe(false);
+      expect(run.note).toBe("cancelled");
+      expect(run.members.map((entry) => [entry.status, entry.reason])).toEqual([["skipped", "cancelled"], ["skipped", "cancelled"]]);
+      await until(() => !councilScope.stopped);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      process.off("SIGTERM", noop);
+      for (const listener of others) process.on("SIGTERM", listener as NodeJS.SignalsListener);
+    }
+  });
+
+  it("clears the settle timer after a timeout", async () => {
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    const settleTimers = new Set<unknown>();
+    const cleared = new Set<unknown>();
+    globalThis.setTimeout = ((handler: unknown, delay?: number, ...rest: unknown[]) => {
+      const timer = (realSet as any)(handler, delay, ...rest);
+      if (delay === 4000) settleTimers.add(timer);
+      return timer;
+    }) as unknown as typeof setTimeout;
+    globalThis.clearTimeout = ((timer: unknown) => {
+      cleared.add(timer);
+      return (realClear as any)(timer);
+    }) as unknown as typeof clearTimeout;
+    try {
+      const fake = fakeSpawn({ codex: () => "hang", kimi: () => ok("NO_FINDINGS") });
+      await runCouncil({ cwd: repo, spawn: fake.spawn, stateDir: state.stateDir, members: ["codex", "kimi"], timeoutMs: 300 });
+    } finally {
+      globalThis.setTimeout = realSet;
+      globalThis.clearTimeout = realClear;
+    }
+    expect(settleTimers.size).toBeGreaterThan(0);
+    for (const timer of settleTimers) expect(cleared.has(timer)).toBe(true);
   });
 });
 

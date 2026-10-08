@@ -1,7 +1,7 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
-import { cleanEnv } from "./env.js";
+import { scrubbedEnv } from "./env.js";
 import { trackChild } from "./scope.js";
 
 export interface SpawnOptions {
@@ -10,6 +10,7 @@ export interface SpawnOptions {
   maxBytes?: number;
   killGraceMs?: number;
   lifetimeMs?: number;
+  repoRoots?: string[];
   timeoutCommand?: string | null;
 }
 
@@ -76,7 +77,7 @@ export const defaultSpawn: SpawnFn = (argv, options) => {
   const grace = options.killGraceMs ?? KILL_GRACE_MS;
   const child = nodeSpawn(bin, args, {
     cwd: options.cwd,
-    env: cleanEnv(),
+    env: scrubbedEnv(options.cwd, options.repoRoots).env,
     detached: true,
     stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
@@ -125,6 +126,10 @@ export const defaultSpawn: SpawnFn = (argv, options) => {
       signalGroup("SIGTERM");
       setTimeout(() => {
         signalGroup("SIGKILL");
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        child.stdin?.destroy();
+        child.unref();
         untrack();
       }, grace);
     },
