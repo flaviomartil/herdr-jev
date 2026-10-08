@@ -1,0 +1,11 @@
+exit: 0
+--- stdout ---
+The new greeting function dereferences a nullable lookup result without checking it. No files or Git state were modified.
+
+Review comment:
+
+- [P2] Handle a missing user before accessing its name — /tmp/review/src/user.ts:18-18
+  When `users` is empty or `name` has no match, `findUser` returns `null`, so `greet` throws a TypeError instead of returning a string. Guard the null result before accessing `user.name` and add a test for an unmatched name.
+
+--- stderr ---
+

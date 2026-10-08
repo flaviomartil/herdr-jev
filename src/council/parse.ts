@@ -20,6 +20,8 @@ const MAX_NOTE = 600;
 const CODEX_HEAD = /^- (?:\[[ x]\] )?(.+) — (.+):(\d+)(?:-\d+)?$/u;
 const PRIORITY = /^\[P(\d)\]\s*/u;
 const NO_FINDINGS_LINE = new RegExp(`^${NO_FINDINGS}\\.?$`, "u");
+const BULLET = /^[•*-]\s+(?=\S)/u;
+const ERROR_LINE = /^error\b/iu;
 const ENVELOPE_TEXT_KEYS = ["result", "response", "text", "output", "content", "message"] as const;
 const ENVELOPE_ERROR_KEYS = ["error", "error_message", "errorMessage"] as const;
 
@@ -103,6 +105,14 @@ function lastLineOf(text: string): string {
   );
 }
 
+function failureLine(stderr: string, stdout: string): string {
+  const errors = stderr
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => ERROR_LINE.test(line));
+  return errors.at(-1) ?? (lastLineOf(stderr) || lastLineOf(stdout) || "no output");
+}
+
 function codexFindings(stdout: string, roots: readonly string[]): CouncilFinding[] {
   const found: CouncilFinding[] = [];
   for (const block of stdout.split(/\n(?=- )/u)) {
@@ -152,10 +162,10 @@ function structuredText(member: CouncilMemberName, text: string, roots: readonly
     const list = findingsArray(whole.value);
     if (list) return listFindings(member, list, roots);
   }
-  const lines = trimmed.split("\n").map((line) => line.trim());
+  const lines = trimmed.split("\n").map((line) => line.trim().replace(BULLET, ""));
   const candidates = lines.filter((line) => line.startsWith("{"));
   if (candidates.length === 0) {
-    if (NO_FINDINGS_LINE.test(lastLineOf(trimmed))) return { findings: [] };
+    if (NO_FINDINGS_LINE.test(lastLineOf(lines.join("\n")))) return { findings: [] };
     if (strict) return { error: `${member}: output is neither findings nor ${NO_FINDINGS}` };
     return { findings: [proseFinding(member, trimmed)] };
   }
@@ -168,14 +178,14 @@ function structuredText(member: CouncilMemberName, text: string, roots: readonly
     else rejected += 1;
   }
   if (findings.length === 0) {
-    if (NO_FINDINGS_LINE.test(lastLineOf(trimmed))) return { findings: [] };
+    if (NO_FINDINGS_LINE.test(lastLineOf(lines.join("\n")))) return { findings: [] };
     return { error: `${member}: malformed output, ${rejected} unreadable JSON line${rejected === 1 ? "" : "s"}` };
   }
   return rejected > 0 ? { findings, note: `${rejected} unreadable line${rejected === 1 ? "" : "s"} skipped` } : { findings };
 }
 
 function envelopeError(value: Record<string, unknown>): string | undefined {
-  if (value.is_error === true || value.isError === true) {
+  if (value.is_error === true || value.isError === true || (typeof value.status === "string" && value.status.toLowerCase() === "error")) {
     for (const key of [...ENVELOPE_TEXT_KEYS, ...ENVELOPE_ERROR_KEYS]) {
       const text = textField(value, key);
       if (text) return text;
@@ -201,6 +211,8 @@ function envelopeResult(member: CouncilMemberName, stdout: string, roots: readon
   if (value && typeof value === "object") {
     const failure = envelopeError(value as Record<string, unknown>);
     if (failure) return { error: `${member}: ${failure}`.slice(0, 400) };
+    const structured = findingsArray((value as Record<string, unknown>).structured_output);
+    if (structured) return listFindings(member, structured, roots);
     for (const key of ENVELOPE_TEXT_KEYS) {
       const raw = (value as Record<string, unknown>)[key];
       if (raw && typeof raw === "object") {
@@ -216,7 +228,7 @@ function envelopeResult(member: CouncilMemberName, stdout: string, roots: readon
 }
 
 export function parseMemberOutput(member: CouncilMemberName, run: MemberOutput, roots: readonly string[], options: ParseOptions = {}): ParseResult {
-  if (run.exitCode !== 0) return { error: `${member}: exit ${run.exitCode}: ${lastLineOf(run.stderr) || lastLineOf(run.stdout) || "no output"}`.slice(0, 400) };
+  if (run.exitCode !== 0) return { error: `${member}: exit ${run.exitCode}: ${failureLine(run.stderr, run.stdout)}`.slice(0, 400) };
   if (member === "codex") {
     const structured = codexFindings(run.stdout, roots);
     if (structured.length > 0) return { findings: structured };

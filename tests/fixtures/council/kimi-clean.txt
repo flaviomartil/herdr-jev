@@ -1,0 +1,11 @@
+exit: 0
+--- stdout ---
+• UserPromptSubmit hook
+
+  [caveman] ULTRA: sem narrar progresso; ação termina em 1 linha curta: deu certo ou falhou + bloqueio. Evidências internas. Detalhe só se solicitado.
+
+• NO_FINDINGS
+
+
+--- stderr ---
+

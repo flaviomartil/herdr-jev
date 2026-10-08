@@ -1,0 +1,6 @@
+exit: 0
+--- stdout ---
+A única alteração é de `sample` para `sample project` no README.md; nenhum defeito identificado.
+
+--- stderr ---
+
