@@ -134,19 +134,19 @@ export type ReportFacts = {
   note: string | undefined
 }
 
-export function reportFacts(report: string): ReportFacts {
-  const signature = SIGNATURE.exec(report)
+export function reportFacts(trusted: string, report: string): ReportFacts {
+  const signature = SIGNATURE.exec(trusted)
   const said = signature?.[1]?.trim()
   const model = said === undefined || said.startsWith('requested ') || said === 'unknown model' ? null : said
-  const patch = PATCH_LINE.exec(report)?.[1]
-  const block = STAT_BLOCK.exec(report)?.[1]
+  const patch = PATCH_LINE.exec(trusted)?.[1]
+  const block = STAT_BLOCK.exec(trusted)?.[1]
   const lines = (block ?? '')
     .split('\n')
     .map(cleanLine)
     .filter(line => line.length > 0)
   const total = lines.find(line => STAT_TOTAL.test(line))
-  const stat = report.includes('Codex made no changes') ? 'no changes' : (total ?? lines[lines.length - 1])
-  const kept = KEPT_COPY.exec(report)?.[1]
+  const stat = trusted.includes('Codex made no changes') ? 'no changes' : (total ?? lines[lines.length - 1])
+  const kept = KEPT_COPY.exec(trusted)?.[1]
   const first = report
     .split('\n')
     .map(cleanLine)
@@ -179,7 +179,7 @@ export function deriveExternal(
     return { ...base, model, status: 'running', lastLine }
   }
   if (!state.used) return null
-  const facts = reportFacts(state.lastReport)
+  const facts = reportFacts(state.trusted ?? '', state.lastReport)
   const finished: HarnessExternalRow = {
     ...base,
     model: facts.isDone ? facts.model : base.model,

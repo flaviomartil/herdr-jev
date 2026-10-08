@@ -1542,9 +1542,9 @@ export const register: Register = (on, options) => {
     return { result: text }
   }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_run: failed, see the debug log.' }))
 
-  on('tool.call', { tool: TOOL_STATUS }, async $ => {
+  on('tool.call', { tool: TOOL_STATUS }, async ($, e) => {
     const result = await statusText($)
-    const fresh = await takeReviewerRule($, ruled)
+    const fresh = e.agentId === undefined && (await takeReviewerRule($, ruled))
     return fresh ? { result, context: [REVIEWER_RULE] } : { result }
   }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_status: failed, see the debug log.' }))
 
