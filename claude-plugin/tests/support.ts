@@ -47,6 +47,8 @@ export type Seen = {
   reviewExit: number
   reviewBody: Record<string, unknown>
   reviewGate: Promise<void> | null
+  statusBody: unknown
+  failStatus: boolean
   failRegister: boolean
   descriptions: Map<string, string>
   gitDiff: string
@@ -130,7 +132,7 @@ export function pendingReport(): Record<string, unknown> {
 
 export function wire(on: On, extra: { model?: string; session?: string; store?: Record<string, unknown> } = {}): Seen {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock }
+  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, statusBody: { status: 'ready' }, failStatus: false, failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock }
 
   on('store.get', (_$, e) => ({ value: seen.saved.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -230,6 +232,10 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     if (e.argv[0] === 'git') {
       if (seen.failGit) throw new Error('git down')
       return done(0, e.argv.includes('--stat') ? seen.gitStat : seen.gitDiff)
+    }
+    if (e.argv[0] === 'ai-harness' && sub === 'review-status') {
+      if (seen.failStatus) throw new Error('status down')
+      return done(0, JSON.stringify(seen.statusBody))
     }
     if (sub === 'review') {
       if (seen.reviewGate !== null) await seen.reviewGate

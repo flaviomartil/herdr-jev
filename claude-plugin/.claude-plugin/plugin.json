@@ -51,6 +51,12 @@
       "title": "Refresh the harness review automatically",
       "description": "Run the herdr-jev review once when every task is done or approved and at least one is approved.",
       "default": false
+    },
+    "prGateAsk": {
+      "type": "boolean",
+      "title": "Ask before opening a PR without a ready review",
+      "description": "Off by default: the PR command always runs and the model is told the review status. On: the engine asks the person to confirm when the status is known and not ready.",
+      "default": false
     }
   }
 }

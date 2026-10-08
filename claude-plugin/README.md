@@ -35,6 +35,15 @@ Falhas: se o `skill-select` falha, o escopo fica `partial` e nenhuma skill é es
 
 Limite conhecido: o runbook não é detectado sozinho. O `ai-harness skill-select` roda sem `--runbook` (aceita) e só usa `runbook` quando configurado, então as CLIs que dependem de runbook só aparecem com ele.
 
+## PR gate
+
+Quando um Bash vai criar ou atualizar um pull request, o mod anexa o status do review do harness ao resultado da ferramenta. Nunca nega a chamada.
+
+- Detecta o que o shell de fato executaria: `gh pr create|new|edit|ready` (com `-R/--repo`), `az repos pr create|update`. Corpo de heredoc, texto entre aspas, `echo`, `--help`/`-h`, `--dry-run` e `gh pr ready --undo` não contam; `git push` não é comando de PR. Bitbucket fica de fora: não existe a CLI `bb` nesta máquina (o fluxo usa a API).
+- Status: `ai-harness review-status --client claude --session <id> --cwd <pasta>`, com prazo de 5 s. A pasta é o alvo do `cd <pasta> &&` inicial do comando, senão a pasta da sessão. Qualquer falha vira `unknown` e o comando roda mesmo assim.
+- Contexto só para o modelo: `ready` acrescenta `Harness review status: ready.`; qualquer outro status avisa que o PR rodou sem review pronto e que `herdr-jev review` produz um.
+- `prGateAsk` (padrão `false`): com `true`, quando o status é conhecido e não é `ready`, o hook `tool.check` devolve `ask` e o motor pergunta à pessoa; a confirmação segue o modo de permissão da sessão. Status `ready` ou `unknown` nunca pergunta, e um `deny` do motor nunca é trocado. Não existe modo `deny`.
+
 ## Créditos
 
 Layouts e técnicas de render inspirados, com trechos adaptados, em projetos MIT: muellerei/task-line (linha e barra da banda), zycck/claude-mods plan-progress (linhas de agente, dobras, glifos), whats-agent-doing (cartão expansível e linhas de worker), human-in-the-loop (caixa `Needs you` e `☐`), Nongfsq/frank-claude-cockpit (barra proporcional, espaçador `flexGrow`, linha clicável, seções do painel Sessions) e shimo4228/harness-scope (mecanismo do Scope).
