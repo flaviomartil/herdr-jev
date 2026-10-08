@@ -7,6 +7,7 @@ export interface JevLike {
   ask(
     state: unknown,
     questions: Record<string, JevQuestion>,
+    signal?: AbortSignal,
   ): Promise<{ answers: Record<string, unknown> }>;
 }
 
@@ -31,6 +32,7 @@ export interface CouncilItem {
   text: string;
   severity: CouncilFinding["severity"];
   real?: number;
+  contradictionChecked?: boolean;
   findings: CouncilFinding[];
 }
 
