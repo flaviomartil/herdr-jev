@@ -24,8 +24,8 @@ const ADVERB =
 const STOP_MARKS = '[.,;!)\\]*_✅✔]'
 const JOINERS = '\\s+(?:and|but|e|mas)(?![\\p{L}\\p{N}_])'
 const LATER =
-  '\\s+(?:after|depois|(?:with(?:out)?|com|sem)\\s+(?:(?:no|zero|nenhum)\\s+)?(?:errors?|erros?|warnings?|failures?))(?![\\p{L}\\p{N}_])'
-const END = `(?=\\s*(?:[:]|${STOP_MARKS}|[—–]|-\\s|\\(\\d|$)|${JOINERS}|${LATER})`
+  '\\s+(?:after|depois|(?:with(?:out)?|com|sem)\\s+(?:(?:no|zero|0|any|nenhum|nenhuma|qualquer)\\s+)?(?:[\\p{L}-]+\\s+)?(?:errors?|erros?|warnings?|failures?|falhas?))(?![\\p{L}\\p{N}_])'
+const END = `(?=\\s*(?:[:]|${STOP_MARKS}|[—–]|-\\s|\\((?:\\d|(?:no|zero|sem|nenhum)(?![\\p{L}\\p{N}_]))|$)|${JOINERS}|${LATER})`
 const END_V = `(?=\\s*(?:${STOP_MARKS}|$)|${JOINERS})`
 const TAIL = `${LINKS}\\s+${PASSED}${ADVERB}${END}`
 
@@ -99,7 +99,7 @@ const LABELLED = pattern(
 )
 
 const MIXED = pattern(
-  `(?<!${LEFT}(?:no|0|zero|without|sem|nenhum|nenhuma)\\s+)${LEFT}(?:fails?|failed|failing|failures?|errors?|falh(?:a|as|am|ou|aram)|erros?)${RIGHT}`,
+  `(?<!${LEFT}(?:no|0|zero|without|none|nothing|not|never|sem|nenhum|nenhuma|nada|n[aã]o)(?:\\s+[\\p{L}\\p{N}_-]+){0,2}\\s+)${LEFT}(?:fails?|failed|falh(?:a|am|ou|aram)|(?:[1-9]\\d*|one|two|three|four|five|several|some|many|um|uma|dois|duas|tr[eê]s|alguns|v[aá]rios)\\s+(?:[\\p{L}_-]+\\s+)?(?:errors?|failures?|erros?|falhas?))${RIGHT}`,
 )
 
 const NEAR_WORDS = 4
@@ -143,7 +143,7 @@ export function detectClaims(answer: string): Claim[] {
       const match = regex.exec(sentence)
       if (match === null) continue
       if (REPORTED.test(sentence.slice(0, match.index))) continue
-      if (MIXED.test(sentence.slice(match.index + match[0].length))) continue
+      if (MIXED.test(sentence.slice(match.index + match[0].length)) || MIXED.test(sentence.slice(0, match.index))) continue
       const clause = clauseBefore(sentence, match.index)
       if (CONDITION.test(`${clause} ${match[0]}`)) continue
       if (NEGATION.test(`${nearBefore(clause)} ${match[0]}`)) continue
@@ -158,15 +158,71 @@ const SEPARATOR = /(\|\||&&|\|&|\||;|\n)/
 const stripQuoted = (command: string) =>
   command.replace(/'[^']*'|"[^"]*"/g, '""').replace(/(^|\s)#.*$/gm, '$1')
 
-const PREFIX =
-  /^(?:[({!]+\s*|exec\s+|docker\s+exec\s+(?:-\S+\s+)*\S+\s+|(?:if|then|do|while|until)\s+|rtk(?:\s+-u)?(?:\s+(?:test|err|proxy|summary))?\s+|(?:sudo|time|nice)\s+|command\s+(?!-[vV])|timeout\s+(?:-\S+\s+)*\S+\s+|env\s+(?:-\S+\s+)*|\w+=\S*\s+|docker(?:\s+compose|-compose)\s+(?:exec|run)\s+(?:-\S+\s+)*\S+\s+)/
+const WORD_PREFIX = /^(?:exec|time|command(?!\s+-[vV])|if|then|do|while|until|else|rtk(?:\s+-u)?(?:\s+(?:test|err|proxy|summary))?)\s+/
+const GROUPING = /^[({!]+\s*/
+const ASSIGN_SUBST = /^\w+=(?:\$\(|`)\s*/
+const ASSIGN = /^\w+=\S*\s+/
+
+type Wrapper = { flagsWithValue: readonly string[]; operands: number }
+
+const WRAPPERS = new Map<string, Wrapper>(Object.entries({
+  sudo: { flagsWithValue: ['-u', '-g', '-C', '-h', '-p', '-r', '-t', '-U', '-D', '-R', '-T', '--user', '--group'], operands: 0 },
+  nice: { flagsWithValue: ['-n', '--adjustment'], operands: 0 },
+  corepack: { flagsWithValue: [], operands: 0 },
+  timeout: { flagsWithValue: ['-s', '-k', '--signal', '--kill-after'], operands: 1 },
+  env: { flagsWithValue: ['-u', '-C', '-S', '--unset', '--chdir', '--split-string'], operands: 0 },
+} satisfies Record<string, Wrapper>))
+
+const COMPOSE_FLAGS = ['-e', '-v', '-u', '-w', '-p', '-l', '--env', '--volume', '--user', '--workdir', '--name', '--entrypoint', '--publish', '--label', '--cap-add', '--cap-drop', '--index', '--env-from-file', '--pull']
+const COMPOSE_GLOBAL_FLAGS = ['-f', '-p', '--file', '--project-name', '--project-directory', '--profile', '--env-file', '--ansi', '--parallel']
+
+function dropFlags(tokens: string[], flagsWithValue: readonly string[]): string[] {
+  let index = 0
+  while (index < tokens.length) {
+    const token = tokens[index] ?? ''
+    if (!token.startsWith('-') || token === '-') break
+    index += flagsWithValue.includes(token) ? 2 : 1
+  }
+  return tokens.slice(index)
+}
+
+function unwrapOnce(text: string): string {
+  const grouping = GROUPING.exec(text)
+  if (grouping !== null) return text.slice(grouping[0].length)
+  const substitution = ASSIGN_SUBST.exec(text)
+  if (substitution !== null) return text.slice(substitution[0].length)
+  const word = WORD_PREFIX.exec(text)
+  if (word !== null) return text.slice(word[0].length)
+  const assign = ASSIGN.exec(text)
+  if (assign !== null) return text.slice(assign[0].length)
+  const tokens = text.split(/\s+/).filter(token => token.length > 0)
+  const head = (tokens[0] ?? '').replace(/^.*\//, '')
+  const rest = tokens.slice(1)
+  const wrapper = WRAPPERS.get(head)
+  if (wrapper !== undefined) {
+    const after = dropFlags(rest, wrapper.flagsWithValue)
+    return after.slice(wrapper.operands).join(' ')
+  }
+  if (head === 'docker' || head === 'docker-compose') {
+    let args = rest
+    if (head === 'docker') {
+      if (args[0] === 'compose') args = args.slice(1)
+      else if (args[0] === 'exec') return dropFlags(args.slice(1), COMPOSE_FLAGS).slice(1).join(' ')
+      else return text
+    }
+    args = dropFlags(args, COMPOSE_GLOBAL_FLAGS)
+    if (args[0] !== 'exec' && args[0] !== 'run') return text
+    return dropFlags(args.slice(1), COMPOSE_FLAGS).slice(1).join(' ')
+  }
+  return text
+}
 
 type Segment = { program: string; args: string[]; text: string }
 
 function segmentOf(raw: string): Segment {
-  let text = raw.trim().replace(/[)}\s]+$/, '')
+  let text = raw.trim().replace(/[)}`\s]+$/, '')
   for (let round = 0; round < 32; round += 1) {
-    const next = text.replace(PREFIX, '')
+    const next = unwrapOnce(text).trim()
     if (next === text) break
     text = next
   }
@@ -175,7 +231,20 @@ function segmentOf(raw: string): Segment {
   return { program, args: tokens.slice(1), text }
 }
 
-const HEREDOC = /<<-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([\w-]+))/
+const SHELL_C =
+  /(?<=(?:^|[;&|({\n]|\b(?:sudo|exec|time|then|do|else)\s)\s*)(?:ba|z|da)?sh\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*c\s+(?:'([^']*)'|"([^"]*)")/g
+
+function unwrapShells(command: string): string {
+  let text = command
+  for (let round = 0; round < 4; round += 1) {
+    const next = text.replace(SHELL_C, (_whole, single: string | undefined, double: string | undefined) => single ?? double ?? '')
+    if (next === text) break
+    text = next
+  }
+  return text
+}
+
+const HEREDOC = /(?<!<)<<(?!<)-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|([A-Za-z_][\w-]*))/
 
 function dropHeredocs(command: string): string {
   let text = command
@@ -197,7 +266,7 @@ function dropHeredocs(command: string): string {
 }
 
 function segmentsOf(command: string): Segment[] {
-  return stripQuoted(dropHeredocs(command))
+  return stripQuoted(unwrapShells(dropHeredocs(command)))
     .split(SEPARATOR)
     .filter((_, index) => index % 2 === 0)
     .map(segmentOf)
@@ -303,7 +372,7 @@ const OFF_TREE = /^(?:\/tmp|\/var\/tmp|\/dev)(?:\/|$)/
 const isOffTree = (path: string) => OFF_TREE.test(path)
 
 const REDIRECT = /(?<![=\-<>])(?:\d+|&)?>>?\s*(&?)([^\s;&|<>()]*)/g
-const IN_PLACE = /^-[a-zA-Z]*i[\w.~-]*$|^--in-place(?:=.*)?$/
+const IN_PLACE = /^-[a-zA-Z]*i[\w.~-]*(?:"")?$|^--in-place(?:=.*)?$/
 
 function gitMutates(args: readonly string[], cwd: string | undefined): boolean {
   const git = gitCommand(args)
@@ -463,14 +532,22 @@ function debug($: EngineInterface, label: string, error: unknown): void {
 }
 
 function isInside(path: string, cwd: string): boolean {
-  if (path.includes('/.claude/worktrees/')) return false
-  if (!path.startsWith('/')) return true
+  if (!path.startsWith('/')) return !`/${path}`.includes('/.claude/worktrees/')
   const root = cwd.endsWith('/') ? cwd : `${cwd}/`
-  return path === cwd || path.startsWith(root)
+  if (path !== cwd && !path.startsWith(root)) return false
+  return !path.slice(root.length - 1).includes('/.claude/worktrees/')
 }
 
 function isTracked(path: string, cwd: string): boolean {
   return !/\.md$/i.test(path) && isInside(path, cwd)
+}
+
+const AIMED_ELSEWHERE = /(?:^|\s)-C(?:\s|$)/
+
+async function mutates($: EngineInterface, command: string, isReadOnly: boolean): Promise<boolean> {
+  if (!isMutatingCommand(command, isReadOnly)) return false
+  if (!AIMED_ELSEWHERE.test(command)) return true
+  return isMutatingCommand(command, isReadOnly, await $.session.cwd())
 }
 
 type RecordInput = { tool: string; agentId?: string } & Record<string, unknown>
@@ -481,9 +558,9 @@ async function record(
   ran: { isError?: boolean; isReadOnly?: boolean; result?: unknown },
 ): Promise<void> {
   const agentId = typeof input.agentId === 'string' ? input.agentId : undefined
-  const cwd = await $.session.cwd()
   if (EDIT_TOOLS.has(input.tool)) {
     if (ran.isError === true) return
+    const cwd = await $.session.cwd()
     const path = String(input.file_path ?? input.notebook_path ?? '')
     if (!isTracked(path, cwd)) return
     await update($, logAtom, entries => appendEntry(entries ?? [], { type: 'edit', path, ...(agentId === undefined ? {} : { agentId }) }))
@@ -496,7 +573,7 @@ async function record(
   const isOk = ran.isError !== true && !isInterrupted
   let checks = classifyCommand(command)
   if (!isOk && checks.length > 1) checks = []
-  const isMutating = agentId === undefined && isMutatingCommand(command, ran.isReadOnly === true, cwd)
+  const isMutating = agentId === undefined && (await mutates($, command, ran.isReadOnly === true))
   if (checks.length === 0 && !isMutating) return
   const short = shorten(command, COMMAND_LIMIT)
   await update($, logAtom, entries => {

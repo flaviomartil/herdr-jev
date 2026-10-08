@@ -108,6 +108,75 @@ test('claims keep their recall with trailing adverbs, figures and dashes', () =>
   }
 })
 
+const CLEAN_WITH_FAILURE_WORDS = [
+  'All tests pass. No errors.',
+  'All tests pass, no failures.',
+  'All tests pass, no errors.',
+  'All tests pass with 0 failures.',
+  'All tests pass, zero failures.',
+  'All tests pass without errors.',
+  'All tests pass without any errors.',
+  'All tests pass (0 failed).',
+  'All tests pass, 0 errors.',
+  'Tests pass and no errors remain.',
+  'Build passes, no errors or warnings.',
+  'All tests pass, none failed.',
+  'All tests pass and nothing else failed.',
+  'All tests pass, none of them failed.',
+  'Os testes passaram, nenhum dos casos falhou.',
+  'All tests pass and nothing fails.',
+  'All tests pass; there are no test failures.',
+  'All tests pass, no more failures.',
+  'All tests pass and the error is fixed.',
+  'All tests pass and the error is gone.',
+  'All tests pass, including the new error-handling tests.',
+  'All tests pass, including the failure cases.',
+  'All tests pass; the earlier failure was a typo.',
+  'Typecheck is clean, no type errors.',
+  'Typecheck passes with no type errors.',
+  'Lint is clean: no errors, no warnings.',
+  'All tests pass, and the build has no errors.',
+  'Tests pass (no failures, 2 skipped).',
+  'Os testes passaram, nenhum erro.',
+  'Os testes passaram, sem falhas.',
+  'Os testes passaram sem nenhum erro.',
+  'Os testes passaram e nenhum falhou.',
+  'Typecheck limpo, zero erros.',
+  'Typecheck limpo, sem erros de tipo.',
+  'Os testes passaram, nada falhou.',
+  'Todos os testes passaram e o erro foi corrigido.',
+  'Os testes passaram, n\u00e3o houve falhas.',
+  'Todos os testes passaram, incluindo os casos de erro.',
+  'Os testes passaram e o erro sumiu.',
+]
+
+const HONEST_MIXED_REPORTS = [
+  '142 tests pass, 1 fails.',
+  'The unit tests pass, but the e2e suite fails.',
+  'The tests pass; the typecheck still reports two errors.',
+  'Tests pass; the commit failed because nothing was staged.',
+  'Tests pass locally but CI fails.',
+  'Os testes passam, mas o e2e falhou.',
+  'O build est\u00e1 ok, mas os testes falharam.',
+  'The e2e suite fails but the unit tests pass.',
+  'The typecheck fails, but the tests pass.',
+  '1 test fails, but the other 142 tests pass.',
+  'Typecheck reports two errors; the tests pass.',
+  'CI fails on lint, but the tests pass.',
+  'O typecheck falhou, mas os testes passaram.',
+  'Um teste falhou; os outros testes passaram.',
+  'The build fails, although the tests pass.',
+  'Two specs still fail and the unit tests pass.',
+]
+
+test('a clean claim keeps its recall when it mentions a failure word', () => {
+  for (const text of CLEAN_WITH_FAILURE_WORDS) expect(kinds(text).length, text).toBeGreaterThan(0)
+})
+
+test('an honest mixed report is not a claim, whichever side the failure is on', () => {
+  for (const text of HONEST_MIXED_REPORTS) expect(kinds(text), text).toEqual([])
+})
+
 test('plans, expectations and relayed reports are not claims', () => {
   for (const text of [
     "I'll commit when the tests pass.",
@@ -206,8 +275,56 @@ test('a runner behind a wrapper is still evidence', () => {
     ['{ bun test; } 2>&1 | tail -3', 'test'],
     ['exec bun test', 'test'],
     ['time nice timeout 60 sudo pnpm -r typecheck', 'lint'],
+    ['timeout -s KILL 300 bun test', 'test'],
+    ['timeout --foreground -k 5 300 bun test', 'test'],
+    ['timeout --signal=KILL --kill-after=5 300 bun test', 'test'],
+    ['env -u RECAST_DB_URL pnpm test', 'test'],
+    ['env -u A -u B -C /repo FOO=1 pnpm test', 'test'],
+    ['nice -n 10 bun test', 'test'],
+    ['nice -10 bun test', 'test'],
+    ['sudo -u app pnpm test', 'test'],
+    ['sudo -E -u app -g staff pnpm test', 'test'],
+    ['docker compose -f docker-compose.test.yml run --rm api pnpm test', 'test'],
+    ['docker compose --profile ci -p demo run -e K=V svc pnpm test', 'test'],
+    ['docker compose run --rm -e CI=1 -v /a:/b worker pnpm test', 'test'],
+    ['docker compose exec -T -u app api pnpm test', 'test'],
+    ['docker-compose -f f.yml exec api pnpm test', 'test'],
+    ['docker exec -e K=V -w /app api pnpm test', 'test'],
+    ['out=$(bun test 2>&1)', 'test'],
+    ['out=$(bun test 2>&1); echo "$out" | tail -5', 'test'],
+    ['if ! out=$(pnpm test 2>&1); then echo "$out"; fi', 'test'],
+    ['out=`bun test`', 'test'],
+    ['bash -lc "pnpm test"', 'test'],
+    ["zsh -c 'bun test'", 'test'],
+    ['sh -c "cd /repo && pnpm test"', 'test'],
+    ['bash -x -c "bun run typecheck"', 'lint'],
+    ['sudo bash -c "pnpm test"', 'test'],
+    ['corepack pnpm test', 'test'],
   ]
   for (const [command, check] of wrapped) expect(classifyCommand(command), command).toEqual([check])
+})
+
+test('wrappers around a command that only mentions a runner are not evidence', () => {
+  for (const command of [
+    'timeout 5 echo pnpm test',
+    'timeout -s KILL 5 grep -rn jest src',
+    'nice -n 10 cat tests/pytest.ini',
+    'env -u X printenv | grep pytest',
+    'env | grep test',
+    'sudo -u app cat /etc/hosts',
+    'docker compose -f f.yml run --rm api cat pytest.ini',
+    'docker compose exec -T api ls node_modules/.bin/jest',
+    'docker compose logs api | grep pytest',
+    'docker exec -e K=V api env | grep TEST',
+    'out=$(cat package.json)',
+    'out=$(grep -c test package.json); echo "$out"',
+    'bash -lc "echo bun test"',
+    'bash scripts/ci.sh',
+    'bash -c "grep -rn vitest src"',
+    'echo bash -c "bun test"',
+  ]) {
+    expect(classifyCommand(command), command).toEqual([])
+  }
 })
 
 test('runners of the usual stacks are evidence', () => {
@@ -310,6 +427,8 @@ test('Bash commands that write files in the tree are mutating', () => {
 test('sed in place with a backup suffix is mutating', () => {
   expect(isMutatingCommand("sed -i.bak 's/a/b/' src/a.ts")).toBe(true)
   expect(isMutatingCommand("perl -pi.orig -e 's/a/b/' src/a.ts")).toBe(true)
+  expect(isMutatingCommand('sed -i"" s/a/b/ src/a.ts')).toBe(true)
+  expect(isMutatingCommand("sed -i '' s/a/b/ src/a.ts")).toBe(true)
   expect(isMutatingCommand("sed -n '1,5p' src/a.ts")).toBe(false)
 })
 
@@ -331,6 +450,23 @@ test('heredoc bodies are text, not commands', () => {
   expect(classifyCommand("cat > /tmp/x <<'EOF'\nbun test\nEOF")).toEqual([])
   expect(classifyCommand("cat > /tmp/x <<'EOF'\nx\nEOF\nbun test")).toEqual(['test'])
   expect(isMutatingCommand("cat <<'EOF'\nunterminated > file")).toBe(false)
+})
+
+test('here-strings and shifts are not heredocs', () => {
+  expect(classifyCommand('sha256sum -c <<< "$sum" && pnpm test')).toEqual(['test'])
+  expect(classifyCommand('jq -r .version <<< "$pkg"\nbun test')).toEqual(['test'])
+  expect(classifyCommand('wc -l <<< "$out"; bun run typecheck')).toEqual(['lint'])
+  expect(classifyCommand('echo $((1 << 3)) && bun test')).toEqual(['test'])
+  expect(classifyCommand('echo $((1 <<3)) && bun test')).toEqual(['test'])
+  expect(classifyCommand("python3 - <<'PY'\nprint(1)\nPY\nbun test")).toEqual(['test'])
+  expect(isMutatingCommand('grep -q x <<< "$out" > out.txt')).toBe(true)
+  expect(isMutatingCommand('grep -q x <<< "$out"')).toBe(false)
+})
+
+test('a write behind a shell -c is mutating', () => {
+  expect(isMutatingCommand('bash -c "rm src/a.ts"')).toBe(true)
+  expect(isMutatingCommand("sh -lc 'echo x > src/a.ts'")).toBe(true)
+  expect(isMutatingCommand('bash -c "ls src"')).toBe(false)
 })
 
 test('read-only, scratch and branch-only Bash commands are not mutating', () => {
@@ -816,6 +952,109 @@ test('/clear drops the warning and the log', OPTIONS, async ($, on) => {
   expect(await warnings($)).toEqual([])
   await answer($, 'All tests pass.')
   expect(await warnings($)).toEqual([])
+})
+
+const hostBox = globalThis as { __cwd?: string; __cwdCalls?: number }
+const WORKTREE = `${CWD}/.claude/worktrees/feat-x`
+
+async function inFolder(cwd: string, body: () => Promise<void>): Promise<void> {
+  hostBox.__cwd = cwd
+  try {
+    await body()
+  } finally {
+    delete hostBox.__cwd
+  }
+}
+
+test('a session that lives in a Claude worktree still warns', OPTIONS, async ($, on) => {
+  world(on)
+  await inFolder(WORKTREE, async () => {
+    await $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true })
+    await edit($, { path: `${WORKTREE}/src/a.ts` })
+    await answer($, 'All tests pass.')
+    expect(await warnings($)).toEqual(['unverified: "All tests pass" \u00b7 no test ran after the last edit'])
+    await bash($, 'bun test FAIL')
+    await answer($, 'Os testes passaram.')
+    expect(await warnings($)).toEqual(['unverified: "Os testes passaram" \u00b7 the last test run failed (bun test FAIL)'])
+    await bash($, 'bun run typecheck')
+    await edit($, { path: `${WORKTREE}/src/b.ts` })
+    await answer($, 'Typecheck is clean.')
+    expect(await warnings($)).toHaveLength(1)
+    await bash($, 'bun test')
+    await bash($, `git -C ${WORKTREE} checkout -- src/a.ts`)
+    await answer($, 'All tests pass.')
+    expect(await warnings($)).toHaveLength(1)
+  })
+})
+
+test('a session in one worktree ignores edits and git in a sibling worktree and in the main checkout', OPTIONS, async ($, on) => {
+  world(on)
+  await inFolder(WORKTREE, async () => {
+    await $.session.start({ cwd: WORKTREE, surface: 'terminal', isInteractive: true })
+    await edit($, { path: `${WORKTREE}/src/a.ts` })
+    await bash($, 'bun test')
+    await edit($, { path: `${CWD}/.claude/worktrees/other/src/b.ts` })
+    await edit($, { agentId: 'sub-1', path: `${CWD}/.claude/worktrees/other/src/b.ts` })
+    await edit($, { path: `${CWD}/src/c.ts` })
+    await bash($, `git -C ${CWD}/.claude/worktrees/other reset --hard`)
+    await answer($, 'All tests pass.')
+    expect(await warnings($)).toEqual([])
+    await edit($, { path: `${WORKTREE}/src/b.ts` })
+    await answer($, 'All tests pass.')
+    expect(await warnings($)).toHaveLength(1)
+  })
+})
+
+test('a worktree of the session folder is not part of the session folder', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  await edit($)
+  await bash($, 'bun test')
+  await edit($, { path: `${CWD}/.claude/worktrees/feat-x/src/a.ts` })
+  await write($, `${CWD}/.claude/worktrees/feat-x/src/new.ts`)
+  await answer($, 'All tests pass.')
+  expect(await warnings($)).toEqual([])
+})
+
+test('the session folder is read only when a command needs it', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  const calls = async (run: () => Promise<unknown>) => {
+    hostBox.__cwdCalls = 0
+    await run()
+    return hostBox.__cwdCalls
+  }
+  expect(await calls(() => bash($, 'git status'))).toBe(0)
+  expect(await calls(() => bash($, 'bun test'))).toBe(0)
+  expect(await calls(() => bash($, 'rm out.log'))).toBe(0)
+  expect(await calls(() => bash($, 'git checkout main'))).toBe(0)
+  expect(await calls(() => $.tool.call({ tool: 'Read', file_path: SRC }))).toBe(0)
+  expect(await calls(() => bash($, 'git -C /tmp/wt checkout main'))).toBe(1)
+  expect(await calls(() => edit($))).toBe(1)
+})
+
+test('only /clear resets the log, and every session end still reaches the host', OPTIONS, async ($, on) => {
+  const reached: string[] = []
+  on('session.end', { reason: /.*/ }, (_$, e, next) => {
+    reached.push(e.reason)
+    return next(e)
+  })
+  const { seen } = world(on)
+  await start($)
+  await edit($)
+  await answer($, 'All tests pass.')
+  const entries = () => (seen.state.get('harness.claimLog') as unknown[]).length
+  for (const reason of ['other', 'prompt_input_exit', 'resume', 'logout']) {
+    const ended = await $.session.end({ reason, sessionId: 'sess-1', resume: {} } as never)
+    expect(ended, reason).toEqual({ sessionId: 'sess-1' })
+    expect(await warnings($), reason).toHaveLength(1)
+    expect(entries(), reason).toBe(1)
+  }
+  const cleared = await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
+  expect(cleared).toEqual({ sessionId: 'sess-1' })
+  expect(entries()).toBe(0)
+  expect(await warnings($)).toEqual([])
+  expect(reached).toEqual(['other', 'prompt_input_exit', 'resume', 'logout', 'clear'])
 })
 
 test('a CI claim with no edit and no push is quiet', OPTIONS, async ($, on) => {
