@@ -177,10 +177,13 @@ export async function createReviewWorktree(source: ReviewPatch, label: string, s
     chmodSync(path, 0o700);
     const indexEnv = { ...cleanEnv(), GIT_INDEX_FILE: indexFile };
     await gitOk(source.repoRoot, ["read-tree", source.baseCommit], { env: indexEnv });
-    await gitOk(source.repoRoot, ["checkout-index", "-a", "-f", "-q", `--prefix=${path}/`], { env: indexEnv, extra: ["-c", "core.autocrlf=false"] });
+    const filterKeys = (await git(source.repoRoot, ["config", "--name-only", "--get-regexp", "^filter\\..+\\.(smudge|process|required)$"])).stdout.split("\n").filter(Boolean);
+    const drivers = [...new Set(filterKeys.map((key) => key.replace(/^filter\./iu, "").replace(/\.(smudge|process|required)$/iu, "")))];
+    const rawBlobs = drivers.flatMap((name) => ["-c", `filter.${name}.smudge=`, "-c", `filter.${name}.process=`, "-c", `filter.${name}.required=false`]);
+    await gitOk(source.repoRoot, ["checkout-index", "-a", "-f", "-q", `--prefix=${path}/`], { env: indexEnv, extra: ["-c", "core.autocrlf=false", ...rawBlobs] });
     rmSync(indexFile, { force: true });
     const tracked = splitZ(await gitOk(source.repoRoot, ["ls-tree", "-r", "-z", "--name-only", source.baseCommit]));
-    for (const file of tracked.filter(isSensitivePath)) rmSync(join(path, file), { force: true });
+    for (const file of tracked.filter(isSensitivePath)) rmSync(join(path, file), { recursive: true, force: true });
     const env = isolatedEnv();
     await gitOk(path, ["init", "-q", "--template="], { env, extra: ["-c", "init.defaultBranch=main"] });
     await gitOk(path, ["add", "-A", "-f"], { env, extra: ["-c", "core.autocrlf=false", "-c", "core.safecrlf=false"] });
