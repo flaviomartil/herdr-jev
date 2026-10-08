@@ -202,6 +202,12 @@ function envelopeResult(member: CouncilMemberName, stdout: string, roots: readon
     const failure = envelopeError(value as Record<string, unknown>);
     if (failure) return { error: `${member}: ${failure}`.slice(0, 400) };
     for (const key of ENVELOPE_TEXT_KEYS) {
+      const raw = (value as Record<string, unknown>)[key];
+      if (raw && typeof raw === "object") {
+        const nested = findingsArray(raw);
+        if (nested) return listFindings(member, nested, roots);
+        continue;
+      }
       const inner = textField(value, key);
       if (inner !== undefined) return structuredText(member, inner, roots, true);
     }

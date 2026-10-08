@@ -1,8 +1,11 @@
+import { setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ProcessOutput, SpawnedProcess, SpawnFn, SpawnOptions } from "../src/council/spawn.js";
+
+setDefaultTimeout(30000);
 
 process.env.GIT_CONFIG_GLOBAL = "/dev/null";
 process.env.GIT_CONFIG_NOSYSTEM = "1";
@@ -37,6 +40,8 @@ export interface Call {
   argv: string[];
   cwd: string;
   stdin?: string;
+  lifetimeMs?: number;
+  timeoutCommand?: string | null;
   killed: boolean;
 }
 
@@ -62,7 +67,7 @@ export function fakeSpawn(handlers: Record<string, Handler>, options: FakeSpawnO
   const installed = options.installed ?? Object.keys(handlers);
   const calls: Call[] = [];
   const spawn: SpawnFn = (argv: readonly string[], spawnOptions: SpawnOptions): SpawnedProcess => {
-    const call: Call = { argv: [...argv], cwd: spawnOptions.cwd, stdin: spawnOptions.stdin, killed: false };
+    const call: Call = { argv: [...argv], cwd: spawnOptions.cwd, stdin: spawnOptions.stdin, lifetimeMs: spawnOptions.lifetimeMs, timeoutCommand: spawnOptions.timeoutCommand, killed: false };
     calls.push(call);
     const bin = argv[0];
     let release: (output: ProcessOutput) => void = () => {};

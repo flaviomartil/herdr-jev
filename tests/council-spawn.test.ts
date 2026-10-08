@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defaultSpawn } from "../src/council/spawn.js";
+import { councilScope } from "../src/council/scope.js";
+import { defaultSpawn, findTimeoutCommand } from "../src/council/spawn.js";
 
 function alive(pid: number): boolean {
   try {
@@ -22,6 +23,8 @@ async function until(check: () => boolean, ms = 8000): Promise<boolean> {
   }
   return check();
 }
+
+setDefaultTimeout(30000);
 
 let dir: string;
 
@@ -87,6 +90,32 @@ describe("council default spawn", () => {
     expect(await until(() => !alive(grandchild))).toBe(true);
   });
 
+  it("kills a grandchild that ignores SIGTERM and holds no stdio, after the leader closed", async () => {
+    const proc = defaultSpawn(["sh", "-c", "sh -c 'trap \"\" TERM; exec sleep 30' >/dev/null 2>&1 </dev/null & echo $!; wait"], { cwd: dir, killGraceMs: 300 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    proc.kill();
+    const out = await proc.result;
+    const grandchild = Number(out.stdout.trim());
+    expect(Number.isInteger(grandchild)).toBe(true);
+    expect(await until(() => !alive(grandchild))).toBe(true);
+  });
+
+  it("stops tracking a member that never closes once it was force killed", async () => {
+    const pidFile = join(dir, "leak-pid");
+    const proc = defaultSpawn(["sh", "-c", `setsid sleep 30 </dev/null & echo $! > ${pidFile}; wait`], { cwd: dir, killGraceMs: 200 });
+    expect(await until(() => existsSync(pidFile))).toBe(true);
+    const leaked = Number(readFileSync(pidFile, "utf8").trim());
+    expect(councilScope.groups.size).toBeGreaterThan(0);
+    proc.kill();
+    const untracked = await until(() => councilScope.groups.size === 0, 5000);
+    try {
+      process.kill(leaked, "SIGKILL");
+    } catch {
+      expect(leaked).toBeGreaterThan(0);
+    }
+    expect(untracked).toBe(true);
+  });
+
   it("escalates to SIGKILL when SIGTERM is ignored", async () => {
     const proc = defaultSpawn(["sh", "-c", "trap '' TERM; sleep 30 & echo $!; wait"], { cwd: dir, killGraceMs: 300 });
     await new Promise((resolve) => setTimeout(resolve, 300));
@@ -99,18 +128,72 @@ describe("council default spawn", () => {
   }, 30000);
 });
 
+function launch(mode: string, signalName: NodeJS.Signals | "SIGKILL") {
+  const child = spawn(process.execPath, ["run", join(import.meta.dir, "fixtures/council-signal-child.ts"), dir, mode], { stdio: "ignore", env: { ...process.env } });
+  const exited = new Promise<NodeJS.Signals | null>((resolve) => child.on("exit", (_code, signal) => resolve(signal)));
+  return { child, exited, signalName };
+}
+
+const hasTimeout = findTimeoutCommand() !== undefined;
+
 describe("council process scope", () => {
-  it("kills members and removes review directories when the parent is signalled", async () => {
-    const child = spawn(process.execPath, ["run", join(import.meta.dir, "fixtures/council-signal-child.ts"), dir], { stdio: "ignore", env: { ...process.env } });
-    const exited = new Promise<void>((resolve) => child.on("exit", () => resolve()));
+  for (const signalName of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"] as const) {
+    it(`kills members, removes review directories and exits on ${signalName}`, async () => {
+      const { child, exited } = launch("scope", signalName);
+      expect(await until(() => existsSync(join(dir, "ready")))).toBe(true);
+      expect(existsSync(join(dir, "review-dir"))).toBe(true);
+      const grandchild = Number(readFileSync(join(dir, "pid"), "utf8").trim());
+      expect(alive(grandchild)).toBe(true);
+      child.kill(signalName);
+      expect(await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve("hung"), 10000))])).toBe(signalName);
+      expect(await until(() => !existsSync(join(dir, "review-dir")))).toBe(true);
+      expect(await until(() => !alive(grandchild))).toBe(true);
+    }, 30000);
+  }
+
+  it("still exits on SIGTERM when another guard is registered in the same process", async () => {
+    const { child, exited } = launch("both", "SIGTERM");
     expect(await until(() => existsSync(join(dir, "ready")))).toBe(true);
-    expect(existsSync(join(dir, "review-dir"))).toBe(true);
-    expect(await until(() => existsSync(join(dir, "pid")))).toBe(true);
+    const other = Number(readFileSync(join(dir, "pid2"), "utf8").trim());
+    const grandchild = Number(readFileSync(join(dir, "pid"), "utf8").trim());
+    child.kill("SIGTERM");
+    expect(await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve("hung"), 10000))])).toBe("SIGTERM");
+    expect(await until(() => !alive(other))).toBe(true);
+    expect(await until(() => !alive(grandchild))).toBe(true);
+    expect(await until(() => !existsSync(join(dir, "review-dir")))).toBe(true);
+  }, 30000);
+
+  it.skipIf(!hasTimeout)("bounds a member by its lifetime when the parent is killed with SIGKILL", async () => {
+    const { child, exited } = launch("lifetime", "SIGKILL");
+    expect(await until(() => existsSync(join(dir, "ready")))).toBe(true);
     const grandchild = Number(readFileSync(join(dir, "pid"), "utf8").trim());
     expect(alive(grandchild)).toBe(true);
-    child.kill("SIGTERM");
+    child.kill("SIGKILL");
     await exited;
-    expect(await until(() => !existsSync(join(dir, "review-dir")))).toBe(true);
-    expect(await until(() => !alive(grandchild))).toBe(true);
-  }, 30000);
+    expect(await until(() => !alive(grandchild), 15000)).toBe(true);
+  }, 40000);
+});
+
+describe("council timeout command", () => {
+  it("finds an executable timeout on the given PATH", () => {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    expect(findTimeoutCommand({ PATH: bin })).toBeUndefined();
+    writeFileSync(join(bin, "timeout"), "#!/bin/sh\n");
+    chmodSync(join(bin, "timeout"), 0o755);
+    expect(findTimeoutCommand({ PATH: `/nonexistent:${bin}` })).toBe(join(bin, "timeout"));
+  });
+
+  it("wraps the command under timeout -k when a lifetime is given", async () => {
+    const bin = join(dir, "bin");
+    mkdirSync(bin);
+    const log = join(dir, "argv");
+    writeFileSync(join(bin, "fake-timeout"), `#!/bin/sh\necho "$@" > ${log}\nshift 3\nexec "$@"\n`);
+    chmodSync(join(bin, "fake-timeout"), 0o755);
+    const out = await defaultSpawn(["echo", "hi"], { cwd: dir, lifetimeMs: 2500, timeoutCommand: join(bin, "fake-timeout") }).result;
+    expect(out.stdout).toBe("hi\n");
+    expect(readFileSync(log, "utf8").trim()).toBe("-k 1 3 echo hi");
+    const plain = await defaultSpawn(["echo", "hi"], { cwd: dir, lifetimeMs: 2500, timeoutCommand: null }).result;
+    expect(plain.stdout).toBe("hi\n");
+  });
 });
