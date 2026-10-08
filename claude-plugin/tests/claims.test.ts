@@ -169,6 +169,25 @@ const HONEST_MIXED_REPORTS = [
   'Two specs still fail and the unit tests pass.',
 ]
 
+const AFTER_A_FIX = [
+  'Fixed the 3 type errors and typecheck is clean.',
+  'The test that failed is fixed and all tests pass.',
+  'Corrigi o teste que falhou e todos os testes passaram.',
+  'The 2 failing specs are resolved and all tests pass.',
+  'Resolvi os 2 erros de tipo e o typecheck limpo.',
+]
+
+const STILL_BROKEN = [
+  'The test that failed is still failing and all tests pass.',
+  'Fixed one error, but 2 errors remain and the tests pass.',
+  'O teste que falhou ainda falha e todos os testes passaram.',
+]
+
+test('a claim that follows a fixed failure in the same sentence is still a claim', () => {
+  for (const text of AFTER_A_FIX) expect(kinds(text).length, text).toBeGreaterThan(0)
+  for (const text of STILL_BROKEN) expect(kinds(text), text).toEqual([])
+})
+
 test('a clean claim keeps its recall when it mentions a failure word', () => {
   for (const text of CLEAN_WITH_FAILURE_WORDS) expect(kinds(text).length, text).toBeGreaterThan(0)
 })
@@ -450,6 +469,42 @@ test('heredoc bodies are text, not commands', () => {
   expect(classifyCommand("cat > /tmp/x <<'EOF'\nbun test\nEOF")).toEqual([])
   expect(classifyCommand("cat > /tmp/x <<'EOF'\nx\nEOF\nbun test")).toEqual(['test'])
   expect(isMutatingCommand("cat <<'EOF'\nunterminated > file")).toBe(false)
+})
+
+test('quoted scratch targets are off the tree', () => {
+  for (const command of [
+    'bun test > "/tmp/test.log" 2>&1',
+    "bun test > '/tmp/test.log'",
+    'git diff > "$SCRATCH/p.diff"',
+    'cp src/a.ts "/tmp/backup.ts"',
+    'rm -rf "/var/tmp/scratch"',
+    'tee "/dev/null"',
+  ]) {
+    expect(isMutatingCommand(command), command).toBe(false)
+  }
+  expect(isMutatingCommand('git -C "/tmp/wt" checkout main', false, CWD)).toBe(false)
+  expect(isMutatingCommand('git -C "../other" checkout main', false, CWD)).toBe(true)
+  expect(isMutatingCommand('bun test > "out.log"')).toBe(true)
+  expect(isMutatingCommand('cp "/tmp/a" "src/a.ts"')).toBe(true)
+  expect(classifyCommand('bun test > "/tmp/test.log" 2>&1')).toEqual(['test'])
+})
+
+test('pathological commands are bounded', () => {
+  const spaces = `bun${' '.repeat(64_000)}test`
+  const xargs = 'xargs '.repeat(10_000)
+  const huge = `${'a '.repeat(40_000)}&& bun test`
+  const started = Date.now()
+  classifyCommand(spaces)
+  isMutatingCommand(spaces)
+  classifyCommand(xargs)
+  isMutatingCommand(xargs)
+  classifyCommand(`bun${' '.repeat(100_000)}test`)
+  isMutatingCommand('xargs '.repeat(20_000))
+  expect(classifyCommand(huge)).toEqual([])
+  expect(isMutatingCommand(`${huge} && rm src/a.ts`)).toBe(false)
+  expect(Date.now() - started).toBeLessThan(5000)
+  expect(classifyCommand(`${'a '.repeat(10_000)}&& bun test`)).toEqual(['test'])
+  expect(isMutatingCommand('xargs xargs xargs rm src/a.ts')).toBe(true)
 })
 
 test('here-strings and shifts are not heredocs', () => {
@@ -954,7 +1009,7 @@ test('/clear drops the warning and the log', OPTIONS, async ($, on) => {
   expect(await warnings($)).toEqual([])
 })
 
-const hostBox = globalThis as { __cwd?: string; __cwdCalls?: number }
+const hostBox = globalThis as { __cwd?: string; __cwdNow?: string; __cwdCalls?: number }
 const WORKTREE = `${CWD}/.claude/worktrees/feat-x`
 
 async function inFolder(cwd: string, body: () => Promise<void>): Promise<void> {
@@ -1055,6 +1110,25 @@ test('only /clear resets the log, and every session end still reaches the host',
   expect(entries()).toBe(0)
   expect(await warnings($)).toEqual([])
   expect(reached).toEqual(['other', 'prompt_input_exit', 'resume', 'logout', 'clear'])
+})
+
+test('the session root is used, not the directory a shell cd moved to', OPTIONS, async ($, on) => {
+  world(on)
+  await start($)
+  hostBox.__cwdNow = `${CWD}/apps/api`
+  try {
+    await edit($)
+    await bash($, 'bun test')
+    await edit($, { path: `${CWD}/packages/core/src/b.ts` })
+    await answer($, 'All tests pass.')
+    expect(await warnings($)).toHaveLength(1)
+    await bash($, 'bun test')
+    await bash($, `git -C ${CWD}/packages/core checkout main`)
+    await answer($, 'All tests pass.')
+    expect(await warnings($)).toHaveLength(1)
+  } finally {
+    delete hostBox.__cwdNow
+  }
 })
 
 test('a CI claim with no edit and no push is quiet', OPTIONS, async ($, on) => {
