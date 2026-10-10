@@ -45,7 +45,7 @@ describe("decodeFrames", () => {
 
   test("decodes byte chunks with a multibyte character split in two", async () => {
     const encoded = new TextEncoder().encode('{"txt":"ação"}\n{"n":1}\n');
-    const cut = 9;
+    const cut = 10;
     const { source } = makeSource([encoded.subarray(0, cut), encoded.subarray(cut)]);
     const frames = await collectFrames(source);
     expect(frames).toEqual([{ txt: "ação" }, { n: 1 }]);
@@ -202,7 +202,7 @@ describe("ingestFrames", () => {
         return received.length < 2;
       },
     });
-    expect(received).toEqual([[{ a: 1 }, 0], [{ a: 2 }, 0]]);
+    expect(received).toEqual([[{ a: 1 }, 0], [{ a: 2 }, 1]]);
     expect(result.status).toBe("cancelled");
     expect(result.stoppedByConsumer).toBe(true);
     expect(result.frames).toEqual([]);
@@ -242,5 +242,105 @@ describe("ingestFrames", () => {
     metrics.start();
     await expect(ingestFrames(['{"a":1}'], { metrics })).rejects.toThrow("Ingest metrics must be idle");
     await expect(ingestFrames(['{"a":1}'], { onFrame: 1 as unknown as () => void })).rejects.toThrow(TypeError);
+  });
+});
+
+describe("review follow-ups", () => {
+  test("cancel with a custom reason still counts as cancelled", async () => {
+    const { source, state } = makeSource(['{"a":1}\n', '{"a":2}\n'], { hangAfter: 1 });
+    const controller = createIngestController();
+    const run = ingestFrames(source, { signal: controller.signal });
+    await tick();
+    controller.cancel(new Error("user stop"));
+    const result = await run;
+    expect(result.status).toBe("cancelled");
+    expect((result.error as Error).message).toBe("user stop");
+    expect(result.metrics).toMatchObject({ status: "cancelled", errors: 0 });
+    state.released?.();
+    await tick();
+    expect(state.returned).toBe(true);
+  });
+
+  test("onFrame throwing yields failed status with the consumer error recorded", async () => {
+    const { source, state } = makeSource(['{"a":1}\n', '{"a":2}\n']);
+    const boom = new Error("consumer boom");
+    const result = await ingestFrames(source, { onFrame: () => { throw boom; } });
+    expect(result.status).toBe("failed");
+    expect(result.error).toBe(boom);
+    expect(result.metrics).toMatchObject({ status: "failed", errors: 1, errorMessage: "consumer boom" });
+    expect(state.returned).toBe(true);
+  });
+
+  test("abort while paused at a yield does not pull another chunk", async () => {
+    const { source, state } = makeSource(['{"a":1}\n', '{"a":2}\n', '{"a":3}\n']);
+    const controller = new AbortController();
+    const seen: unknown[] = [];
+    let error: unknown = null;
+    try {
+      for await (const frame of decodeFrames(source, { signal: controller.signal })) {
+        seen.push(frame);
+        controller.abort();
+      }
+    } catch (caught) {
+      error = caught;
+    }
+    expect(seen).toEqual([{ a: 1 }]);
+    expect((error as Error).name).toBe("AbortError");
+    expect(state.pulled).toBe(1);
+    expect(state.returned).toBe(true);
+  });
+
+  test("abort between frames of the same chunk stops delivery", async () => {
+    const controller = new AbortController();
+    const seen: unknown[] = [];
+    let error: unknown = null;
+    try {
+      for await (const frame of decodeFrames(['{"a":1}\n{"a":2}\n{"a":3}\n'], { signal: controller.signal })) {
+        seen.push(frame);
+        controller.abort();
+      }
+    } catch (caught) {
+      error = caught;
+    }
+    expect(seen).toEqual([{ a: 1 }]);
+    expect((error as Error).name).toBe("AbortError");
+  });
+
+  test("a failing source is not asked to return and metrics record the failure", async () => {
+    let returnCalled = false;
+    const source = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => { throw new Error("source down"); },
+          return: async () => { returnCalled = true; return { done: true, value: undefined }; },
+        };
+      },
+    };
+    const metrics = createIngestMetrics();
+    await expect(collectFrames(source, { metrics })).rejects.toThrow("source down");
+    expect(returnCalled).toBe(false);
+    expect(metrics.snapshot()).toMatchObject({ status: "failed", errorMessage: "source down" });
+  });
+
+  test("invalid source records a failure instead of leaving metrics idle", async () => {
+    const metrics = createIngestMetrics();
+    await expect(collectFrames(42 as unknown as Iterable<string>, { metrics })).rejects.toThrow(TypeError);
+    expect(metrics.snapshot().status).toBe("failed");
+  });
+
+  test("ingestFrames throws on invalid stream options instead of returning a result", async () => {
+    await expect(ingestFrames(['{"a":1}'], { maxBytes: 0 })).rejects.toThrow(RangeError);
+    await expect(ingestFrames(['{"a":1}'], { maxFrames: 0 })).rejects.toThrow(RangeError);
+  });
+
+  test("a string chunk after a partial byte sequence fails cleanly", async () => {
+    const encoded = new TextEncoder().encode('{"txt":"ç"}\n');
+    await expect(collectFrames([encoded.subarray(0, 9), '"}\n'])).rejects.toThrow(TypeError);
+  });
+
+  test("recordError refuses to touch state when not running", () => {
+    const metrics = createIngestMetrics();
+    expect(() => metrics.recordError(new Error("x"))).toThrow();
+    expect(metrics.snapshot()).toMatchObject({ status: "idle", errors: 0, errorName: null });
   });
 });

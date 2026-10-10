@@ -1,4 +1,4 @@
-import { decodeFrames, isAbortError } from './pilot-stream.js';
+import { decodeFrames, isAbortError, validateStreamOptions } from './pilot-stream.js';
 import { createIngestMetrics } from './pilot-metrics.js';
 
 export async function ingestFrames(source, options = {}) {
@@ -9,35 +9,49 @@ export async function ingestFrames(source, options = {}) {
   if (onFrame !== undefined && typeof onFrame !== 'function') {
     throw new TypeError('onFrame must be a function');
   }
+  validateStreamOptions({ ...streamOptions, metrics });
   if (metrics.status !== 'idle') throw new Error('Ingest metrics must be idle');
 
   const frames = [];
+  let delivered = 0;
   let error = null;
   let stoppedByConsumer = false;
+  let consumerFailed = false;
   const stream = decodeFrames(source, { ...streamOptions, metrics });
 
   try {
     for await (const frame of stream) {
-      if (onFrame) {
-        const keepGoing = await onFrame(frame, frames.length);
-        if (keepGoing === false) {
-          stoppedByConsumer = true;
-          break;
-        }
-      } else {
+      if (!onFrame) {
         frames.push(frame);
+        delivered += 1;
+        continue;
+      }
+      let keepGoing;
+      try {
+        keepGoing = await onFrame(frame, delivered);
+      } catch (caught) {
+        consumerFailed = true;
+        error = caught;
+        if (metrics.status === 'running') metrics.recordError(caught);
+        break;
+      }
+      delivered += 1;
+      if (keepGoing === false) {
+        stoppedByConsumer = true;
+        break;
       }
     }
   } catch (caught) {
     error = caught;
   }
 
-  const snapshot = metrics.snapshot();
-  const status = error
-    ? (isAbortError(error) ? 'cancelled' : 'failed')
-    : (stoppedByConsumer ? 'cancelled' : 'completed');
+  const aborted = Boolean(streamOptions.signal?.aborted);
+  let status = 'completed';
+  if (consumerFailed) status = 'failed';
+  else if (error) status = aborted || isAbortError(error) ? 'cancelled' : 'failed';
+  else if (stoppedByConsumer) status = 'cancelled';
 
-  return { status, frames, error, stoppedByConsumer, metrics: snapshot };
+  return { status, frames, delivered, error, stoppedByConsumer, metrics: metrics.snapshot() };
 }
 
 export function createIngestController() {
