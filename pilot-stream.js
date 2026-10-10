@@ -124,7 +124,8 @@ export function createFrameStream(source, options = {}) {
         heldCarriageReturn = true;
       }
       if (!lineOpen && terminated && segment.trim() === '') {
-        if (Buffer.byteLength(segment, 'utf8') > maxFrameBytes + 1) throw new RangeError('maxFrameBytes exceeded');
+        const bare = segment.endsWith('\r\n') ? segment.slice(0, -2) : segment.slice(0, -1);
+        if (Buffer.byteLength(bare, 'utf8') > maxFrameBytes) throw new RangeError('maxFrameBytes exceeded');
         return [];
       }
       lineOpen = terminated ? false : (lineOpen || segment.length > 0);

@@ -582,3 +582,18 @@ describe("fourth review follow-ups", () => {
     await expect(collectFrames([" ".repeat(10), " ".repeat(10) + "\n"], { maxFrameBytes: 8 })).rejects.toThrow("maxFrameBytes exceeded");
   });
 });
+
+describe("fifth review follow-ups", () => {
+  test("a whitespace-only CRLF line at exactly maxFrameBytes is accepted", async () => {
+    expect(await collectFrames([" ".repeat(8) + "\r\n", '{"a":1}\n'], { maxFrameBytes: 8 })).toEqual([{ a: 1 }]);
+    await expect(collectFrames([" ".repeat(9) + "\r\n"], { maxFrameBytes: 8 })).rejects.toThrow("maxFrameBytes exceeded");
+  });
+
+  test("recordError tolerates errors whose properties throw", () => {
+    const metrics = createIngestMetrics();
+    metrics.start();
+    const hostile = new Proxy({}, { has: () => { throw new Error("no"); }, get: () => { throw new Error("no"); } });
+    metrics.recordError(hostile);
+    expect(metrics.snapshot()).toMatchObject({ status: "failed", errors: 1, errorName: "Error" });
+  });
+});

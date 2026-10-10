@@ -16,10 +16,14 @@ function safeString(value, fallback) {
 }
 
 function describeError(error) {
-  const isObject = error !== null && typeof error === 'object';
-  const name = isObject && 'name' in error ? safeString(error.name, 'Error') : 'Error';
-  const message = isObject && 'message' in error ? safeString(error.message, '') : safeString(error, '');
-  return { name, message };
+  try {
+    const isObject = error !== null && typeof error === 'object';
+    const name = isObject && 'name' in error ? safeString(error.name, 'Error') : 'Error';
+    const message = isObject && 'message' in error ? safeString(error.message, '') : safeString(error, '');
+    return { name, message };
+  } catch {
+    return { name: 'Error', message: '' };
+  }
 }
 
 export function createIngestMetrics(options = {}) {
