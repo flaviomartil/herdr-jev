@@ -169,6 +169,7 @@ export function createFrameStream(source, options = {}) {
         }
         let offset = 0;
         while (offset < text.length) {
+          throwIfAborted();
           const newline = text.indexOf('\n', offset);
           const stop = newline === -1 ? text.length : newline + 1;
           const frames = pushSegment(text.slice(offset, stop));

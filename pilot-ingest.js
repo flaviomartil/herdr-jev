@@ -17,6 +17,7 @@ export async function ingestFrames(source, options = {}) {
   let error = null;
   let stoppedByConsumer = false;
   let consumerFailed = false;
+  let consumerCancelled = false;
 
   try {
     for await (const frame of stream.frames) {
@@ -29,9 +30,14 @@ export async function ingestFrames(source, options = {}) {
       try {
         keepGoing = await onFrame(frame, delivered);
       } catch (caught) {
-        consumerFailed = true;
         error = caught;
-        if (metrics.status === 'running') metrics.recordError(caught);
+        if (streamOptions.signal?.aborted) {
+          consumerCancelled = true;
+          if (metrics.status === 'running') metrics.recordCancel();
+        } else {
+          consumerFailed = true;
+          if (metrics.status === 'running') metrics.recordError(caught);
+        }
         break;
       }
       delivered += 1;
@@ -46,6 +52,7 @@ export async function ingestFrames(source, options = {}) {
 
   let status = 'completed';
   if (consumerFailed) status = 'failed';
+  else if (consumerCancelled) status = 'cancelled';
   else if (stream.outcome === 'failed') status = 'failed';
   else if (stream.outcome === 'cancelled') status = 'cancelled';
 
