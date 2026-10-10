@@ -520,3 +520,65 @@ describe("third review follow-ups", () => {
     expect(failing.error).toBeInstanceOf(SyntaxError);
   });
 });
+
+describe("fourth review follow-ups", () => {
+  test("a lone carriage return chunk keeps the open line open", async () => {
+    expect(await collectFrames(['{"b":2}', "\r", '\n{"c":3}\r\n'])).toEqual([{ b: 2 }, { c: 3 }]);
+    await expect(collectFrames(['{"a":1', "\r", "\n", ',"b":2}\n'])).rejects.toThrow(SyntaxError);
+  });
+
+  test("a stuck upstream return after a consumer break can still be cancelled", async () => {
+    const controller = createIngestController();
+    const source = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: async () => ({ done: false, value: '{"a":1}\n' }),
+          return: () => new Promise(() => {}),
+        };
+      },
+    };
+    const run = ingestFrames(source, { signal: controller.signal, onFrame: () => false });
+    const outcome = await Promise.race([run.then(() => "done"), tick().then(() => "pending")]);
+    expect(outcome).toBe("pending");
+    controller.cancel();
+    const result = await run;
+    expect(result.stoppedByConsumer).toBe(true);
+    expect(result.status).toBe("cancelled");
+  });
+
+  test("recordError survives values that cannot be stringified", () => {
+    const metrics = createIngestMetrics();
+    metrics.start();
+    metrics.recordError(Object.create(null));
+    expect(metrics.snapshot()).toMatchObject({ status: "failed", errors: 1, errorName: "Error" });
+    const other = createIngestMetrics();
+    other.start();
+    expect(() => other.recordChunk(5 as never)).toThrow(TypeError);
+    expect(other.snapshot().chunks).toBe(0);
+  });
+
+  test("a source whose next throws synchronously is not asked to return", async () => {
+    let returnCalled = false;
+    const source = {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => { throw new Error("sync down"); },
+          return: async () => { returnCalled = true; return { done: true, value: undefined }; },
+        };
+      },
+    };
+    await expect(collectFrames(source)).rejects.toThrow("sync down");
+    expect(returnCalled).toBe(false);
+  });
+
+  test("a leading byte order mark is dropped once, even after a string chunk", async () => {
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf]);
+    expect(await collectFrames([bom, '{"a":1}\n'])).toEqual([{ a: 1 }]);
+    await expect(collectFrames(['{"a":1}\n', bom, '{"a":2}\n'])).rejects.toThrow(SyntaxError);
+  });
+
+  test("an oversized whitespace-only line still hits maxFrameBytes", async () => {
+    await expect(collectFrames([" ".repeat(20) + "\n"], { maxFrameBytes: 8 })).rejects.toThrow("maxFrameBytes exceeded");
+    await expect(collectFrames([" ".repeat(10), " ".repeat(10) + "\n"], { maxFrameBytes: 8 })).rejects.toThrow("maxFrameBytes exceeded");
+  });
+});
