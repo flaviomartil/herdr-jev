@@ -88,7 +88,8 @@ export function createFrameStream(source, options = {}) {
 
   async function* run() {
     const decoder = createFrameDecoder(decoderOptions);
-    const textDecoder = new TextDecoder('utf-8', { fatal: true });
+    const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+    const maxFrameBytes = decoderOptions.maxFrameBytes ?? 4096;
 
     let iterator = null;
     let bytes = 0;
@@ -98,6 +99,7 @@ export function createFrameStream(source, options = {}) {
     let pendingNext = false;
     let lineOpen = false;
     let heldCarriageReturn = false;
+    let firstText = true;
     let outcome = 'cancelled';
 
     function throwIfAborted() {
@@ -121,8 +123,11 @@ export function createFrameStream(source, options = {}) {
         segment = segment.slice(0, -1);
         heldCarriageReturn = true;
       }
-      if (!lineOpen && terminated && segment.trim() === '') return [];
-      lineOpen = !terminated && segment.length > 0;
+      if (!lineOpen && terminated && segment.trim() === '') {
+        if (Buffer.byteLength(segment, 'utf8') > maxFrameBytes + 1) throw new RangeError('maxFrameBytes exceeded');
+        return [];
+      }
+      lineOpen = terminated ? false : (lineOpen || segment.length > 0);
       return segment.length > 0 ? decoder.push(segment) : [];
     }
 
@@ -137,7 +142,14 @@ export function createFrameStream(source, options = {}) {
       while (true) {
         throwIfAborted();
         pendingNext = true;
-        const nextPromise = Promise.resolve().then(() => iterator.next());
+        let nextPromise;
+        try {
+          nextPromise = Promise.resolve(iterator.next());
+        } catch (error) {
+          pendingNext = false;
+          upstreamFailed = true;
+          throw error;
+        }
         nextPromise.then(() => { pendingNext = false; }, () => { pendingNext = false; upstreamFailed = true; });
         const result = await raceAbort(nextPromise, signal);
         if (result.done) {
@@ -149,7 +161,11 @@ export function createFrameStream(source, options = {}) {
         bytes += byteSize(chunk);
         if (bytes > maxBytes) throw new RangeError('maxBytes exceeded');
         metrics?.recordChunk(chunk);
-        const text = toText(chunk, textDecoder);
+        let text = toText(chunk, textDecoder);
+        if (firstText && text.length > 0) {
+          firstText = false;
+          if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+        }
         let offset = 0;
         while (offset < text.length) {
           const newline = text.indexOf('\n', offset);
@@ -184,7 +200,7 @@ export function createFrameStream(source, options = {}) {
       state.outcome = outcome;
       if (iterator && !upstreamDone && !upstreamFailed && typeof iterator.return === 'function') {
         const closing = Promise.resolve().then(() => iterator.return()).catch(() => {});
-        if (!pendingNext && !signal?.aborted) await closing;
+        if (!pendingNext && !signal?.aborted) await raceAbort(closing, signal).catch(() => {});
       }
     }
   }

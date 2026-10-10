@@ -7,6 +7,21 @@ function byteSize(chunk) {
   throw new TypeError('Chunk must be a string, ArrayBuffer or ArrayBuffer view');
 }
 
+function safeString(value, fallback) {
+  try {
+    return String(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function describeError(error) {
+  const isObject = error !== null && typeof error === 'object';
+  const name = isObject && 'name' in error ? safeString(error.name, 'Error') : 'Error';
+  const message = isObject && 'message' in error ? safeString(error.message, '') : safeString(error, '');
+  return { name, message };
+}
+
 export function createIngestMetrics(options = {}) {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('Metrics options must be an object');
@@ -41,8 +56,9 @@ export function createIngestMetrics(options = {}) {
     },
     recordChunk(chunk) {
       if (state.status !== 'running') throw new Error('Metrics not running');
+      const size = byteSize(chunk);
       state.chunks += 1;
-      state.bytes += byteSize(chunk);
+      state.bytes += size;
     },
     recordFrames(count) {
       if (state.status !== 'running') throw new Error('Metrics not running');
@@ -51,9 +67,10 @@ export function createIngestMetrics(options = {}) {
     },
     recordError(error) {
       if (state.status !== 'running') throw new Error(`Cannot move from ${state.status} to failed`);
+      const { name, message } = describeError(error);
       state.errors += 1;
-      state.errorName = error && typeof error === 'object' && 'name' in error ? String(error.name) : 'Error';
-      state.errorMessage = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);
+      state.errorName = name;
+      state.errorMessage = message;
       close('failed');
     },
     recordCancel() {
