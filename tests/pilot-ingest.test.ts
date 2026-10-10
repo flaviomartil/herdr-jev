@@ -597,3 +597,41 @@ describe("fifth review follow-ups", () => {
     expect(metrics.snapshot()).toMatchObject({ status: "failed", errors: 1, errorName: "Error" });
   });
 });
+
+describe("sixth review follow-ups", () => {
+  test("an abort between lines of a chunk wins over a later bad line", async () => {
+    const controller = new AbortController();
+    const seen: unknown[] = [];
+    let error: unknown = null;
+    try {
+      for await (const frame of decodeFrames(['{"a":1}\n{bad\n'], { signal: controller.signal })) {
+        seen.push(frame);
+        controller.abort();
+      }
+    } catch (caught) {
+      error = caught;
+    }
+    expect(seen).toEqual([{ a: 1 }]);
+    expect((error as Error).name).toBe("AbortError");
+    const result = await ingestFrames(['{"a":1}\n{"a":2}\n'], {
+      signal: controller.signal,
+      maxFrames: 1,
+    });
+    expect(result.status).toBe("cancelled");
+    expect(result.error).toMatchObject({ name: "AbortError" });
+  });
+
+  test("onFrame failing because of the ingest's own cancel is reported as cancelled", async () => {
+    const controller = createIngestController();
+    const result = await ingestFrames(['{"a":1}\n{"a":2}\n'], {
+      signal: controller.signal,
+      onFrame: () => {
+        controller.cancel();
+        throw new DOMException("fetch aborted", "AbortError");
+      },
+    });
+    expect(result.status).toBe("cancelled");
+    expect(result.metrics).toMatchObject({ status: "cancelled", errors: 0 });
+    expect(result.frames).toEqual([]);
+  });
+});
