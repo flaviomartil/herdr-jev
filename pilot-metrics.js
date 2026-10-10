@@ -50,6 +50,7 @@ export function createIngestMetrics(options = {}) {
       state.frames += count;
     },
     recordError(error) {
+      if (state.status !== 'running') throw new Error(`Cannot move from ${state.status} to failed`);
       state.errors += 1;
       state.errorName = error && typeof error === 'object' && 'name' in error ? String(error.name) : 'Error';
       state.errorMessage = error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error);

@@ -18,7 +18,10 @@ function getIterator(source) {
 }
 
 function toText(chunk, textDecoder) {
-  if (typeof chunk === 'string') return chunk;
+  if (typeof chunk === 'string') {
+    textDecoder.decode();
+    return chunk;
+  }
   if (chunk instanceof ArrayBuffer) return textDecoder.decode(new Uint8Array(chunk), { stream: true });
   if (ArrayBuffer.isView(chunk)) {
     return textDecoder.decode(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength), { stream: true });
@@ -26,7 +29,7 @@ function toText(chunk, textDecoder) {
   throw new TypeError('Chunk must be a string, ArrayBuffer or ArrayBuffer view');
 }
 
-function validateOptions(options) {
+export function validateStreamOptions(options) {
   if (options === null || typeof options !== 'object' || Array.isArray(options)) {
     throw new TypeError('Stream options must be an object');
   }
@@ -40,13 +43,13 @@ function validateOptions(options) {
   if (metrics !== undefined && (metrics === null || typeof metrics !== 'object')) {
     throw new TypeError('metrics must be an object');
   }
+  createFrameDecoder(decoderOptions);
   return { signal, maxBytes, metrics, decoderOptions };
 }
 
 export async function* decodeFrames(source, options = {}) {
-  const { signal, maxBytes, metrics, decoderOptions } = validateOptions(options);
+  const { signal, maxBytes, metrics, decoderOptions } = validateStreamOptions(options);
   const decoder = createFrameDecoder(decoderOptions);
-  const iterator = getIterator(source);
   const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
   let rejectAbort = null;
@@ -56,54 +59,76 @@ export async function* decodeFrames(source, options = {}) {
   if (abortPromise) abortPromise.catch(() => {});
   const onAbort = () => rejectAbort(abortError(signal));
 
+  let iterator = null;
   let bytes = 0;
   let upstreamDone = false;
+  let upstreamFailed = false;
   let pendingNext = false;
   let outcome = 'cancelled';
+
+  function throwIfAborted() {
+    if (signal?.aborted) throw abortError(signal);
+  }
 
   function emit(frames) {
     metrics?.recordFrames?.(frames.length);
     return frames;
   }
 
-  metrics?.start?.();
   try {
-    if (signal?.aborted) throw abortError(signal);
+    metrics?.start?.();
+    throwIfAborted();
+    iterator = getIterator(source);
     signal?.addEventListener('abort', onAbort, { once: true });
 
     while (true) {
+      throwIfAborted();
       pendingNext = true;
+      const nextPromise = Promise.resolve().then(() => iterator.next());
+      nextPromise.then(() => { pendingNext = false; }, () => { pendingNext = false; upstreamFailed = true; });
       const result = abortPromise
-        ? await Promise.race([iterator.next(), abortPromise])
-        : await iterator.next();
-      pendingNext = false;
+        ? await Promise.race([nextPromise, abortPromise])
+        : await nextPromise;
       if (result.done) {
         upstreamDone = true;
         break;
       }
-      if (signal?.aborted) throw abortError(signal);
+      throwIfAborted();
       const chunk = result.value;
       bytes += byteSize(chunk);
       if (bytes > maxBytes) throw new RangeError('maxBytes exceeded');
       metrics?.recordChunk?.(chunk);
       const text = toText(chunk, textDecoder);
-      for (const frame of emit(decoder.push(text))) yield frame;
+      for (const frame of emit(decoder.push(text))) {
+        throwIfAborted();
+        yield frame;
+      }
     }
 
     const tail = textDecoder.decode();
-    if (tail) for (const frame of emit(decoder.push(tail))) yield frame;
-    for (const frame of emit(decoder.end())) yield frame;
+    if (tail) {
+      for (const frame of emit(decoder.push(tail))) {
+        throwIfAborted();
+        yield frame;
+      }
+    }
+    for (const frame of emit(decoder.end())) {
+      throwIfAborted();
+      yield frame;
+    }
     outcome = 'completed';
     metrics?.finish?.();
   } catch (error) {
-    outcome = isAbortError(error) ? 'cancelled' : 'failed';
-    if (outcome === 'cancelled') metrics?.recordCancel?.();
-    else metrics?.recordError?.(error);
+    outcome = signal?.aborted || isAbortError(error) ? 'cancelled' : 'failed';
+    if (metrics?.status === 'running') {
+      if (outcome === 'cancelled') metrics.recordCancel?.();
+      else metrics.recordError?.(error);
+    }
     throw error;
   } finally {
     signal?.removeEventListener('abort', onAbort);
     if (outcome === 'cancelled' && metrics?.status === 'running') metrics.recordCancel?.();
-    if (!upstreamDone && typeof iterator.return === 'function') {
+    if (iterator && !upstreamDone && !upstreamFailed && typeof iterator.return === 'function') {
       const closing = Promise.resolve().then(() => iterator.return()).catch(() => {});
       if (!pendingNext) await closing;
     }
