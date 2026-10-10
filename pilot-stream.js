@@ -2,6 +2,7 @@ import { createFrameDecoder } from './pilot.js';
 import { byteSize } from './pilot-metrics.js';
 
 const DECODER_OPTIONS = new Set(['maxFrameBytes', 'maxFrames']);
+const METRICS_METHODS = ['start', 'recordChunk', 'recordFrames', 'recordError', 'recordCancel', 'finish', 'snapshot'];
 
 function abortError(signal) {
   if (signal.reason !== undefined) return signal.reason;
@@ -17,6 +18,12 @@ function isAbortSignal(signal) {
     typeof signal.aborted === 'boolean' &&
     typeof signal.addEventListener === 'function' &&
     typeof signal.removeEventListener === 'function';
+}
+
+function isMetrics(metrics) {
+  return typeof metrics === 'object' && metrics !== null &&
+    typeof metrics.status === 'string' &&
+    METRICS_METHODS.every((name) => typeof metrics[name] === 'function');
 }
 
 function getIterator(source) {
@@ -36,16 +43,6 @@ function toText(chunk, textDecoder) {
     return textDecoder.decode(new Uint8Array(chunk.buffer, chunk.byteOffset, chunk.byteLength), { stream: true });
   }
   throw new TypeError('Chunk must be a string, ArrayBuffer or ArrayBuffer view');
-}
-
-function* lineSegments(text) {
-  let offset = 0;
-  while (offset < text.length) {
-    const newline = text.indexOf('\n', offset);
-    const stop = newline === -1 ? text.length : newline + 1;
-    yield text.slice(offset, stop);
-    offset = stop;
-  }
 }
 
 function raceAbort(promise, signal) {
@@ -75,8 +72,8 @@ export function validateStreamOptions(options) {
   if (maxBytes !== Infinity && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0)) {
     throw new RangeError('maxBytes must be Infinity or a positive safe integer');
   }
-  if (metrics !== undefined && (metrics === null || typeof metrics !== 'object')) {
-    throw new TypeError('metrics must be an object');
+  if (metrics !== undefined && !isMetrics(metrics)) {
+    throw new TypeError('metrics must implement the ingest metrics interface');
   }
   for (const key of Object.keys(decoderOptions)) {
     if (!DECODER_OPTIONS.has(key)) throw new TypeError(`Unknown stream option: ${key}`);
@@ -85,80 +82,126 @@ export function validateStreamOptions(options) {
   return { signal, maxBytes, metrics, decoderOptions };
 }
 
-export async function* decodeFrames(source, options = {}) {
+export function createFrameStream(source, options = {}) {
   const { signal, maxBytes, metrics, decoderOptions } = validateStreamOptions(options);
-  const decoder = createFrameDecoder(decoderOptions);
-  const textDecoder = new TextDecoder('utf-8', { fatal: true });
+  const state = { outcome: 'pending', error: undefined };
 
-  let iterator = null;
-  let bytes = 0;
-  let metricsStarted = false;
-  let upstreamDone = false;
-  let upstreamFailed = false;
-  let pendingNext = false;
-  let outcome = 'cancelled';
+  async function* run() {
+    const decoder = createFrameDecoder(decoderOptions);
+    const textDecoder = new TextDecoder('utf-8', { fatal: true });
 
-  function throwIfAborted() {
-    if (signal?.aborted) throw abortError(signal);
-  }
+    let iterator = null;
+    let bytes = 0;
+    let metricsStarted = false;
+    let upstreamDone = false;
+    let upstreamFailed = false;
+    let pendingNext = false;
+    let lineOpen = false;
+    let heldCarriageReturn = false;
+    let outcome = 'cancelled';
 
-  function settle(status, error) {
-    if (!metricsStarted || metrics?.status !== 'running') return;
-    if (status === 'completed') metrics.finish?.();
-    else if (status === 'cancelled') metrics.recordCancel?.();
-    else metrics.recordError?.(error);
-  }
-
-  async function* deliver(frames) {
-    for (const frame of frames) {
-      throwIfAborted();
-      metrics?.recordFrames?.(1);
-      yield frame;
+    function throwIfAborted() {
+      if (signal?.aborted) throw abortError(signal);
     }
-  }
 
-  try {
-    metrics?.start?.();
-    metricsStarted = true;
-    throwIfAborted();
-    iterator = getIterator(source);
+    function settle(status, error) {
+      if (!metricsStarted || metrics.status !== 'running') return;
+      if (status === 'completed') metrics.finish();
+      else if (status === 'cancelled') metrics.recordCancel();
+      else metrics.recordError(error);
+    }
 
-    while (true) {
-      throwIfAborted();
-      pendingNext = true;
-      const nextPromise = Promise.resolve().then(() => iterator.next());
-      nextPromise.then(() => { pendingNext = false; }, () => { pendingNext = false; upstreamFailed = true; });
-      const result = await raceAbort(nextPromise, signal);
-      if (result.done) {
-        upstreamDone = true;
-        break;
+    function pushSegment(segment) {
+      if (heldCarriageReturn) {
+        segment = `\r${segment}`;
+        heldCarriageReturn = false;
+      }
+      const terminated = segment.endsWith('\n');
+      if (!terminated && segment.endsWith('\r')) {
+        segment = segment.slice(0, -1);
+        heldCarriageReturn = true;
+      }
+      if (!lineOpen && terminated && segment.trim() === '') return [];
+      lineOpen = !terminated && segment.length > 0;
+      return segment.length > 0 ? decoder.push(segment) : [];
+    }
+
+    try {
+      if (metrics) {
+        metrics.start();
+        metricsStarted = true;
       }
       throwIfAborted();
-      const chunk = result.value;
-      bytes += byteSize(chunk);
-      if (bytes > maxBytes) throw new RangeError('maxBytes exceeded');
-      metrics?.recordChunk?.(chunk);
-      for (const segment of lineSegments(toText(chunk, textDecoder))) {
-        yield* deliver(decoder.push(segment));
+      iterator = getIterator(source);
+
+      while (true) {
+        throwIfAborted();
+        pendingNext = true;
+        const nextPromise = Promise.resolve().then(() => iterator.next());
+        nextPromise.then(() => { pendingNext = false; }, () => { pendingNext = false; upstreamFailed = true; });
+        const result = await raceAbort(nextPromise, signal);
+        if (result.done) {
+          upstreamDone = true;
+          break;
+        }
+        throwIfAborted();
+        const chunk = result.value;
+        bytes += byteSize(chunk);
+        if (bytes > maxBytes) throw new RangeError('maxBytes exceeded');
+        metrics?.recordChunk(chunk);
+        const text = toText(chunk, textDecoder);
+        let offset = 0;
+        while (offset < text.length) {
+          const newline = text.indexOf('\n', offset);
+          const stop = newline === -1 ? text.length : newline + 1;
+          const frames = pushSegment(text.slice(offset, stop));
+          offset = stop;
+          for (const frame of frames) {
+            throwIfAborted();
+            metrics?.recordFrames(1);
+            yield frame;
+          }
+        }
+      }
+
+      const tail = textDecoder.decode();
+      const tailFrames = tail ? pushSegment(tail) : [];
+      heldCarriageReturn = false;
+      for (const frame of [...tailFrames, ...decoder.end()]) {
+        throwIfAborted();
+        metrics?.recordFrames(1);
+        yield frame;
+      }
+      outcome = 'completed';
+      settle('completed');
+    } catch (error) {
+      outcome = signal?.aborted ? 'cancelled' : 'failed';
+      state.error = error;
+      settle(outcome, error);
+      throw error;
+    } finally {
+      if (outcome === 'cancelled') settle('cancelled');
+      state.outcome = outcome;
+      if (iterator && !upstreamDone && !upstreamFailed && typeof iterator.return === 'function') {
+        const closing = Promise.resolve().then(() => iterator.return()).catch(() => {});
+        if (!pendingNext && !signal?.aborted) await closing;
       }
     }
-
-    const tail = textDecoder.decode();
-    if (tail) yield* deliver(decoder.push(tail));
-    yield* deliver(decoder.end());
-    outcome = 'completed';
-    settle('completed');
-  } catch (error) {
-    outcome = signal?.aborted || isAbortError(error) ? 'cancelled' : 'failed';
-    settle(outcome, error);
-    throw error;
-  } finally {
-    if (outcome === 'cancelled') settle('cancelled');
-    if (iterator && !upstreamDone && !upstreamFailed && typeof iterator.return === 'function') {
-      const closing = Promise.resolve().then(() => iterator.return()).catch(() => {});
-      if (!pendingNext) await closing;
-    }
   }
+
+  return {
+    frames: run(),
+    get outcome() {
+      return state.outcome;
+    },
+    get error() {
+      return state.error;
+    },
+  };
+}
+
+export function decodeFrames(source, options = {}) {
+  return createFrameStream(source, options).frames;
 }
 
 export async function collectFrames(source, options = {}) {

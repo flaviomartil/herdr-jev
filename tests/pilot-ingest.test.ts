@@ -287,6 +287,7 @@ describe("review follow-ups", () => {
     expect(seen).toEqual([{ a: 1 }]);
     expect((error as Error).name).toBe("AbortError");
     expect(state.pulled).toBe(1);
+    await tick();
     expect(state.returned).toBe(true);
   });
 
@@ -432,5 +433,90 @@ describe("second review follow-ups", () => {
 
   test("unknown stream options are rejected", async () => {
     await expect(collectFrames(['{"a":1}'], { maxframes: 5 } as object)).rejects.toThrow("Unknown stream option: maxframes");
+  });
+});
+
+describe("third review follow-ups", () => {
+  test("abort fired during upstream cleanup after a limit error keeps failed status", async () => {
+    const controller = createIngestController();
+    async function* source() {
+      try {
+        yield '{"a":1}\n';
+        yield '{"a":2}\n';
+      } finally {
+        controller.cancel();
+      }
+    }
+    const result = await ingestFrames(source(), { signal: controller.signal, maxFrames: 1 });
+    expect(result.status).toBe("failed");
+    expect(result.error).toBeInstanceOf(RangeError);
+    expect(result.metrics).toMatchObject({ status: "failed", errors: 1 });
+  });
+
+  test("cancelling does not wait on a stuck upstream return", async () => {
+    const controller = createIngestController();
+    let returnStarted = false;
+    const source = {
+      [Symbol.asyncIterator]() {
+        let sent = 0;
+        return {
+          next: async () => (sent++ === 0 ? { done: false, value: '{"a":1}\n' } : { done: false, value: '{"a":2}\n' }),
+          return: () => { returnStarted = true; return new Promise(() => {}); },
+        };
+      },
+    };
+    const result = await ingestFrames(source, {
+      signal: controller.signal,
+      onFrame: () => { controller.cancel(); },
+    });
+    expect(result.status).toBe("cancelled");
+    expect(returnStarted).toBe(true);
+  });
+
+  test("a foreign AbortError from the source is a failure, not a cancel", async () => {
+    const source = {
+      [Symbol.asyncIterator]() {
+        return { next: async () => { throw new DOMException("upstream fetch aborted", "AbortError"); } };
+      },
+    };
+    const metrics = createIngestMetrics();
+    const result = await ingestFrames(source, { metrics });
+    expect(result.status).toBe("failed");
+    expect(metrics.snapshot()).toMatchObject({ status: "failed", errors: 1, errorName: "AbortError" });
+  });
+
+  test("a trailing carriage return at end of stream is tolerated", async () => {
+    expect(await collectFrames(['{"a":1}\r'], { maxFrameBytes: 7 })).toEqual([{ a: 1 }]);
+    expect(await collectFrames(['{"a":1}\r', '\n{"a":2}\r\n'], { maxFrameBytes: 7 })).toEqual([{ a: 1 }, { a: 2 }]);
+    expect(await collectFrames(['{"a":', '1}\r', '\n'])).toEqual([{ a: 1 }]);
+  });
+
+  test("blank lines do not count as frames and are skipped cheaply", async () => {
+    const result = await ingestFrames(["\n".repeat(50000) + '{"a":1}\n' + "  \n".repeat(10) + '{"a":2}\n'], { maxFrames: 2 });
+    expect(result.status).toBe("completed");
+    expect(result.frames).toEqual([{ a: 1 }, { a: 2 }]);
+  });
+
+  test("a partial line followed by a blank-looking segment is still assembled", async () => {
+    expect(await collectFrames(['{"a":1}', ' \n'])).toEqual([{ a: 1 }]);
+  });
+
+  test("custom metrics missing methods are rejected up front", async () => {
+    const { source, state } = makeSource(['{"a":1}\n']);
+    await expect(collectFrames(source, { metrics: { status: "idle" } as never })).rejects.toThrow(TypeError);
+    expect(state.pulled).toBe(0);
+    await expect(ingestFrames(source, { metrics: { status: "idle" } as never })).rejects.toThrow(TypeError);
+  });
+
+  test("createFrameStream exposes the final outcome", async () => {
+    const { createFrameStream } = await import("../pilot-stream.js");
+    const stream = createFrameStream(['{"a":1}\n']);
+    expect(stream.outcome).toBe("pending");
+    for await (const _ of stream.frames) void _;
+    expect(stream.outcome).toBe("completed");
+    const failing = createFrameStream(['{bad\n']);
+    await expect((async () => { for await (const _ of failing.frames) void _; })()).rejects.toThrow(SyntaxError);
+    expect(failing.outcome).toBe("failed");
+    expect(failing.error).toBeInstanceOf(SyntaxError);
   });
 });
