@@ -1,4 +1,4 @@
-import { decodeFrames, isAbortError, validateStreamOptions } from './pilot-stream.js';
+import { createFrameStream } from './pilot-stream.js';
 import { createIngestMetrics } from './pilot-metrics.js';
 
 export async function ingestFrames(source, options = {}) {
@@ -9,19 +9,17 @@ export async function ingestFrames(source, options = {}) {
   if (onFrame !== undefined && typeof onFrame !== 'function') {
     throw new TypeError('onFrame must be a function');
   }
-  validateStreamOptions({ ...streamOptions, metrics });
+  const stream = createFrameStream(source, { ...streamOptions, metrics });
   if (metrics.status !== 'idle') throw new Error('Ingest metrics must be idle');
 
   const frames = [];
   let delivered = 0;
   let error = null;
-  let streamFailed = false;
   let stoppedByConsumer = false;
   let consumerFailed = false;
-  const stream = decodeFrames(source, { ...streamOptions, metrics });
 
   try {
-    for await (const frame of stream) {
+    for await (const frame of stream.frames) {
       if (!onFrame) {
         frames.push(frame);
         delivered += 1;
@@ -43,15 +41,13 @@ export async function ingestFrames(source, options = {}) {
       }
     }
   } catch (caught) {
-    streamFailed = true;
     error = caught;
   }
 
-  const aborted = Boolean(streamOptions.signal?.aborted);
   let status = 'completed';
   if (consumerFailed) status = 'failed';
-  else if (streamFailed) status = aborted || isAbortError(error) ? 'cancelled' : 'failed';
-  else if (stoppedByConsumer) status = 'cancelled';
+  else if (stream.outcome === 'failed') status = 'failed';
+  else if (stream.outcome === 'cancelled') status = 'cancelled';
 
   return { status, frames, delivered, error, stoppedByConsumer, metrics: metrics.snapshot() };
 }
