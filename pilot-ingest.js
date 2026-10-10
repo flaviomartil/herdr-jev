@@ -15,6 +15,7 @@ export async function ingestFrames(source, options = {}) {
   const frames = [];
   let delivered = 0;
   let error = null;
+  let streamFailed = false;
   let stoppedByConsumer = false;
   let consumerFailed = false;
   const stream = decodeFrames(source, { ...streamOptions, metrics });
@@ -42,13 +43,14 @@ export async function ingestFrames(source, options = {}) {
       }
     }
   } catch (caught) {
+    streamFailed = true;
     error = caught;
   }
 
   const aborted = Boolean(streamOptions.signal?.aborted);
   let status = 'completed';
   if (consumerFailed) status = 'failed';
-  else if (error) status = aborted || isAbortError(error) ? 'cancelled' : 'failed';
+  else if (streamFailed) status = aborted || isAbortError(error) ? 'cancelled' : 'failed';
   else if (stoppedByConsumer) status = 'cancelled';
 
   return { status, frames, delivered, error, stoppedByConsumer, metrics: metrics.snapshot() };

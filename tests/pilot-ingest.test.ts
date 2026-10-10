@@ -344,3 +344,93 @@ describe("review follow-ups", () => {
     expect(metrics.snapshot()).toMatchObject({ status: "idle", errors: 0, errorName: null });
   });
 });
+
+describe("second review follow-ups", () => {
+  test("falsy cancel reason is still reported as cancelled", async () => {
+    const { source, state } = makeSource(['{"a":1}\n', '{"a":2}\n'], { hangAfter: 1 });
+    const controller = createIngestController();
+    const run = ingestFrames(source, { signal: controller.signal });
+    await tick();
+    controller.cancel(null);
+    const result = await run;
+    expect(result.status).toBe("cancelled");
+    expect(result.error).toBeNull();
+    expect(result.frames).toEqual([{ a: 1 }]);
+    state.released?.();
+    await tick();
+    expect(state.returned).toBe(true);
+  });
+
+  test("source throwing a falsy value is reported as failed", async () => {
+    const source = {
+      [Symbol.asyncIterator]() {
+        return { next: async () => { throw undefined; } };
+      },
+    };
+    const result = await ingestFrames(source);
+    expect(result.status).toBe("failed");
+    expect(result.metrics.status).toBe("failed");
+  });
+
+  test("a metrics object already in use by another stream is left untouched", async () => {
+    const metrics = createIngestMetrics();
+    const { source: first, state } = makeSource(['{"a":1}\n', '{"a":2}\n'], { hangAfter: 1 });
+    const firstRun = collectFrames(first, { metrics });
+    await tick();
+    expect(metrics.status).toBe("running");
+    await expect(collectFrames(['{"b":1}\n'], { metrics })).rejects.toThrow("Metrics already started");
+    expect(metrics.status).toBe("running");
+    state.released?.();
+    await expect(firstRun).resolves.toEqual([{ a: 1 }, { a: 2 }]);
+    expect(metrics.snapshot()).toMatchObject({ status: "completed", frames: 2 });
+  });
+
+  test("abort listeners are removed after every pull", async () => {
+    const controller = new AbortController();
+    let added = 0;
+    let removed = 0;
+    const signal = new Proxy(controller.signal, {
+      get(target, key) {
+        if (key === "addEventListener") return (...args: unknown[]) => { added += 1; return (target.addEventListener as Function).apply(target, args); };
+        if (key === "removeEventListener") return (...args: unknown[]) => { removed += 1; return (target.removeEventListener as Function).apply(target, args); };
+        const value = Reflect.get(target, key);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const { source } = makeSource(['{"a":1}\n', '{"a":2}\n', '{"a":3}\n']);
+    const frames = await collectFrames(source, { signal });
+    expect(frames).toHaveLength(3);
+    expect(added).toBeGreaterThan(0);
+    expect(removed).toBe(added);
+  });
+
+  test("a signal lookalike without listeners is rejected before pulling", async () => {
+    const { source, state } = makeSource(['{"a":1}\n']);
+    await expect(collectFrames(source, { signal: { aborted: false } as AbortSignal })).rejects.toThrow(TypeError);
+    expect(state.pulled).toBe(0);
+  });
+
+  test("metrics.frames counts delivered frames, not decoded ones", async () => {
+    const metrics = createIngestMetrics();
+    for await (const frame of decodeFrames(['{"a":1}\n{"a":2}\n{"a":3}\n'], { metrics })) {
+      expect(frame).toEqual({ a: 1 });
+      break;
+    }
+    expect(metrics.snapshot().frames).toBe(1);
+  });
+
+  test("frames decoded before a limit failure in the same chunk are delivered", async () => {
+    const result = await ingestFrames(['{"a":1}\n{"a":2}\n{"a":3}\n'], { maxFrames: 2 });
+    expect(result.status).toBe("failed");
+    expect(result.frames).toEqual([{ a: 1 }, { a: 2 }]);
+    expect(result.metrics.frames).toBe(2);
+    const bad = await ingestFrames(['{"a":1}\n{bad\n{"a":3}\n']);
+    expect(bad.status).toBe("failed");
+    expect(bad.error).toBeInstanceOf(SyntaxError);
+    expect(bad.frames).toEqual([{ a: 1 }]);
+  });
+
+  test("unknown stream options are rejected", async () => {
+    await expect(collectFrames(['{"a":1}'], { maxframes: 5 } as object)).rejects.toThrow("Unknown stream option: maxframes");
+  });
+});
