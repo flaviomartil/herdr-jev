@@ -170,7 +170,7 @@ describe("review --council auto", () => {
 
   it("skips the same diff, then the cooldown, and --council-cooldown 0 lifts the cooldown", () => {
     const started = members();
-    const args = ["--json", "--council", "auto", "--task", "migrate"];
+    const args = ["--json", "--council", "auto", "--task", "migrate", "--council-cooldown", "60000"];
     expect(JSON.parse(review(args, "moderate").stdout).council.ran).toBe(true);
     expect(JSON.parse(review(args, "moderate").stdout).councilNote).toBe("council skipped: same diff as the last council run");
     write("src/d.ts", "export const d = 1;\n");

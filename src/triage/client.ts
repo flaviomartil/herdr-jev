@@ -1,7 +1,6 @@
 import { execSync } from "node:child_process";
 import { choice, noul } from "@typesafe-ai/sdk";
 import { JevError, ResilientJevClient, getGlobalJevClient } from "./jev-client.js";
-import { scoreQuantile, probabilityMargin } from "./quantile.js";
 import type { TaskComplexity, ReasoningEffort, TriageDecision } from "../types/index.js";
 
 export function resolveTypeSafeApiKey(): string | null {
@@ -88,20 +87,23 @@ export async function triageTaskWithJev(
           rawComplexity = "moderate";
         }
       }
-      confidence = 1.0 - probabilityMargin(probs);
+      confidence = probs[rawComplexity] ?? confidence;
     }
 
     const needsResearch = (answers.needs_research?.noul ?? 0) > 0.5;
     const rawEffort = (answers.effort?.choice ?? "standard") as ReasoningEffort;
+    let effort = rawEffort;
+    if (rawComplexity === "architectural") effort = "xhigh";
+    else if (rawComplexity === "moderate" && rawEffort === "standard") effort = "high";
 
     const recommendedPipeline: "direct" | "triad" =
       rawComplexity === "moderate" || rawComplexity === "architectural" ? "triad" : "direct";
 
     return {
       complexity: rawComplexity,
-      confidence: Math.max(0.5, Math.min(1.0, confidence)),
+      confidence: Math.max(0, Math.min(1.0, confidence)),
       needsResearch,
-      effort: rawEffort,
+      effort,
       recommendedPipeline,
       latencyMs: Math.round(outcome.jevMs),
       rawAnswers: answers,

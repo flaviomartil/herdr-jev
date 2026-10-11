@@ -112,5 +112,6 @@ export async function resolveHerdrContext(input: {
     } catch {}
   }
   return { client, delegation, sourcePaneId, workspaceId: agent?.workspace_id ?? env.HERDR_WORKSPACE_ID,
+    sourceAgentName: typeof agent?.name === "string" ? agent.name : undefined,
     cwd: agent?.foreground_cwd ?? agent?.cwd ?? pluginContext?.focused_pane_cwd ?? process.cwd() };
 }

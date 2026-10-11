@@ -258,13 +258,10 @@ export function modelRoleOf(kind: AgentKind): HarnessModelRole {
   return kind === 'mechanic' ? 'reader' : kind
 }
 
-export type SpawnModel = 'fable' | 'opus' | 'sonnet' | 'haiku'
-
-const SPAWN_MODELS: readonly SpawnModel[] = ['fable', 'opus', 'sonnet', 'haiku']
+export type SpawnModel = string
 
 export function spawnModelOf(cliModel: string): SpawnModel | null {
-  const lower = cliModel.toLowerCase()
-  return SPAWN_MODELS.find(alias => lower.includes(alias)) ?? null
+  return /^(?:fable|opus|sonnet|haiku|claude-(?:fable|opus|sonnet|haiku)-[a-z0-9][a-z0-9._-]*)$/i.test(cliModel) ? cliModel : null
 }
 
 export function claudeEffort(effort: string | null | undefined): string | undefined {

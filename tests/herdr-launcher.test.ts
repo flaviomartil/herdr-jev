@@ -119,8 +119,11 @@ describe("Herdr launch acknowledgement", () => {
 
   it("preserves the stage effort in interactive and captured commands", () => {
     expect(buildAgentCommand("codex", stage)).toContain('model_reasoning_effort="xhigh"');
+    expect(buildAgentCommand("codex", stage)).toContain("check_for_update_on_startup=false");
+    expect(buildInlineCommand("codex", stage, "task")).toContain("check_for_update_on_startup=false");
+    expect(buildInlineCommand("codex", stage, "task", true)).not.toContain("check_for_update_on_startup=false");
     expect(buildInlineCommand("codex", stage, "task", true)).toContain('model_reasoning_effort="xhigh"');
-    expect(buildAgentCommand("claude", { ...stage, effort: "high" })).toEqual(["claude", "--model", stage.model, "--effort", "high", "--dangerously-skip-permissions"]);
+    expect(buildAgentCommand("claude", { ...stage, effort: "high" })).toEqual(["claude", "--model", stage.model, "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', "--dangerously-skip-permissions"]);
   });
 
   it("reads tab root panes and rejects unrelated JSON instead of using it as a pane ID", () => {
@@ -263,6 +266,27 @@ describe("Herdr launch acknowledgement", () => {
     expect(result.ackStatus).toBe("unknown");
     expect(herdr.closeCalls).toBe(0);
     expect(herdr.promptCalls).toBe(0);
+  });
+
+  it("gives native startup more than the MCP deadline within the adapter budget", async () => {
+    const commands: string[][] = [];
+    const client = createHerdrClient(async (argv) => {
+      commands.push([...argv]);
+      return commandResult(true);
+    });
+    await client.startAgent({ name: "startup-probe", kind: "codex", paneId: "pane-owned", agentArgs: ["--model", "gpt-6.1-sol"] });
+    expect(commands[0].slice(1)).toEqual(["agent", "start", "startup-probe", "--kind", "codex", "--pane", "pane-owned", "--timeout", "45000", "--", "--model", "gpt-6.1-sol"]);
+  });
+
+  for (const interactiveReady of [true, false]) it(`requires native interactive readiness for a done startup state (${interactiveReady})`, async () => {
+    process.env.HERDR_ENV = "1";
+    const herdr = fakeHerdr(commandResult(true));
+    herdr.getAgent = async () => commandResult(true, JSON.stringify({ result: { agent: { agent_status: "done", interactive_ready: interactiveReady } } }));
+    let now = 0;
+    const result = await launchStageInHerdr({ client: "codex", stage, handoffPrompt: "synthetic handoff", herdr,
+      clock: { now: () => now, sleep: async ms => { now += ms; } } });
+    expect(herdr.promptCalls).toBe(interactiveReady ? 1 : 0);
+    expect(result.ackStatus).toBe(interactiveReady ? "acknowledged" : "unknown");
   });
 
   it("supervises the launched pane through done without converting it into work verification", async () => {

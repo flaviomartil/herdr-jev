@@ -238,7 +238,7 @@ describe("herdr-jev subagent, workers close and runs list against the contract f
       const grid = JSON.parse(readFileSync(join(stateDir, "grid", "caller-1.json"), "utf8"));
       expect(grid.workers[0]).toMatchObject({ paneId: "pane-42", runId: summary.runId, cwd: repo });
       const startArgs = readFileSync(herdr.log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).find((argv: string[]) => argv[1] === "start")!;
-      expect(startArgs.slice(startArgs.indexOf("--") + 1)).toEqual(["--model", "claude-sonnet-5-5", "--effort", "high", "--dangerously-skip-permissions"]);
+      expect(startArgs.slice(startArgs.indexOf("--") + 1)).toEqual(["--model", "claude-sonnet-5-5", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', "--dangerously-skip-permissions"]);
 
       const listed = spawnSync(process.execPath, [cli, "runs", "list", "--json"], { encoding: "utf8", env, cwd: repo, timeout: 60_000 });
       expect(listed.status).toBe(0);

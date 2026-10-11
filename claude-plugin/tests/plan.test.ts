@@ -125,13 +125,15 @@ test('claudeEffort maps Herdr-Jev efforts to Claude Code levels', async () => {
   expect(claudeEffort(null)).toBeUndefined()
 })
 
-test('spawnModelOf maps catalog ids to Claude Code aliases and refuses unknown ids', async () => {
-  expect(spawnModelOf('claude-fable-5-1')).toBe('fable')
-  expect(spawnModelOf('claude-opus-5-5')).toBe('opus')
-  expect(spawnModelOf('claude-sonnet-5-5')).toBe('sonnet')
-  expect(spawnModelOf('claude-sonnet-5-6')).toBe('sonnet')
-  expect(spawnModelOf('claude-haiku-4-5-20251001')).toBe('haiku')
-  expect(spawnModelOf('Claude-Opus-5-5')).toBe('opus')
+test('spawnModelOf preserves exact catalog ids and refuses other providers', async () => {
+  expect(spawnModelOf('claude-fable-5-1')).toBe('claude-fable-5-1')
+  expect(spawnModelOf('claude-opus-5-5')).toBe('claude-opus-5-5')
+  expect(spawnModelOf('claude-sonnet-5-5')).toBe('claude-sonnet-5-5')
+  expect(spawnModelOf('claude-sonnet-5-6')).toBe('claude-sonnet-5-6')
+  expect(spawnModelOf('claude-haiku-4-5-20251001')).toBe('claude-haiku-4-5-20251001')
+  expect(spawnModelOf('Claude-Opus-5-5')).toBe('Claude-Opus-5-5')
+  expect(spawnModelOf('fable')).toBe('fable')
+  expect(spawnModelOf('other-provider-sonnet')).toBeNull()
   expect(spawnModelOf('gpt-5.5')).toBeNull()
 })
 

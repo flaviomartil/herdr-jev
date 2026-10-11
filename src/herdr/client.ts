@@ -288,6 +288,8 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
         input.kind,
         "--pane",
         input.paneId,
+        "--timeout",
+        "45000",
         "--",
         ...input.agentArgs,
       ]);

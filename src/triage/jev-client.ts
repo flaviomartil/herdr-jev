@@ -71,7 +71,7 @@ export class ResilientJevClient {
 
   constructor(options: ResilientJevOptions = {}) {
     this.deadlineMs = options.deadlineMs ?? getResolvedDeadlineMs();
-    this.model = options.model ?? DEFAULT_JEV_MODEL;
+    this.model = options.model ?? process.env.TYPESAFE_DEFAULT_MODEL ?? DEFAULT_JEV_MODEL;
     this.apiKey = options.apiKey !== undefined ? options.apiKey : null;
     this.injectedFetch = options.fetch;
     this.cache = new Lru<JevOutcome<any>>(options.cacheSize ?? 256);
