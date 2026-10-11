@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createFrameDecoder, parseFrames } from "../pilot.js";
+import { createFrameDecoder, parseFrames, DEFAULT_MAX_FRAMES, DEFAULT_MAX_FRAME_BYTES } from "../pilot.js";
 import { createIngestMetrics } from "../pilot-metrics.js";
 import { collectFrames, decodeFrames } from "../pilot-stream.js";
 import { createIngestController, ingestFrames } from "../pilot-ingest.js";
@@ -26,7 +26,7 @@ function makeSource(chunks: Chunk[], options: { hangAfter?: number } = {}) {
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-describe("pilot.js stays intact", () => {
+describe("pilot.js decoder contract", () => {
   test("parseFrames and createFrameDecoder keep their contract", () => {
     expect(parseFrames('{"a":1}\n{"b":2}\n')).toEqual([{ a: 1 }, { b: 2 }]);
     const decoder = createFrameDecoder({ maxFrames: 1 });
@@ -633,5 +633,70 @@ describe("sixth review follow-ups", () => {
     expect(result.status).toBe("cancelled");
     expect(result.metrics).toMatchObject({ status: "cancelled", errors: 0 });
     expect(result.frames).toEqual([]);
+  });
+});
+
+describe("decoder follow-ups", () => {
+  test("a frame built from one-byte chunks keeps an exact running byte count", () => {
+    const decoder = createFrameDecoder({ maxFrameBytes: 1 << 20 });
+    const payload = `{"txt":"${"ação".repeat(60000)}"}\n`;
+    let frames: unknown[] = [];
+    for (const char of payload) frames = frames.concat(decoder.push(char));
+    expect(frames).toHaveLength(1);
+    expect((frames[0] as { txt: string }).txt.length).toBe(240000);
+  });
+
+  test("surrogate pairs split across chunks count as four bytes", () => {
+    const body = '{"e":"😀"}';
+    const bytes = Buffer.byteLength(body, "utf8");
+    const exact = createFrameDecoder({ maxFrameBytes: bytes });
+    const [head, tail] = [body.slice(0, 7), body.slice(7)];
+    expect(head.endsWith("\ud83d")).toBe(true);
+    expect(exact.push(head)).toEqual([]);
+    expect(exact.push(tail + "\n")).toEqual([{ e: "😀" }]);
+    const tight = createFrameDecoder({ maxFrameBytes: bytes - 1 });
+    tight.push(head);
+    expect(() => tight.push(tail + "\n")).toThrow("maxFrameBytes exceeded");
+  });
+
+  test("frames decoded before a failing line in the same chunk are returned, then the error surfaces", () => {
+    const decoder = createFrameDecoder();
+    expect(decoder.push('{"a":1}\n{bad\n{"a":3}\n')).toEqual([{ a: 1 }]);
+    expect(() => decoder.push('{"a":4}\n')).toThrow(SyntaxError);
+    expect(() => decoder.push('{"a":4}\n')).toThrow("Frame decoder is closed");
+    const capped = createFrameDecoder({ maxFrames: 1 });
+    expect(capped.push('{"a":1}\n{"a":2}\n')).toEqual([{ a: 1 }]);
+    expect(() => capped.end()).toThrow("maxFrames exceeded");
+    const first = createFrameDecoder({ maxFrames: 1 });
+    first.push('{"a":1}\n');
+    expect(() => first.push('{"a":2}\n')).toThrow("maxFrames exceeded");
+  });
+
+  test("end strips a trailing carriage return before measuring", () => {
+    const decoder = createFrameDecoder({ maxFrameBytes: 7 });
+    expect(decoder.push('{"a":1}\r')).toEqual([]);
+    expect(decoder.end()).toEqual([{ a: 1 }]);
+    const over = createFrameDecoder({ maxFrameBytes: 6 });
+    expect(() => over.push('{"a":1}\r')).toThrow("maxFrameBytes exceeded");
+  });
+
+  test("unknown decoder options are rejected and reset clears a deferred error", () => {
+    expect(() => createFrameDecoder({ maxFrameByte: 10 } as object)).toThrow("Unknown decoder option: maxFrameByte");
+    const decoder = createFrameDecoder();
+    decoder.push('{"a":1}\n{bad\n');
+    decoder.reset();
+    expect(decoder.push('{"a":2}\n')).toEqual([{ a: 2 }]);
+    expect(DEFAULT_MAX_FRAMES).toBe(100);
+    expect(DEFAULT_MAX_FRAME_BYTES).toBe(4096);
+  });
+
+  test("the stream layer no longer caps frames at 100 by default", async () => {
+    const lines = Array.from({ length: 250 }, (_, i) => `{"i":${i}}\n`);
+    const result = await ingestFrames(lines);
+    expect(result.status).toBe("completed");
+    expect(result.frames).toHaveLength(250);
+    const capped = await ingestFrames(lines, { maxFrames: 100 });
+    expect(capped.status).toBe("failed");
+    expect(capped.frames).toHaveLength(100);
   });
 });
