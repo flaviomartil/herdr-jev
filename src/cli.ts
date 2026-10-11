@@ -446,7 +446,7 @@ program.command("mod-collect <id>")
         stagePreflight: stage => probed.has(stage.role) ? Promise.resolve(true) : probeModStage(stage),
         crossHarness,
         poll: !options.wait || !["reported", "verified"].includes(run.stages[0]?.state), timeoutMs: 900_000, cwd: options.cwd,
-        verifyTimeoutMs: 240000,
+        verifyTimeoutMs: 540000,
         verifyCommandJson: options.wait ? modVerifyCommand(options.cwd, id) : undefined });
     const implementation = result.run.stages.find((stage: any) => stage.role === "implementer");
     const report = implementation?.handoffPath ? externalRun("handoff", { path: implementation.handoffPath }) : null;
