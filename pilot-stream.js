@@ -1,4 +1,4 @@
-import { createFrameDecoder } from './pilot.js';
+import { createFrameDecoder, DEFAULT_MAX_FRAME_BYTES } from './pilot.js';
 import { byteSize } from './pilot-metrics.js';
 
 const DECODER_OPTIONS = new Set(['maxFrameBytes', 'maxFrames']);
@@ -78,6 +78,7 @@ export function validateStreamOptions(options) {
   for (const key of Object.keys(decoderOptions)) {
     if (!DECODER_OPTIONS.has(key)) throw new TypeError(`Unknown stream option: ${key}`);
   }
+  if (decoderOptions.maxFrames === undefined) decoderOptions.maxFrames = Number.MAX_SAFE_INTEGER;
   createFrameDecoder(decoderOptions);
   return { signal, maxBytes, metrics, decoderOptions };
 }
@@ -89,7 +90,7 @@ export function createFrameStream(source, options = {}) {
   async function* run() {
     const decoder = createFrameDecoder(decoderOptions);
     const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
-    const maxFrameBytes = decoderOptions.maxFrameBytes ?? 4096;
+    const maxFrameBytes = decoderOptions.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
 
     let iterator = null;
     let bytes = 0;
