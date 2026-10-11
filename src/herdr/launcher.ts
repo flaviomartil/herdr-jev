@@ -1015,10 +1015,15 @@ export function buildAgentCommand(client: ClientKind, stage: StageSpec): string[
   const bin = resolveClientExecutable(client);
   const launch = prepareLaunch(client, stage, base === "kiro" ? kiroTrustFlags(stage) : []);
   switch (base) {
-    case "claude":
+    case "claude": {
+      if ([...launch.bypass, ...launch.flags].includes("--dangerously-skip-permissions") && !launch.flags.some((flag) => /^--settings(?:=|$)/.test(flag))) {
+        launch.flags.push("--settings", '{"skipDangerousModePermissionPrompt":true}');
+      }
+      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
+    }
     case "codex":
     case "antigravity": {
-      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
+      return [bin, "--model", launch.model, ...launch.flags, ...(base === "codex" ? ["-c", "check_for_update_on_startup=false"] : []), ...launch.bypass, ...launch.readonly];
     }
     case "cursor": {
       return [bin, "--model", stage.model];
@@ -1338,9 +1343,12 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
         }
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
-          if (state === "idle" || state === "unknown") {
+          let interactiveReady = false;
+          try { interactiveReady = JSON.parse(agentRes.stdout).result?.agent?.interactive_ready === true; } catch {}
+          const idle = state === "idle" || state === "done" && interactiveReady;
+          if (idle || state === "unknown") {
             const readyMatch = isClientPromptReady(baseClient, `${screenRes.stdout}\n${screenRes.stderr}`);
-            if (readyMatch && state === "idle") {
+            if (readyMatch && idle) {
               isReady = true;
               break;
             }
@@ -1560,11 +1568,14 @@ export function buildInlineCommand(
   switch (base) {
     case "claude": {
       if (nonInteractive) return [bin, "-p", prompt, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
+      if ([...launch.bypass, ...launch.flags].includes("--dangerously-skip-permissions") && !launch.flags.some((flag) => /^--settings(?:=|$)/.test(flag))) {
+        launch.flags.push("--settings", '{"skipDangerousModePermissionPrompt":true}');
+      }
       return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, prompt, ...launch.readonly];
     }
     case "codex": {
       if (nonInteractive) return [bin, "exec", prompt, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];
-      return [bin, "--model", launch.model, ...launch.flags, ...launch.bypass, prompt, ...launch.readonly];
+      return [bin, "--model", launch.model, ...launch.flags, "-c", "check_for_update_on_startup=false", ...launch.bypass, prompt, ...launch.readonly];
     }
     case "antigravity": {
       return [bin, nonInteractive ? "-p" : "-i", prompt, "--model", launch.model, ...launch.flags, ...launch.bypass, ...launch.readonly];

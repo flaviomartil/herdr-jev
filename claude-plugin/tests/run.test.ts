@@ -112,21 +112,21 @@ test('harness_plan rejects a bad input with text, never a throw', { options: { a
   expect(planState(seen)).toBeNull()
 })
 
-test('harness_run spawns the implementer with the Claude Code model alias and a registered type with its effort', { options: { autoRun: false } }, async ($, on) => {
+test('harness_run spawns the implementer with the exact CLI model and its effort', { options: { autoRun: false } }, async ($, on) => {
   const seen = wire(on)
   await start($)
   await makePlan($, THREE)
 
   const text = await runTask($)
   expect(seen.spawns).toHaveLength(1)
-  expect(seen.spawns[0]).toMatchObject({ subagentType: 'harness:implementer', model: 'sonnet', cwd: CWD })
+  expect(seen.spawns[0]).toMatchObject({ subagentType: 'harness:implementer', model: 'claude-sonnet-5-5', cwd: CWD })
   expect(seen.spawns[0]?.prompt).toContain('Ship the parser')
   expect(seen.spawns[0]?.prompt).toContain('src/parser.ts')
   expect(seen.spawns[0]?.prompt).toContain('pnpm test')
   expect(text).toContain('agent-1')
 
   const spec = lastSpec(seen.specs, 'implementer')
-  expect(spec).toMatchObject({ model: 'sonnet', effort: 'high' })
+  expect(spec).toMatchObject({ model: 'claude-sonnet-5-5', effort: 'high' })
   expect(spec?.tools).toBeUndefined()
   expect(spec?.disallowedTools).toEqual(['Agent', 'mcp__harness__harness_run', 'mcp__harness__harness_plan'])
 
@@ -146,7 +146,7 @@ test('the reviewer is read-only by tools and carries the implementer report', { 
   await finish($, 'agent-1', 'Implemented. Files changed: src/parser.ts')
   const plan = planState(seen)
   expect(plan?.tasks[0]).toMatchObject({ state: 'review', agentId: 'agent-1', reviewAgentId: 'agent-2' })
-  expect(seen.spawns[1]).toMatchObject({ subagentType: 'harness:reviewer', model: 'opus' })
+  expect(seen.spawns[1]).toMatchObject({ subagentType: 'harness:reviewer', model: 'claude-opus-5-5' })
   expect(seen.spawns[1]?.prompt).toContain('REVIEW_GATE_VERDICT: APPROVE')
   expect(seen.spawns[1]?.prompt).toContain('REVIEW_GATE_VERDICT: CHANGES_REQUIRED')
   expect(seen.spawns[1]?.prompt).toContain('Implementer report:')
@@ -154,7 +154,7 @@ test('the reviewer is read-only by tools and carries the implementer report', { 
   expect(Object.keys(workersState(seen))).toEqual(['agent-2'])
 
   const spec = lastSpec(seen.specs, 'reviewer')
-  expect(spec).toMatchObject({ model: 'opus', effort: 'xhigh' })
+  expect(spec).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh' })
   expect(spec?.tools).toEqual(['Read', 'Glob', 'Grep'])
   for (const name of ['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash', 'Agent', 'mcp__harness__harness_run', 'mcp__harness__harness_plan']) {
     expect(spec?.disallowedTools).toContain(name)
@@ -194,16 +194,16 @@ test('the mechanic writes on the reader model, shows as reader, and always chain
   await makePlan($, { objective: 'Tidy', tasks: [{ title: 'Create fixtures', paths: ['tests/fixtures'] }] })
 
   await runTask($)
-  expect(seen.spawns[0]).toMatchObject({ subagentType: 'harness:mechanic', model: 'haiku' })
+  expect(seen.spawns[0]).toMatchObject({ subagentType: 'harness:mechanic', model: 'claude-haiku-4-5-20251001' })
   const spec = lastSpec(seen.specs, 'mechanic')
-  expect(spec).toMatchObject({ model: 'haiku', effort: 'medium' })
+  expect(spec).toMatchObject({ model: 'claude-haiku-4-5-20251001', effort: 'medium' })
   expect(spec?.tools).toEqual(['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash'])
   expect(spec?.disallowedTools).toEqual(['Agent', 'mcp__harness__harness_run', 'mcp__harness__harness_plan'])
   expect(Object.values(workersState(seen))[0]).toMatchObject({ role: 'reader', writes: true })
 
   await finish($, 'agent-1', 'Created fixtures.')
   expect(planState(seen)?.tasks[0]).toMatchObject({ state: 'review', reviewAgentId: 'agent-2' })
-  expect(seen.spawns[1]).toMatchObject({ subagentType: 'harness:reviewer', model: 'opus' })
+  expect(seen.spawns[1]).toMatchObject({ subagentType: 'harness:reviewer', model: 'claude-opus-5-5' })
   expect(seen.spawns[1]?.prompt).toContain('Created fixtures.')
 })
 
@@ -214,7 +214,7 @@ test('the reader is read-only, needs no review and ends done', { options: { auto
   expect(planState(seen)?.tasks[0]).toMatchObject({ role: 'reader', writes: false, review: false })
 
   await runTask($)
-  expect(seen.spawns[0]).toMatchObject({ subagentType: 'harness:reader', model: 'haiku' })
+  expect(seen.spawns[0]).toMatchObject({ subagentType: 'harness:reader', model: 'claude-haiku-4-5-20251001' })
   const spec = lastSpec(seen.specs, 'reader')
   expect(spec).toMatchObject({ effort: 'medium' })
   expect(spec?.tools).toEqual(['Read', 'Glob', 'Grep'])
@@ -225,7 +225,7 @@ test('the reader is read-only, needs no review and ends done', { options: { auto
   expect(seen.spawns).toHaveLength(1)
 })
 
-test('harness_run spawns a reader on haiku and an implementer on sonnet, never the exact CLI id', { options: { autoRun: false } }, async ($, on) => {
+test('harness_run preserves the exact CLI ids for reader and implementer', { options: { autoRun: false } }, async ($, on) => {
   const seen = wire(on)
   await start($)
   await makePlan($, { objective: 'Mixed', tasks: [{ title: 'Inventory adapters' }, { title: 'Fix the read timeout in client.ts' }] })
@@ -233,10 +233,10 @@ test('harness_run spawns a reader on haiku and an implementer on sonnet, never t
 
   await runTask($)
   const byType = new Map(seen.spawns.map(spawn => [spawn.subagentType, spawn.model]))
-  expect(byType.get('harness:reader')).toBe('haiku')
-  expect(byType.get('harness:implementer')).toBe('sonnet')
-  expect(seen.spawns.every(spawn => spawn.model === 'haiku' || spawn.model === 'sonnet')).toBe(true)
-  expect(seen.specs.every(spec => spec.model === 'haiku' || spec.model === 'sonnet' || spec.model === 'opus')).toBe(true)
+  expect(byType.get('harness:reader')).toBe('claude-haiku-4-5-20251001')
+  expect(byType.get('harness:implementer')).toBe('claude-sonnet-5-5')
+  expect(seen.spawns.every(spawn => spawn.model === 'claude-haiku-4-5-20251001' || spawn.model === 'claude-sonnet-5-5')).toBe(true)
+  expect(seen.specs.every(spec => spec.model === 'claude-haiku-4-5-20251001' || spec.model === 'claude-sonnet-5-5' || spec.model === 'claude-opus-5-5')).toBe(true)
   expect(planState(seen)?.tasks[0]?.model).toBe('claude-haiku-4-5-20251001')
 })
 
@@ -303,8 +303,8 @@ test('a changed effort re-registers the type before the next spawn', { options: 
   await runTask($)
   const registered = seen.specs.filter(spec => spec.name === 'implementer')
   expect(registered).toHaveLength(2)
-  expect(registered[1]).toMatchObject({ model: 'sonnet', effort: 'xhigh' })
-  expect(seen.spawns.at(-1)).toMatchObject({ model: 'sonnet' })
+  expect(registered[1]).toMatchObject({ model: 'claude-sonnet-5-6', effort: 'xhigh' })
+  expect(seen.spawns.at(-1)).toMatchObject({ model: 'claude-sonnet-5-6' })
 })
 
 test('a reviewer answer without a verdict line needs you', { options: { autoRun: false } }, async ($, on) => {
@@ -620,9 +620,9 @@ test('the four agent types are registered at session start from one models list 
 
   expect(seen.runs).toContainEqual(['herdr-jev', 'models', 'list', '--json', '--client', 'claude'])
   expect(seen.specs.map(spec => spec.name).sort()).toEqual(['implementer', 'mechanic', 'reader', 'reviewer'])
-  expect(lastSpec(seen.specs, 'implementer')).toMatchObject({ model: 'sonnet', effort: 'high' })
-  expect(lastSpec(seen.specs, 'reviewer')).toMatchObject({ model: 'opus', effort: 'xhigh' })
-  expect(lastSpec(seen.specs, 'mechanic')).toMatchObject({ model: 'haiku', effort: 'medium' })
+  expect(lastSpec(seen.specs, 'implementer')).toMatchObject({ model: 'claude-sonnet-5-5', effort: 'high' })
+  expect(lastSpec(seen.specs, 'reviewer')).toMatchObject({ model: 'claude-opus-5-5', effort: 'xhigh' })
+  expect(lastSpec(seen.specs, 'mechanic')).toMatchObject({ model: 'claude-haiku-4-5-20251001', effort: 'medium' })
   expect(seen.registered).toContain('tool:harness_plan')
 
   await makePlan($, { objective: 'One', tasks: [{ title: 'Add a' }] })

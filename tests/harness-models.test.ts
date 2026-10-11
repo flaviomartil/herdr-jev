@@ -38,8 +38,8 @@ afterEach(() => {
 
 function expectedFallbackArgv(): Array<[string, string[]]> {
   return [
-    ["claude", ["claude", "--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS]],
-    ["codex", ["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', CODEX_BYPASS]],
+    ["claude", ["claude", "--model", "claude-sonnet-5-5", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]],
+    ["codex", ["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', "-c", "check_for_update_on_startup=false", CODEX_BYPASS]],
     ["antigravity", ["agy", "--model", "gemini-3.8-flash-high", CLAUDE_BYPASS]],
     ["kiro", ["kiro-cli", "chat", "--trust-all-tools", "--agent", "ai-harness", "--model", "kiro-model"]],
     ["kimi", ["kimi", "-m", "kimi-model", "--yolo"]],
@@ -49,6 +49,18 @@ function expectedFallbackArgv(): Array<[string, string[]]> {
 const MODELS: Record<string, string> = { claude: "sonnet-5", codex: "gpt-5.6-luna", antigravity: "gemini-3-8-flash", kiro: "kiro-model", kimi: "kimi-model" };
 
 describe("bypass mode without a harness answer", () => {
+  it("acknowledges Claude bypass only for interactive launches and preserves explicit settings", () => {
+    const launch = stage("implementer", "sonnet-5");
+    const interactive = buildAgentCommand("claude", launch);
+    expect(JSON.parse(interactive[interactive.indexOf("--settings") + 1]!)).toEqual({ skipDangerousModePermissionPrompt: true });
+    expect(buildInlineCommand("claude", launch, "task", true)).not.toContain("--settings");
+    expect(buildAgentCommand("claude", stage("reviewer", "sonnet-5"))).not.toContain("--settings");
+    expect(buildAgentCommand("claude", stage("implementer", "sonnet-5", "high", ["--settings", '{"effortLevel":"high"}']))).toContain('{"effortLevel":"high"}');
+    expect(buildAgentCommand("claude", stage("implementer", "sonnet-5", "high", ["--settings", '{"effortLevel":"high"}'])).filter((arg) => arg === "--settings")).toHaveLength(1);
+    process.env.HERDR_JEV_BYPASS = "0";
+    expect(buildAgentCommand("claude", launch)).not.toContain("--settings");
+  });
+
   it("starts advisors, implementers and researchers with the exact no-prompt argv for every client", () => {
     for (const role of ["advisor", "implementer", "researcher"] as const) {
       for (const [client, argv] of expectedFallbackArgv()) {
@@ -58,9 +70,9 @@ describe("bypass mode without a harness answer", () => {
   });
 
   it("builds the inline interactive and captured commands with bypass before the prompt text", () => {
-    expect(buildInlineCommand("claude", stage("implementer", "sonnet-5"), "task")).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS, "task"]);
+    expect(buildInlineCommand("claude", stage("implementer", "sonnet-5"), "task")).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS, "task"]);
     expect(buildInlineCommand("claude", stage("researcher", "sonnet-5"), "task", true)).toEqual(["claude", "-p", "task", "--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS]);
-    expect(buildInlineCommand("codex", stage("implementer", "gpt-5.6-luna"), "task")).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', CODEX_BYPASS, "task"]);
+    expect(buildInlineCommand("codex", stage("implementer", "gpt-5.6-luna"), "task")).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', "-c", "check_for_update_on_startup=false", CODEX_BYPASS, "task"]);
     expect(buildInlineCommand("codex", stage("advisor", "gpt-5.6-luna"), "task", true)).toEqual(["codex", "exec", "task", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', CODEX_BYPASS]);
     expect(buildInlineCommand("antigravity", stage("advisor", "gemini-3-8-flash"), "task", true)).toEqual(["agy", "-p", "task", "--model", "gemini-3.8-flash-high", CLAUDE_BYPASS]);
     expect(buildInlineCommand("kimi", stage("implementer", "kimi-model"), "task")).toEqual(["kimi", "-m", "kimi-model", "--yolo", "task"]);
@@ -87,7 +99,7 @@ describe("bypass mode without a harness answer", () => {
     process.env.HERDR_JEV_BYPASS = "0";
     expect(bypassEnabled()).toBe(false);
     expect(buildAgentCommand("claude", stage("implementer", "sonnet-5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high"]);
-    expect(buildAgentCommand("codex", stage("implementer", "gpt-5.6-luna"))).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"']);
+    expect(buildAgentCommand("codex", stage("implementer", "gpt-5.6-luna"))).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', "-c", "check_for_update_on_startup=false"]);
     expect(buildAgentCommand("antigravity", stage("implementer", "gemini-3-8-flash"))).toEqual(["agy", "--model", "gemini-3.8-flash-high"]);
     expect(buildAgentCommand("kimi", stage("implementer", "kimi-model"))).toEqual(["kimi", "-m", "kimi-model"]);
     expect(buildAgentCommand("kiro", stage("implementer", "kiro-model"))).toContain("--trust-all-tools");
@@ -117,7 +129,7 @@ describe("model catalog through ai-harness", () => {
     install();
     const first = buildAgentCommand("claude", stage("implementer", "fable-5"));
     const second = buildAgentCommand("claude", stage("implementer", "fable-5"));
-    expect(first).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", "high", CLAUDE_BYPASS]);
+    expect(first).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
     expect(second).toEqual(first);
     const calls = harness!.callsFor("model-resolve");
     expect(calls).toHaveLength(1);
@@ -129,8 +141,8 @@ describe("model catalog through ai-harness", () => {
 
   it("uses the harness effort style per client", () => {
     install();
-    expect(buildAgentCommand("claude", stage("implementer", "claude-opus-5-5", "standard"))).toEqual(["claude", "--model", "claude-opus-5-5", "--effort", "medium", CLAUDE_BYPASS]);
-    expect(buildAgentCommand("codex", stage("implementer", "gpt-5.6-luna", "xhigh"))).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="xhigh"', CODEX_BYPASS]);
+    expect(buildAgentCommand("claude", stage("implementer", "claude-opus-5-5", "standard"))).toEqual(["claude", "--model", "claude-opus-5-5", "--effort", "medium", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
+    expect(buildAgentCommand("codex", stage("implementer", "gpt-5.6-luna", "xhigh"))).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="xhigh"', "-c", "check_for_update_on_startup=false", CODEX_BYPASS]);
     expect(buildAgentCommand("antigravity", stage("implementer", "gemini-3-8-pro", "standard"))).toEqual(["agy", "--model", "gemini-3.1-pro-low", CLAUDE_BYPASS]);
     expect(buildAgentCommand("antigravity", stage("implementer", "claude-opus-4-6", "xhigh"))).toEqual(["agy", "--model", "claude-opus-4-6-thinking", CLAUDE_BYPASS]);
   });
@@ -157,7 +169,7 @@ describe("model catalog through ai-harness", () => {
   it("prefers the cliModel of the delegation plan over every mapping", () => {
     install();
     const planned = { ...stage("implementer", "gpt-5.6-luna"), cliModel: "gpt-5.6-luna-cli" };
-    expect(buildAgentCommand("codex", planned)).toEqual(["codex", "--model", "gpt-5.6-luna-cli", "-c", 'model_reasoning_effort="high"', CODEX_BYPASS]);
+    expect(buildAgentCommand("codex", planned)).toEqual(["codex", "--model", "gpt-5.6-luna-cli", "-c", 'model_reasoning_effort="high"', "-c", "check_for_update_on_startup=false", CODEX_BYPASS]);
     expect(buildInlineCommand("claude", { ...stage("implementer", "sonnet-5"), cliModel: "claude-custom" }, "task", true).slice(0, 5)).toEqual(["claude", "-p", "task", "--model", "claude-custom"]);
   });
 
@@ -254,7 +266,7 @@ describe("model catalog through ai-harness", () => {
   it("falls back to the built-in mapping for a model the harness does not know", () => {
     install();
     expect(harnessModelResolve({ client: "claude", model: "sonnet-5.5", effort: "high", role: "implementer" })?.known).toBe(false);
-    expect(buildAgentCommand("claude", stage("implementer", "sonnet-5.5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS]);
+    expect(buildAgentCommand("claude", stage("implementer", "sonnet-5.5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
     expect(buildAgentCommand("antigravity", stage("implementer", "gemini-3-8-pro-lite", "high")).slice(0, 3)).toEqual(["agy", "--model", "gemini-3.1-pro-lite-high"]);
   });
 

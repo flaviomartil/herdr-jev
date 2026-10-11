@@ -1,6 +1,43 @@
 # harness
 
-Mod do Claude Code que mostra e comanda o trabalho que o Herdr-Jev já decide: papel, modelo e effort de cada tarefa. O mod não escolhe modelos; ele lê `herdr-jev models list --json --client claude` e `herdr-jev triage` e dispara subagentes nativos com o id exato do Claude Code (`cliModel`).
+Mod do Claude Code que executa a política compartilhada do Herdr-Jev e acompanha seus resultados. A lista de modelos Claude continua servindo aos subagentes nativos; a delegação automática consome `executionStages`, incluindo outros CLIs permitidos pelo AI Harness.
+
+## Delegação automática
+
+Instalação local, pelo gerenciador nativo de mods:
+
+```sh
+claude plugin marketplace add /home/martil/projects/personal/herdr-jev --scope user
+claude plugin install harness@herdr-jev --scope user
+```
+
+Com `autoDelegate=true`, prompts humanos recebem estado `planning` antes do início do turno principal. Triagem, sondagens e lançamento são agendados fora do hook, cujo orçamento fixo no Claude é de dez segundos. O advisor deve aguardar a decisão antes de editar. Tarefas moderadas e arquiteturais usam o perfil do modelo exato da sessão, a ordem de destinos em `harness.yml` e sondagens nativas de disponibilidade. Modelo desconhecido, tarefa simples ou destino indisponível mantém execução direta. Eventos internos, comandos e trabalhadores não iniciam outra delegação.
+
+Instruções explícitas como `não delegue`, `sem delegação`, `do not delegate`, `read only` e `apenas leitura` mantêm execução direta. O pipeline automático é de implementação; pedidos explícitos de leitura não iniciam um peer com acesso de escrita. Consults automáticos usam o transporte Claude existente; um perfil com consult em outro CLI recebe execução direta com motivo `consult_adapter_unavailable`.
+
+Este mod habilita roteamento entre CLIs por padrão. `HERDR_JEV_CROSS_HARNESS` e `HERDR_JEV_EXCLUDE_CLIENTS` continuam limitando destinos quando definidos explicitamente; a configuração dos outros comandos Herdr-Jev permanece igual.
+
+O mod requer Herdr para iniciar e supervisionar peers persistentes. Fora dele registra a decisão em modo shadow. No terminal interativo acompanha a cada cinco segundos; sessões headless coletam pelo tool `harness_collect`, sem manter um timer que impeça a saída do CLI.
+
+`harness_status` mostra destino, modelo, estado e handoff limitado. `harness_collect` observa o trabalhador existente; quando ele retorna, executa os checks detectados do projeto e a revisão independente do plano. Sem script de testes detectável, usa `git diff --check HEAD` e revisão independente; isso não comprova execução de testes da aplicação. `verify=true` permite reconciliação explícita de um estado incerto. Um consult obrigatório devolve sua recomendação antes de `harness_delegate`; essa ferramenta registra a decisão do advisor após ler o consult.
+
+A coleta observa workers em passos curtos. Checks e julgamento recebem até quatro minutos cada, dentro do limite de dez minutos de `process.run`; testes mais longos exigem verificação externa e reconciliação. `verify=true` explicitamente também pode iniciar a implementação original de um run criado que ainda não recebeu claim, sem criar um run substituto nem repetir tentativas já registradas.
+
+Pedidos recebidos durante uma tarefa ficam em uma fila persistente de até 32 itens. Retomar a mesma sessão conserva pedidos de verificação pendentes. Consults registram a tentativa antes do lançamento; uma tentativa incerta exige reconciliação para evitar duplicação.
+
+Decisão, tentativa e claim persistem no banco de tarefas do AI Harness antes do envio. Eventos repetidos não iniciam outra tentativa; timeout conserva o trabalho como incerto. Após 150 segundos, ausência confirmada de registro permite outra tarefa; tentativas registradas continuam exigindo reconciliação. Uma revisão deixa de ser válida quando o snapshot muda. Somente trabalhadores próprios, identificados pelo nome e pane, são fechados após handoff e validação.
+
+O hook coordena a sessão com instruções e estado, sem negar ferramentas comuns. Isso não garante exclusividade: o advisor ainda consegue editar. Os peers usam a pasta da sessão e devem preservar o branch e alterações existentes; para alterações isoladas, abrir a sessão em um workspace isolado. O mod não cria branches nem aplica patches automaticamente.
+
+Restrições de peers impedem novos envios. Coletar um resultado de uma tentativa já registrada continua permitido e não autoriza outro lançamento. O fallback `git diff --check HEAD` cobre alterações rastreadas; arquivos novos não rastreados dependem da revisão independente e de checks próprios do projeto.
+
+`autoDelegate=false` impede novos envios e interrompe a coleta automática. Tentativas anteriores continuam identificáveis por `herdr-jev mod-status --session <id> --turn <id>` e `herdr-jev run-status <id>`.
+
+Telemetria: `ai-harness observability-export --dry-run` mostra decisões, claims, início confirmado, handoff recebido, validação, falhas, incerteza, retomadas da observação e replays deduplicados. As razões de início e validação têm denominadores separados. O exportador percorre os registros um por vez e aplica a janela temporal, sem truncar os totais. A latência mede decisão até handoff, não duração de validação; a contagem de validados exige os dois estágios esperados, seus recibos e uma revisão ainda válida para o snapshot atual. Tokens e custo externo não medidos permanecem desconhecidos. Prompts, caminhos, respostas e erros brutos não são exportados.
+
+A validade das revisões na telemetria reflete um snapshot Git por repositório em cada exportação. Alterações posteriores a essa captura aparecem na próxima exportação; a métrica não representa um bloqueio transacional do filesystem.
+
+Multi Core e Threads orientaram a separação entre coordenação, destino e acompanhamento; Autotel orientou a instrumentação estrutural. [cdx](https://github.com/RedesignedRobot/cdx) confirma a utilidade de coleta periódica e identificação persistente; [typesafe-mod](https://github.com/BeLazy167/typesafe-mod) reforça triagem antes do turno. Usamos o cliente Jev existente, sem instalar dependências desses mods nem adotar resposta automática a perguntas ou permissões. O código apagado do Herdr HUD não foi recuperado no Archive.org.
 
 ## O que aparece
 

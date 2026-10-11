@@ -133,7 +133,7 @@ describe("reviewer launches through the real entry points", () => {
     const { env, herdr } = cliEnv();
     const spawned = run(["subagent", "implement the change", "--target", "claude", "--model", "sonnet-5", "--role", "implementer", "--effort", "high", "--cwd", sandbox], env);
     expect(spawned.status).toBe(0);
-    expect(startArgs(herdr.log)).toEqual(["--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS]);
+    expect(startArgs(herdr.log)).toEqual(["--model", "claude-sonnet-5-5", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
   });
 
   it("subagent --role reviewer inline runs the harness client read-only", () => {
@@ -190,7 +190,7 @@ describe("an explicit empty bypassArgs from the harness is respected", () => {
     install("contract", { FAKE_BYPASS_CLAUDE: "none", FAKE_BYPASS_CODEX: "none", FAKE_BYPASS_KIMI: "none" });
     expect(harnessModelResolve({ client: "claude", model: "sonnet-5", effort: "high", role: "implementer" })!.bypassArgs).toEqual([]);
     expect(buildAgentCommand("claude", stage("implementer", "sonnet-5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high"]);
-    expect(buildAgentCommand("codex", stage("implementer", "gpt-5.6-luna"))).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"']);
+    expect(buildAgentCommand("codex", stage("implementer", "gpt-5.6-luna"))).toEqual(["codex", "--model", "gpt-5.6-luna", "-c", 'model_reasoning_effort="high"', "-c", "check_for_update_on_startup=false"]);
     expect(buildInlineCommand("claude", stage("implementer", "sonnet-5"), "task", true)).not.toContain(CLAUDE_BYPASS);
     expect(buildAgentCommand("kimi", stage("implementer", "kimi-model"))).toEqual(["kimi", "-m", "kimi-model"]);
   });
@@ -198,7 +198,7 @@ describe("an explicit empty bypassArgs from the harness is respected", () => {
   it("falls back to the built-in flags when the harness leaves the field out", () => {
     install("contract", { FAKE_OMIT_FIELDS: "bypassArgs" });
     expect(harnessModelResolve({ client: "claude", model: "sonnet-5", effort: "high", role: "implementer" })!.bypassArgs).toBeNull();
-    expect(buildAgentCommand("claude", stage("implementer", "sonnet-5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", CLAUDE_BYPASS]);
+    expect(buildAgentCommand("claude", stage("implementer", "sonnet-5"))).toEqual(["claude", "--model", "claude-sonnet-5-5", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
   });
 
   it("falls back to the built-in flags when the harness is old or unavailable", () => {

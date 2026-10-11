@@ -625,17 +625,6 @@ export function registerClaims(on: On): void {
     return ran
   }).catch(($, e, next) => next(e))
 
-  on('turn.start', async ($, e, next) => {
-    const started = await next(e)
-    if ((e as { agentId?: unknown }).agentId !== undefined) return started
-    try {
-      await update($, warningsAtom, current => ((current ?? []).length === 0 ? current : []))
-    } catch (error) {
-      debug($, 'clear', error)
-    }
-    return started
-  }).catch(($, e, next) => next(e))
-
   on('turn.complete', { reason: 'answer' }, async ($, e, next) => {
     const completed = await next(e)
     if (e.agentId !== undefined) return completed

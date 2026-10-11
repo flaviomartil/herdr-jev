@@ -54,10 +54,10 @@ test('an architectural task gets one read-only Fable consult before anything sta
 
   const consults = seen.spawns.filter(spawn => spawn.subagentType === 'harness:consultant')
   expect(consults).toHaveLength(1)
-  expect(consults[0]?.model).toBe('fable')
+  expect(consults[0]?.model).toBe('claude-fable-5-1')
   expect(consults[0]?.prompt).toContain('Design the cache layer')
   const spec = seen.specs.find(one => one.name === 'consultant')
-  expect(spec).toMatchObject({ model: 'fable', effort: 'high', tools: ['Read', 'Glob', 'Grep'] })
+  expect(spec).toMatchObject({ model: 'claude-fable-5-1', effort: 'high', tools: ['Read', 'Glob', 'Grep'] })
   for (const tool of ['Edit', 'Write', 'Bash', 'Agent', 'NotebookEdit']) expect(spec?.disallowedTools).toContain(tool)
 
   const [design, tests] = planState(seen)?.tasks ?? []

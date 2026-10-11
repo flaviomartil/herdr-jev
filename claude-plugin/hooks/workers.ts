@@ -17,7 +17,7 @@ export type LaunchPorts = {
   run: RunPort
 }
 
-export type SpawnOutcome = { ok: true; agentId: string } | { ok: false; reason: string }
+export type SpawnOutcome = { ok: true; agentId: string } | { ok: false; reason: string; uncertain?: true }
 
 export type Gate = {
   tail: Promise<void>
@@ -174,11 +174,11 @@ export async function launchConsult(
         model: spawnModel,
       })
       if (spawned.deny !== undefined) return { ok: false, reason: spawned.deny }
-      if (spawned.agentId === undefined) return { ok: false, reason: 'spawn returned no agent id' }
+      if (spawned.agentId === undefined) return { ok: false, reason: 'spawn returned no agent id', uncertain: true }
       return { ok: true, agentId: spawned.agentId }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      return { ok: false, reason: message.slice(0, 160) }
+      return { ok: false, reason: message.slice(0, 160), uncertain: true }
     }
   })
 }
@@ -194,7 +194,7 @@ export function createGate(): Gate {
   return { tail: Promise.resolve(), registered: new Map() }
 }
 
-async function exclusive<T>(gate: Gate, work: () => Promise<T>): Promise<T> {
+export async function exclusive<T>(gate: Gate, work: () => Promise<T>): Promise<T> {
   const run = gate.tail.then(work)
   gate.tail = run.then(
     () => undefined,

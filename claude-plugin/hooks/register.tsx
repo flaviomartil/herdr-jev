@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, PluginOptions, Register, TurnStepChunk, TurnStepResult } from 'claude-code'
+import type { Elements, EngineInterface, PluginOptions, Register, Timer, TurnStepChunk, TurnStepResult } from 'claude-code'
 
 import type {
   HarnessCost,
@@ -100,6 +100,7 @@ import {
 import type { Receipt, SkillReason } from './scope'
 import {
   createGate,
+  exclusive,
   decideConsultTurn,
   decideReviewTurn,
   decideWorkerTurn,
@@ -109,6 +110,8 @@ import {
   resolveLaunch,
 } from './workers'
 import type { Gate, LaunchPorts } from './workers'
+import { AUTOMATIC_CONTEXT, AUTOMATIC_DISPATCH_TIMEOUT_MS, automaticCall, automaticResult, automaticSummary } from './automatic'
+import type { Automatic } from './automatic'
 
 const claimLogAtom = atom({ plugin: 'harness', key: 'claimLog' } as const, [])
 const claimWarningsAtom = atom({ plugin: 'harness', key: 'claimWarnings' } as const, [])
@@ -128,12 +131,17 @@ const scopeAtom = atom({ plugin: 'harness', key: 'scope' } as const, EMPTY_SCOPE
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 const externalAtom = atom({ plugin: 'harness', key: 'external' } as const, {})
 const costsAtom = atom({ plugin: 'harness', key: 'costs' } as const, {})
+const automaticAtom = atom({ plugin: 'harness', key: 'automatic' } as const, null)
+const automaticPromptsAtom = atom({ plugin: 'harness', key: 'automaticPrompts' } as const, [])
+const permissionModeAtom = atom({ plugin: 'harness', key: 'permissionMode' } as const, '')
 
 const PANE_ID = 'harness'
 
 const TOOL_PLAN = 'mcp__harness__harness_plan'
 const TOOL_RUN = 'mcp__harness__harness_run'
 const TOOL_STATUS = 'mcp__harness__harness_status'
+const TOOL_COLLECT = /^mcp__harness__harness_collect$/
+const TOOL_DELEGATE = /^mcp__harness__harness_delegate$/
 const TOOL_CODEX_PROGRESS = /^mcp__harness__codex_progress$/
 
 const ACTIVE_STATUS = ['pending', 'running', 'waiting', 'idle']
@@ -609,6 +617,10 @@ async function rerunReview(
 }
 
 async function runTasks($: EngineInterface, ctx: RunContext): Promise<string> {
+  const automatic = await read($, automaticAtom)
+  if (automatic !== null && !['direct', 'verified', 'failed'].includes(automatic.state)) {
+    return `Automatic delegation ${automatic.state}; use harness_status and harness_collect before starting plan workers.`
+  }
   const plan = await read($, planAtom)
   if (plan === null) return 'No plan yet. Call harness_plan first.'
 
@@ -1131,7 +1143,8 @@ async function maybeAutoReview(
 
 async function statusText($: EngineInterface): Promise<string> {
   const plan = await read($, planAtom)
-  if (plan === null) return 'No harness plan. Call harness_plan with an objective and tasks.'
+  const automatic = await read($, automaticAtom)
+  if (plan === null) return automatic === null ? 'No harness plan. Call harness_plan with an objective and tasks.' : automaticSummary(automatic)
 
   const workers = Object.values(await read($, workersAtom))
   const asks = await read($, needsYouAtom)
@@ -1140,7 +1153,7 @@ async function statusText($: EngineInterface): Promise<string> {
   const stale = await read($, staleAtom)
   const note = await read($, staleNoteAtom)
   const counts = countTasks(plan)
-  const lines = [summarize(plan)]
+  const lines = [summarize(plan), ...(automatic === null ? [] : [automaticSummary(automatic)])]
 
   if (workers.length > 0) {
     lines.push('Workers:')
@@ -1444,6 +1457,234 @@ function pctHue(word: string): Hue {
   return 'plain'
 }
 
+const automaticSaveGate = createGate()
+
+async function saveAutomatic($: EngineInterface, run: Automatic, replace = false): Promise<boolean> {
+  return exclusive(automaticSaveGate, async () => {
+    const current = await read($, automaticAtom)
+    if (!replace && current?.turn !== run.turn) return false
+    if (!replace && current?.consultReviewed === true && run.consultReviewed !== true) return false
+    if (!replace && current?.pending?.length) {
+      run = { ...run, pending: [...new Map([...(current.pending ?? []), ...(run.pending ?? [])].map(task => [task.turn, task])).values()] }
+    }
+    if ((!replace || current?.turn === run.turn) && current?.verifyRequested === true && run.verifyRequested !== false) run = { ...run, verifyRequested: true }
+    if (['direct', 'verified', 'failed'].includes(run.state)) run = { ...run, verifyRequested: false }
+    if (!replace && current?.consultLaunchAttempted === true) run = { ...run, consultLaunchAttempted: true }
+    if (!replace && current?.consultAgent !== undefined && run.consultAgent === undefined) run = { ...run, consultAgent: current.consultAgent }
+    if (replace && current?.pending?.length) {
+      run = { ...run, pending: [...new Map([...current.pending.filter(task => task.turn !== run.turn), ...(run.pending ?? [])].map(task => [task.turn, task])).values()] }
+    }
+    if (!replace && current?.earlyConsults?.length) run = { ...run,
+      earlyConsults: [...new Map([...current.earlyConsults, ...(run.earlyConsults ?? [])].map(row => [row.agentId, row])).values()].slice(-32) }
+    if (!replace && current?.state === 'consult_ready' && run.state === 'consulting') run = { ...run,
+      state: current.state, reason: current.reason, consultAgent: current.consultAgent, consultReport: current.consultReport }
+    const completion = run.state === 'consulting' && run.consultAgent ? run.earlyConsults?.find(row => row.agentId === run.consultAgent) : undefined
+    if (completion) run = { ...run, state: completion.state === 'done' ? 'consult_ready' : 'failed',
+      reason: completion.state === 'done' ? 'advisor_decision_required' : 'consult_failed', consultReport: completion.report, earlyConsults: [] }
+    await update($, automaticAtom, () => run)
+    await $.store.set(`harness:auto:${await $.session.id()}:current`, run)
+    if (run.state === 'failed' && (current?.turn !== run.turn || current.state !== 'failed')) {
+      $.ui.toast('Herdr-Jev: failed', { timeoutMs: 8000 })
+      void $.prompt.submit({ text: `Herdr-Jev: delegated task ${run.id ?? run.turn} failed (${run.reason}). Report this failure. ${run.id ? `Persistent evidence: herdr-jev run-status ${run.id}.` : 'Read harness_status; no implementation was confirmed.'}` })
+    }
+    return true
+  })
+}
+
+async function startAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, turn: string, task: string, timeoutMs: number, consultReviewed = false): Promise<void> {
+  const session = await $.session.id()
+  const previous = await read($, automaticAtom)
+  if (previous?.turn !== turn || previous.state !== 'planning') return
+  if (await read($, permissionModeAtom) === 'plan') {
+    await saveAutomatic($, { ...previous, state: 'direct', reason: 'plan_mode' })
+    return
+  }
+  const cwd = previous.cwd
+  const model = previous.model
+  let run: Automatic = { ...previous, turn, cwd, task, model, state: 'planning', reason: 'planning', stages: [], consultReviewed }
+  if (!await saveAutomatic($, run) || await $.session.id() !== session) return
+  const config = cliConfig(options, cwd)
+  let raw: unknown
+  try {
+    raw = await automaticCall(runPort($), config, ['mod-route', '--session', session, '--turn', turn,
+      ...(model ? ['--model', model] : []), '--cwd', cwd, ...(consultReviewed ? ['--consult-reviewed', ...(run.consultReport ? ['--request-json-stdin'] : [])] : [])], timeoutMs,
+      consultReviewed && run.consultReport ? JSON.stringify({ task, consultReport: run.consultReport }) : task)
+    run = automaticResult(run, raw)
+  } catch {
+    run = { ...run, state: 'unknown', reason: 'dispatch_unconfirmed' }
+    try {
+      const recovered = await automaticCall(runPort($), config, ['mod-status', '--session', session, '--turn', turn, ...(consultReviewed ? ['--consult-reviewed'] : [])], 5000)
+      raw = recovered
+      run = automaticResult(run, recovered)
+    } catch {}
+  }
+  if (await $.session.id() !== session || !await saveAutomatic($, run)) return
+  if (!consultReviewed && run.state === 'consulting' && isRecord(raw) && isRecord(raw.target)) {
+    await launchAutomaticConsult($, gate, run, raw.target)
+  }
+}
+
+async function launchAutomaticConsult($: EngineInterface, gate: Gate, initial: Automatic, target: Record<string, unknown>): Promise<void> {
+    if (initial.consultAgent !== undefined || initial.consultReviewed) return
+    if (initial.consultLaunchAttempted) {
+      await saveAutomatic($, { ...initial, state: 'unknown', reason: 'consult_requires_reconciliation' })
+      return
+    }
+    let run = { ...initial, consultLaunchAttempted: true }
+    const consultModel = typeof target.cliModel === 'string' ? target.cliModel : target.model
+    if (target.client !== 'claude' || typeof consultModel !== 'string') {
+      await saveAutomatic($, { ...run, state: 'failed', reason: 'consult_adapter_unavailable' })
+      return
+    }
+    const claimed = await exclusive(automaticSaveGate, async () => {
+      const current = await read($, automaticAtom)
+      if (current?.turn !== initial.turn || current.state !== 'consulting' || current.consultLaunchAttempted || current.consultAgent !== undefined) return false
+      run = { ...current, consultLaunchAttempted: true }
+      await update($, automaticAtom, () => run)
+      await $.store.set(`harness:auto:${await $.session.id()}:current`, run)
+      return true
+    })
+    if (!claimed) return
+    const plan = buildPlan(run.task, [{ title: run.task, role: 'implementer' }], [null], null, run.model)
+    const outcome = await launchConsult(launchPorts($), gate, plan, plan.tasks[0]!, { cliModel: consultModel,
+      effort: typeof target.effort === 'string' ? target.effort : null }, run.cwd)
+    await saveAutomatic($, outcome.ok ? { ...run, consultAgent: outcome.agentId } : { ...run, state: outcome.uncertain ? 'unknown' : 'failed', reason: outcome.uncertain ? 'consult_dispatch_unconfirmed' : 'consult_launch_rejected' })
+    if ((await read($, automaticAtom))?.state === 'consult_ready') {
+      void $.prompt.submit({ text: 'Herdr-Jev consult completed. Read harness_status and call harness_delegate with your decision.' })
+    }
+}
+
+async function collectAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, verify: boolean): Promise<void> {
+  let previous = await read($, automaticAtom)
+  if (previous === null) return
+  if (previous.state === 'planning' || previous.state === 'verified' || previous.state === 'unknown'
+    || previous.state === 'consulting' && previous.consultAgent === undefined) {
+    let continueCollection = false
+    try {
+      const raw = await automaticCall(runPort($), cliConfig(options, previous.cwd), ['mod-status', '--session', await $.session.id(), '--turn', previous.turn, ...(previous.consultReviewed ? ['--consult-reviewed'] : [])], 5000)
+      if (isRecord(raw) && raw.mode === 'unknown' && previous.state === 'planning'
+        && typeof previous.queuedAt === 'number' && await $.clock.now() - previous.queuedAt < AUTOMATIC_DISPATCH_TIMEOUT_MS + 30000) return
+      if (isRecord(raw) && raw.mode === 'unknown' && (raw.recorded === false && previous.id === undefined || raw.runMissing === true)
+        && typeof previous.queuedAt === 'number' && await $.clock.now() - previous.queuedAt >= AUTOMATIC_DISPATCH_TIMEOUT_MS + 30000) {
+        await saveAutomatic($, { ...previous, state: 'failed', reason: raw.runMissing === true ? 'dispatch_not_created' : 'dispatch_not_recorded' })
+        return
+      }
+      const recovered = automaticResult(previous, raw)
+      if (!await saveAutomatic($, recovered)) return
+      if (recovered.state === 'consulting' && isRecord(raw) && isRecord(raw.target)) {
+        await launchAutomaticConsult($, gate, recovered, raw.target)
+        return
+      }
+      continueCollection = verify && recovered.id !== undefined && ['working', 'returned', 'verifying', 'unknown', 'failed'].includes(recovered.state)
+        && isRecord(raw) && isRecord(raw.run)
+      if (continueCollection) previous = recovered
+    } catch {}
+    if (!continueCollection) return
+  }
+  if (previous.id === undefined || !['working', 'returned', 'verifying', ...(verify ? ['unknown', 'failed'] : [])].includes(previous.state)) return
+  const verifying = verify || previous.verificationAttempted !== true && (previous.verifyRequested === true || previous.state === 'returned')
+  if (!verify && previous.state === 'verifying') {
+    try {
+      const raw = await automaticCall(runPort($), cliConfig(options, previous.cwd), ['mod-status', '--session', await $.session.id(), '--turn', previous.turn], 5000)
+      await saveAutomatic($, automaticResult(previous, raw))
+    } catch {}
+    return
+  }
+  const startingChecks = verifying && previous.state === 'returned'
+  const recoveringExecution = verify && ['unknown', 'failed'].includes(previous.state)
+  const withWait = startingChecks || recoveringExecution
+  if (await read($, permissionModeAtom) === 'plan') return
+  const run = withWait ? { ...previous, state: startingChecks ? 'verifying' as const : previous.state, verificationAttempted: true, verifyRequested: false } : previous
+  if (run !== previous) await saveAutomatic($, run)
+  try {
+    const raw = await automaticCall(runPort($), cliConfig(options, run.cwd), ['mod-collect', run.id!, '--cwd', run.cwd, ...(withWait ? ['--wait'] : [])], withWait ? 600000 : 5000)
+    const collected = automaticResult(run, raw)
+    const result = recoveringExecution && collected.state === 'working' ? { ...collected, verificationAttempted: false, verifyRequested: true }
+      : ['verified', 'failed'].includes(collected.state) ? { ...collected, verifyRequested: false } : collected
+    if (!await saveAutomatic($, result)) return
+    if (verifying && result.state === 'returned' && result.verificationAttempted !== true) {
+      await collectAutomatic($, options, gate, true)
+      return
+    }
+    if (result.state === 'verified' || result.state === 'returned' && previous.state !== 'returned') {
+      $.ui.toast(`Herdr-Jev: ${result.state}`, { timeoutMs: 8000 })
+      void $.prompt.submit({ text: `Herdr-Jev: delegated task ${result.id} ${result.state}. Read harness_status and the bounded handoff before reporting completion.` })
+    }
+  } catch (error) {
+    const retry = run.state === 'verifying' && !run.verificationRetried && error instanceof Error && error.message === 'automatic_command_failed'
+    await saveAutomatic($, { ...run, state: 'unknown', reason: 'collection_requires_reconciliation',
+      ...(retry ? { verificationAttempted: false, verificationRetried: true } : {}) })
+  }
+}
+
+type AutomaticRuntime = { dispatchTimer: Timer | null; dispatching: boolean; collectTimer: Timer | null; collecting: boolean; pendingVerify: boolean }
+
+async function queueAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime, turn: string, task: string, consultReviewed = false, context?: Pick<Automatic, 'cwd' | 'model'>): Promise<void> {
+  const previous = await read($, automaticAtom)
+  const pendingDispatch = previous?.turn === turn && previous.state === 'planning' && previous.reason === 'dispatch_pending'
+  if (!consultReviewed && previous?.turn === turn && !pendingDispatch) return
+  if (runtime.dispatching || !consultReviewed && !pendingDispatch && previous !== null && !['direct', 'verified', 'failed'].includes(previous.state)) {
+    if (previous !== null && previous.turn !== turn && !previous.pending?.some(row => row.turn === turn)) {
+      if ((previous.pending?.length ?? 0) >= 32) { $.ui.toast('Herdr-Jev request queue is full; collect the active task before resubmitting.', { timeoutMs: 8000 }); return }
+      await saveAutomatic($, { ...previous, pending: [...(previous.pending ?? []), { turn, task, cwd: await $.session.cwd(), model: await $.session.model() }] })
+      $.ui.toast('Herdr-Jev queued this request until the active task finishes.', { timeoutMs: 8000 })
+    }
+    return
+  }
+  const run: Automatic = { turn, task, cwd: context?.cwd ?? await $.session.cwd(), model: context?.model ?? await $.session.model(),
+    state: 'planning', reason: 'dispatch_pending', stages: [], queuedAt: await $.clock.now(), consultReviewed,
+    ...(consultReviewed && previous?.turn === turn && previous.consultReport ? { consultReport: previous.consultReport } : {}),
+    pending: (previous?.pending ?? []).filter(row => row.turn !== turn) }
+  await saveAutomatic($, run, true)
+  runtime.dispatchTimer?.cancel()
+  runtime.dispatchTimer = $.clock.after(1, () => {
+    runtime.dispatchTimer = null
+    runtime.dispatching = true
+    void attempt('automatic delegation', $, () => startAutomatic($, options, gate, turn, task, AUTOMATIC_DISPATCH_TIMEOUT_MS, consultReviewed))
+      .finally(async () => {
+        runtime.dispatching = false
+        if (runtime.pendingVerify || (await read($, automaticAtom))?.verifyRequested === true) {
+          runtime.pendingVerify = false
+          queueAutomaticCollection($, options, gate, runtime, true)
+        }
+        await advanceAutomatic($, options, gate, runtime)
+      })
+  })
+}
+
+async function advanceAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime): Promise<void> {
+  const run = await read($, automaticAtom)
+  const pending = run?.pending?.[0]
+  if (pending && run && ['direct', 'verified', 'failed'].includes(run.state)) {
+    await queueAutomatic($, options, gate, runtime, pending.turn, pending.task, false,
+      typeof pending.cwd === 'string' && typeof pending.model === 'string' ? { cwd: pending.cwd, model: pending.model } : undefined)
+  }
+}
+
+function queueAutomaticCollection($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime, verify: boolean): void {
+  if (runtime.collecting || runtime.dispatching) {
+    if (verify) runtime.pendingVerify = true
+    return
+  }
+  runtime.collecting = true
+  runtime.collectTimer = $.clock.after(1, () => {
+    runtime.collectTimer = null
+    if (runtime.dispatching) {
+      runtime.collecting = false
+      if (verify) runtime.pendingVerify = true
+      return
+    }
+    void attempt('automatic collect', $, () => collectAutomatic($, options, gate, verify)).finally(async () => {
+      runtime.collecting = false
+      if (runtime.pendingVerify) {
+        runtime.pendingVerify = false
+        queueAutomaticCollection($, options, gate, runtime, true)
+      }
+      await advanceAutomatic($, options, gate, runtime)
+    })
+  })
+}
+
 export const register: Register = (on, options) => {
   registerClaims(on)
   const external = createExternal(maxMinutesOf(options.codexMaxMinutes))
@@ -1451,10 +1692,37 @@ export const register: Register = (on, options) => {
   const reviewed = new Set<string>()
   const ruled = new Set<string>()
   const runtime: ScopeRuntime = { receipt: newReceipt(), pending: null, warned: new Set() }
+  let automaticTimer: Timer | null = null
+  let automaticRuntime: AutomaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
 
   registerPrGate(on, options)
 
   on('session.start', async ($, e, next) => {
+    automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
+    await attempt('reset automatic session state', $, async () => {
+      await update($, automaticAtom, () => null)
+      await update($, automaticPromptsAtom, () => [])
+    })
+    if (options.autoDelegate !== false) {
+      await attempt('restore automatic delegation', $, async () => {
+        const saved = await $.store.get(`harness:auto:${await $.session.id()}:current`)
+        if (isRecord(saved) && typeof saved.turn === 'string' && typeof saved.cwd === 'string' && typeof saved.task === 'string'
+          && typeof saved.model === 'string' && Array.isArray(saved.stages) && typeof saved.state === 'string') {
+          await update($, automaticAtom, () => saved as Automatic)
+        }
+      })
+      const restored = await read($, automaticAtom)
+      if (restored?.state === 'planning' && restored.reason === 'dispatch_pending') {
+        await queueAutomatic($, options, gate, automaticRuntime, restored.turn, restored.task, restored.consultReviewed === true, { cwd: restored.cwd, model: restored.model })
+      }
+      if (restored?.verifyRequested && restored.verificationAttempted !== true) queueAutomaticCollection($, options, gate, automaticRuntime, true)
+      if (e.isInteractive) {
+        automaticTimer?.cancel()
+        automaticTimer = $.clock.every(5000, () => {
+          queueAutomaticCollection($, options, gate, automaticRuntime, false)
+        })
+      }
+    }
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -1485,6 +1753,12 @@ export const register: Register = (on, options) => {
         inputSchema: { type: 'object', properties: {} },
       }),
     )
+    await attempt('register harness_collect', $, () => $.tool.register({ name: 'harness_collect',
+      description: 'Collect the recorded automatic run. Explicit verify=true can start its original queued implementation if it has never been claimed, or run checks and independent review after it returns. Never creates a replacement run. Main session only.',
+      inputSchema: { type: 'object', properties: { verify: { type: 'boolean', description: 'Resume the original unclaimed implementation, which may launch its worker, or verify returned work.' } } } }))
+    await attempt('register harness_delegate', $, () => $.tool.register({ name: 'harness_delegate',
+      description: 'After reading a completed automatic consult in harness_status, accept its recommendation and start the shared execution plan, or pass accept=false to decline and continue directly. Main session only.',
+      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' } } } }))
 
     await attempt('read session model', $, async () => {
       const model = await $.session.model()
@@ -1551,6 +1825,14 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
+    automaticRuntime.pendingVerify = false
+    automaticRuntime.dispatchTimer?.cancel()
+    automaticRuntime.dispatchTimer = null
+    automaticRuntime.collectTimer?.cancel()
+    automaticRuntime.collectTimer = null
+    automaticTimer?.cancel()
+    automaticTimer = null
+    await attempt('clear automatic prompt queue', $, () => update($, automaticPromptsAtom, () => []))
     if (e.reason === 'clear') {
       await attempt('claims reset', $, async () => {
         await update($, claimWarningsAtom, () => [])
@@ -1594,6 +1876,7 @@ export const register: Register = (on, options) => {
   })
 
   on('classic.SessionStart', async ($, e, next) => {
+    await update($, permissionModeAtom, () => e.permission_mode ?? '')
     if (e.source === 'clear' || e.source === 'resume') {
       runtime.receipt = newReceipt()
       runtime.warned.clear()
@@ -1604,6 +1887,11 @@ export const register: Register = (on, options) => {
     }
     return next(e)
   })
+
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    await update($, permissionModeAtom, () => e.permission_mode ?? '')
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('prompt.attachment', async ($, e, next) => {
     const r = await next(e)
@@ -1631,7 +1919,11 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
-    const result = await next(e)
+    let eligible = options.autoDelegate !== false && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
+      && !e.attachments?.length && e.text.trim().length > 0 && e.text.length <= 16384 && !e.text.trim().startsWith('/')
+    if (eligible) eligible = (await $.env.get('HERDR_JEV_MOD_WORKER')) !== '1'
+    await attempt('queue automatic origin', $, () => update($, automaticPromptsAtom, rows => [...rows.slice(-31), { text: e.text, eligible }]))
+    const result = await next(eligible ? { ...e, context: [...(e.context ?? []), AUTOMATIC_CONTEXT] } : e)
     if (scopeMode(options) === 'off' || e.origin?.kind === 'plugin') return result
     const text = e.text
     const name = invokedSkill(text)
@@ -1642,13 +1934,35 @@ export const register: Register = (on, options) => {
       if (skill !== null) await update($, scopeAtom, state => withNames(state, 'turn', [skill]))
     })
     return result
-  })
+  }).catch(($, e, next) => next(e))
+
+  on('turn.start', async ($, e, next) => {
+    if ((e as { agentId?: unknown }).agentId !== undefined) {
+      await update($, automaticPromptsAtom, rows => rows[0]?.text === e.text ? rows.slice(1) : rows)
+      return next(e)
+    }
+    await attempt('clear claim warnings', $, () => update($, claimWarningsAtom, () => []))
+    let eligible = false
+    await update($, automaticPromptsAtom, rows => {
+      if (rows.length === 0) return rows
+      eligible = rows[0]!.text === e.text && rows[0]!.eligible
+      return rows.slice(1)
+    })
+    if (eligible && options.autoDelegate !== false && await read($, permissionModeAtom) !== 'plan' && Object.keys(await read($, workersAtom)).length === 0) {
+      await attempt('queue automatic delegation', $, () => queueAutomatic($, options, gate, automaticRuntime, e.turnId, e.text))
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('tool.call', { tool: TOOL_PLAN }, async ($, e) => {
     if (e.agentId !== undefined) return { result: 'harness_plan: only the main session may call it.' }
     const parsed = parsePlanInput(e)
     if (typeof parsed === 'string') return { result: `harness_plan: ${parsed}` }
     const busy = Object.keys(await read($, workersAtom)).length
+    const automatic = await read($, automaticAtom)
+    if (automatic !== null && !['direct', 'verified', 'failed'].includes(automatic.state)) {
+      return { result: `Automatic delegation ${automatic.state}; use harness_status and harness_collect before replacing its work.` }
+    }
     if (busy > 0) {
       return { result: `harness_plan: ${busy} worker${busy === 1 ? ' is' : 's are'} still running; wait for them before replacing the plan.` }
     }
@@ -1671,6 +1985,29 @@ export const register: Register = (on, options) => {
     const fresh = e.agentId === undefined && (await takeReviewerRule($, ruled))
     return fresh ? { result, context: [REVIEWER_RULE] } : { result }
   }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_status: failed, see the debug log.' }))
+
+  on('tool.call', { tool: TOOL_COLLECT }, async ($, e) => {
+    if (e.agentId !== undefined) return { result: 'harness_collect: main session only.' }
+    if (options.autoDelegate === false) return { result: 'Automatic delegation disabled; inspect existing runs with herdr-jev run-status.' }
+    const verify = (e as { verify?: unknown }).verify === true
+    const run = await read($, automaticAtom)
+    if (verify && run) await saveAutomatic($, { ...run, verifyRequested: true })
+    queueAutomaticCollection($, options, gate, automaticRuntime, verify)
+    return { result: `${automaticSummary(await read($, automaticAtom))}\nCollection scheduled; inspect harness_status for the result.` }
+  }).catch(($, e, next) => next.called ? next(e) : { result: 'Collection requires reconciliation; the existing worker was retained.' })
+
+  on('tool.call', { tool: TOOL_DELEGATE }, async ($, e, next) => {
+    if (e.agentId !== undefined) return { result: 'harness_delegate: main session only.' }
+    const run = await read($, automaticAtom)
+    if (options.autoDelegate === false || run?.state !== 'consult_ready') return { result: 'Read a completed consult with harness_status first.' }
+    if ((e as { accept?: unknown }).accept === false) {
+      await saveAutomatic($, { ...run, state: 'direct', reason: 'consult_declined' })
+      await advanceAutomatic($, options, gate, automaticRuntime)
+      return { result: 'Consult declined. Execute directly; queued requests can continue.' }
+    }
+    await queueAutomatic($, options, gate, automaticRuntime, run.turn, run.task, true, { cwd: run.cwd, model: run.model })
+    return { result: automaticSummary(await read($, automaticAtom)) }
+  }).catch(($, e, next) => next.called ? next(e) : { result: 'Delegation requires reconciliation; no replacement was launched.' })
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
     const ran = await next(e)
@@ -1703,6 +2040,19 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) {
       const agentId = e.agentId
+      await attempt('automatic consult complete', $, async () => {
+        const run = await read($, automaticAtom)
+        if (run?.state !== 'consulting') return
+        const result = decideConsultTurn(e)
+        if (run.consultAgent === undefined) {
+          await saveAutomatic($, { ...run, earlyConsults: [...(run.earlyConsults ?? []), { agentId, state: result.state === 'done' ? 'done' as const : 'failed' as const, report: result.report }].slice(-32) })
+          return
+        }
+        if (run.consultAgent !== agentId) return
+        await saveAutomatic($, { ...run, state: result.state === 'done' ? 'consult_ready' : 'failed',
+          reason: result.state === 'done' ? 'advisor_decision_required' : 'consult_failed', ...(result.report ? { consultReport: result.report } : {}) })
+        if (result.state === 'done') void $.prompt.submit({ text: 'Herdr-Jev consult completed. Read harness_status, decide whether to accept the recommendation, then call harness_delegate.' })
+      })
       await attempt('codex cleanup', $, () => cleanupAgent(externalPorts($), external, agentId))
       await attempt('external stop', $, async () => {
         const now = await $.clock.now()
@@ -1732,7 +2082,8 @@ export const register: Register = (on, options) => {
     const running = runningExternal(await read($, externalAtom))
     if (e.props.hasSurvey || isHidden) return next(e)
     if (plan === null) {
-      if (running === 0) return next(e)
+      const automatic = await read($, automaticAtom)
+      if (running === 0 && automatic === null) return next(e)
       const rendered = await next(e)
       const { Box, Text } = $.ui.resolve(e)
       const native = Object.keys(await read($, workersAtom)).length
@@ -1740,7 +2091,7 @@ export const register: Register = (on, options) => {
         <Box key="external" flexDirection="column">
           {rendered}
           <Box paddingX={1}>
-            <Text key="workers" dimColor>{workersText(native, running)}</Text>
+            <Text key="workers" dimColor>{automatic === null ? workersText(native, running) : `Herdr-Jev · ${automatic.state} · ${automatic.stages.map(stage => `${stage.client}/${shortModel(stage.model)}`).join(' · ') || automatic.reason}`}</Text>
           </Box>
         </Box>
       )
@@ -1868,6 +2219,12 @@ export const register: Register = (on, options) => {
 
     const runButton = <Button key="run-ready" label="Run ready" variant="primary" onPress={onRun} />
     const refreshButton = <Button key="refresh-review" label="↻ review" onPress={onRefresh} />
+    const automatic = await read($, automaticAtom)
+    const automaticBlock = automatic === null ? null : <Box flexDirection="column" marginTop={1}>
+      <Text bold>{`Automatic delegation · ${automatic.state}`}</Text>
+      {automatic.stages.map(stage => <Text key={stage.role} dimColor>{`${stage.role} · ${stage.client}/${shortModel(stage.model)} · ${stage.state}`}</Text>)}
+      <Text dimColor>{automatic.reason}</Text>
+    </Box>
 
     if (plan === null) {
       return (
@@ -1878,6 +2235,7 @@ export const register: Register = (on, options) => {
             {refreshButton}
           </Box>
           {externalBlock}
+          {automaticBlock}
           {usageBlock !== null && <Box marginTop={1}>{usageBlock}</Box>}
         </Box>
       )
@@ -2033,6 +2391,7 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column" paddingX={1}>
+        {automaticBlock}
         <Box flexDirection="row" columnGap={2} alignItems="center">
           <Text {...hueProps(state.hue)}>{state.isWorking ? '●' : state.word === 'all verified' ? '✓' : '○'}</Text>
           <Text bold wrap="truncate-end">{plan.objective}</Text>

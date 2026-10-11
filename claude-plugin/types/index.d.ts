@@ -167,9 +167,34 @@ export type HarnessCost = {
   steps: number
 }
 
+export type Automatic = {
+  turn: string
+  cwd: string
+  task: string
+  model: string
+  id?: string
+  state: 'planning' | 'direct' | 'working' | 'returned' | 'verifying' | 'verified' | 'unknown' | 'failed' | 'consulting' | 'consult_ready'
+  reason: string
+  stages: { role: string; client: string; model: string; state: string; agent?: string; pane?: string }[]
+  consultAgent?: string
+  consultReport?: string
+  consultReviewed?: boolean
+  earlyConsults?: { agentId: string; state: 'done' | 'failed'; report?: string }[]
+  verificationAttempted?: boolean
+  verificationRetried?: boolean
+  verifyRequested?: boolean
+  consultLaunchAttempted?: boolean
+  queuedAt?: number
+  report?: string
+  pending?: { turn: string; task: string; cwd?: string; model?: string }[]
+}
+
 declare module 'claude-code' {
   interface PluginState {
     harness: {
+      automatic: Automatic | null
+      automaticPrompts: { text: string; eligible: boolean }[]
+      permissionMode: string
       plan: HarnessPlan | null
       workers: Record<string, HarnessWorkerRow>
       needsYou: HarnessHumanAsk[]

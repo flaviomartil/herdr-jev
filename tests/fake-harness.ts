@@ -158,6 +158,8 @@ else if (command === "model-catalog") {
     out({ mode: "delegate", profile: { id: "fake-profile", client: options["--client"], advisor: "advisor-model",
       executor: { model: "gpt-5.6-luna", cliModel: "gpt-5.6-luna-cli", effort: "high" }, reviewer: { model: "gpt-5.6-sol", cliModel: "gpt-5.6-sol-cli", effort: "xhigh" } } });
   } else out({ mode: "direct", reason: "no_profile" });
+} else if (command === "mod-delegation" && options["--action"] === "status") {
+  out(JSON.parse(process.env.FAKE_MOD_OBSERVATION || "null"));
 } else if (command === "external-run") {
   const pipeline = process.env.FAKE_PIPELINE_STAGES !== undefined && ["create", "claim", "project", "status", "settle", "handoff", "verify"].includes(options["--action"]);
   if (!pipeline && (mode === "legacy" || !["worker-create", "worker-settle", "list"].includes(options["--action"]))) fail("invalid_external_action");
@@ -174,7 +176,14 @@ else if (command === "model-catalog") {
       state.pipelines = [{ id: "00000000-0000-4000-8000-0000000000aa", kind: "pipeline", client: process.env.FAKE_PIPELINE_CLIENT || "claude", cwd: process.env.FAKE_PIPELINE_CWD, createdAt: new Date(0).toISOString(), objectiveDigest: process.env.FAKE_PIPELINE_DIGEST, stages }];
     }
     const run = state.pipelines[0];
-    if (options["--action"] === "settle") run.stages.find((stage) => stage.role === request.stage).state = request.state;
+    if (options["--action"] === "settle") {
+      const stage = run.stages.find((stage) => stage.role === request.stage);
+      stage.state = request.state === "done" ? "reported" : request.state;
+      if (request.handoff) {
+        stage.handoffPath = request.handoff;
+        stage.handoffDigest = createHash("sha256").update(readFileSync(request.handoff)).digest("hex");
+      }
+    }
     if (options["--action"] === "verify") run.stages.find((stage) => stage.role === request.stage).state = "verified";
     save(state);
     if (options["--action"] === "handoff") {
@@ -182,7 +191,8 @@ else if (command === "model-catalog") {
       out({ text, digest: createHash("sha256").update(text).digest("hex") });
       process.exit(0);
     }
-    out(options["--action"] === "claim" ? { token: "token", agent: "agent-" + request.stage } : run);
+    out(options["--action"] === "claim" ? { token: "token", agent: "agent-" + request.stage }
+      : options["--action"] === "settle" ? run.stages.find((stage) => stage.role === request.stage) : run);
   } else if (options["--action"] === "worker-create") {
     const run = { id: "00000000-0000-4000-8000-" + String(state.runs.length + 1).padStart(12, "0"), kind: "worker", client: request.client,
       cwd: request.cwd, createdAt: new Date(Date.UTC(2026, 9, 1, 12, state.runs.length)).toISOString(), objectiveDigest: request.objectiveDigest,

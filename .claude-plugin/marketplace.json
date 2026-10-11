@@ -1,0 +1,12 @@
+{
+  "name": "herdr-jev",
+  "owner": { "name": "Flavio Martil" },
+  "plugins": [
+    {
+      "name": "harness",
+      "source": "./claude-plugin",
+      "description": "Claude mod for shared Herdr-Jev delegation and result telemetry",
+      "version": "0.2.0"
+    }
+  ]
+}

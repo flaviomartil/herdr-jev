@@ -22,9 +22,11 @@ export type Spawned = {
 }
 
 export type Seen = {
+  spawnHook?: (agentId: string) => Promise<void>
   spawns: Spawned[]
   runs: string[][]
   toasts: string[]
+  submitted: string[]
   logs: string[]
   opened: string[]
   closed: string[]
@@ -141,7 +143,7 @@ export function pendingReport(): Record<string, unknown> {
 
 export function wire(on: On, extra: { model?: string; session?: string; store?: Record<string, unknown> } = {}): Seen {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const seen: Seen = { spawns: [], runs: [], toasts: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, runHook: null, statusBody: { status: 'ready' }, statusRaw: null, statusExit: 0, failStatus: false, inits: [], toplevel: null, remotes: '', failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [], usage: { context: {}, rateLimits: [] }, usageCalls: [] }
+  const seen: Seen = { spawns: [], runs: [], toasts: [], submitted: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, runHook: null, statusBody: { status: 'ready' }, statusRaw: null, statusExit: 0, failStatus: false, inits: [], toplevel: null, remotes: '', failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [], usage: { context: {}, rateLimits: [] }, usageCalls: [] }
 
   on('store.get', (_$, e) => ({ value: seen.saved.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -163,7 +165,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
   })
   on('prompt.attachment', (_$, e) => ({ text: e.text }))
   on('agent.offer', () => ({ isOffered: true }))
-  on('prompt.submit', (_$, e) => ({ text: e.text }))
+  on('prompt.submit', (_$, e) => { seen.submitted.push(e.text); return { text: e.text } })
   on('classic.SessionStart', () => ({}))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }) as never)
   on('turn.complete', (_$, e) => ({ text: e.answer }))
@@ -226,7 +228,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     })),
     }
   })
-  on('agent.spawn', (_$, e) => {
+  on('agent.spawn', async (_$, e) => {
     const raw = e as unknown as Record<string, unknown>
     const kind = raw.subagentType ?? raw.subagent_type
     if (typeof kind === 'string' && seen.denySpawn.includes(kind)) return { deny: `refused ${kind}` }
@@ -241,6 +243,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
     const agentId = `agent-${seen.spawns.length}`
     seen.alive.push({ id: agentId, status: 'running', type: typeof kind === 'string' ? kind : undefined })
     const answer = { model: e.model ?? 'sonnet', agentId, result: { agentId, resolvedModel: e.model ?? 'sonnet' } }
+    if (seen.spawnHook) await seen.spawnHook(agentId)
     return answer
   })
   on('process.run', async (_$, e) => {

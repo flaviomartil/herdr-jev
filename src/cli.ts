@@ -21,6 +21,7 @@ import {
 } from "./herdr/launcher.js";
 import {
   parseCrossHarnessConfig,
+  availableDelegationClients,
   resolveDelegatedClient,
   type CrossHarnessConfig,
 } from "./delegation/cross-harness.js";
@@ -33,6 +34,7 @@ import { DEFAULT_PROVE_TIMEOUT_MS, formatProveReport, readCommandJson, runProve 
 import { exitAfterFlush, parsePipelineCouncilMode, parseReviewCouncilMode, renderReview, runCouncilCommand, startAutoCouncilAlongside, startCouncilAlongside, trackShutdownSignals, type CouncilAlongside, type ShutdownTracker } from "./council/command.js";
 import { readRunObjective } from "./council/auto.js";
 import { runPipeline, resumePipeline, projectRun } from "./orchestration/pipeline.js";
+import { closeVerifiedModWorker, dispatchModTask, modVerifyCommand, probeModStage } from "./orchestration/mod.js";
 import { resolveHerdrContext } from "./herdr/context.js";
 import { resolvePeerStage, converseWithPeer } from "./herdr/peer.js";
 import { executeStandupCommand } from "./herdr/standup.js";
@@ -42,6 +44,7 @@ import {
   saveUserOverride,
   loadQuotaRecords,
   markModelExhausted,
+  isModelExhausted,
   resetQuotas,
   resolveActiveModel,
 } from "./config/catalog.js";
@@ -70,9 +73,10 @@ import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.
 import { reportProgress } from "./herdr/progress.js";
 
 import { spawnSync } from "node:child_process";
+import { readFileSync, realpathSync } from "node:fs";
 import { envFileKeys, loadEnvFile } from "./config/env-file.js";
 import { isTestGuardActive } from "./herdr/state-dir.js";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 // Automatically load from ~/.config/herdr/.env and repo .env
@@ -393,6 +397,86 @@ program
   .description("Resolve the source pane and repository without launching agents")
   .option("--json", "Output JSON context")
   .action(async () => console.log(JSON.stringify(await resolveHerdrContext({}))));
+
+program.command("mod-route")
+  .description("Dispatch a Claude mod turn through the shared plan; bounded task arrives on stdin")
+  .requiredOption("--session <id>", "Claude session identity")
+  .requiredOption("--turn <id>", "Stable turn identity")
+  .option("--model <id>", "Exact advisor model")
+  .option("--cwd <path>", "Repository", process.cwd())
+  .option("--shadow", "Record the decision without launching or probing models")
+  .option("--consult-reviewed", "Advisor has read the required consult")
+  .option("--request-json-stdin", "Read the task and accepted consult recommendation as private JSON stdin")
+  .action(async (options: { session: string; turn: string; model?: string; cwd: string; shadow?: boolean; consultReviewed?: boolean; requestJsonStdin?: boolean }) => {
+    const text = readFileSync(0, "utf8");
+    if (Buffer.byteLength(text) > 200_000) throw new Error("invalid_mod_request");
+    let input: { task: string; consultReport?: string } = { task: text };
+    if (options.requestJsonStdin) {
+      try { input = JSON.parse(text); } catch { throw new Error("invalid_mod_request"); }
+      if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("invalid_mod_request");
+    }
+    const result = await dispatchModTask({ ...options, task: input.task, consultReport: input.consultReport });
+    console.log(JSON.stringify(result));
+  });
+
+program.command("mod-collect <id>")
+  .description("Collect an existing mod run and continue its deterministic checks and independent review")
+  .option("--cwd <path>", "Original repository", process.cwd())
+  .option("--wait", "Run checks and independent review after collection")
+  .action(async (id: string, options: { cwd: string; wait?: boolean }) => {
+    const run = externalRun("status", { id });
+    if (realpathSync(resolve(options.cwd)) !== realpathSync(resolve(run.cwd))) throw new Error("resume_repository_mismatch");
+    const crossHarness = parseCrossHarnessConfig(process.env.HERDR_JEV_CROSS_HARNESS ?? "auto");
+    const pending = run.stages[0]?.state === "queued" ? run.stages : run.stages.filter((stage: any, index: number) => stage.state === "queued"
+      && run.stages.slice(0, index).every((previous: any) => ["reported", "verified"].includes(previous.state)));
+    const probed = new Set<string>();
+    const ready = !options.wait || (await Promise.all(pending.map(async (stage: any) => {
+      const target = stage.client ?? run.client;
+      if (target !== run.client && !availableDelegationClients(run.client, crossHarness).includes(target)) return true;
+      const available = !isModelExhausted(target, stage.model) && !isModelExhausted(target, stage.cliModel ?? stage.model)
+        && await probeModStage({ ...stage, client: target, effort: stage.effort ?? "standard", extraFlags: [], description: "Recovery preflight" });
+      if (available) probed.add(stage.role);
+      return available;
+    }))).every(Boolean);
+    const result = !ready ? { run, projection: projectRun(id), error: "models_unavailable" }
+      : run.stages.every((stage: any) => stage.state === "verified") || !options.wait && run.stages[0]?.state === "queued"
+      || !options.wait && ["unknown", "blocked", "failed"].includes(run.stages[0]?.state)
+      ? { run, projection: projectRun(id) }
+      : await resumePipeline(id, { delegation: {}, wait: options.wait,
+        stagePreflight: stage => probed.has(stage.role) ? Promise.resolve(true) : probeModStage(stage),
+        crossHarness,
+        poll: !options.wait || !["reported", "verified"].includes(run.stages[0]?.state), timeoutMs: 900_000, cwd: options.cwd,
+        verifyTimeoutMs: 240000,
+        verifyCommandJson: options.wait ? modVerifyCommand(options.cwd, id) : undefined });
+    const implementation = result.run.stages.find((stage: any) => stage.role === "implementer");
+    const report = implementation?.handoffPath ? externalRun("handoff", { path: implementation.handoffPath }) : null;
+    if (report && report.digest === implementation?.handoffDigest) await closeVerifiedModWorker(result.run);
+    console.log(JSON.stringify({ ...result, ...(report && report.digest === implementation?.handoffDigest ? { handoff: report.text } : {}) }));
+  });
+
+program.command("mod-status")
+  .description("Recover a mod turn without repeating its dispatch")
+  .requiredOption("--session <id>", "Claude session identity")
+  .requiredOption("--turn <id>", "Stable turn identity")
+  .option("--consult-reviewed", "The advisor already accepted the recorded consult")
+  .action((options: { session: string; turn: string; consultReviewed?: boolean }) => {
+    const observation = harnessCommand<any>(["mod-delegation", "--action", "status", "--request-json", JSON.stringify(options)]);
+    if (!observation) { console.log(JSON.stringify({ mode: "unknown", recorded: false })); return; }
+    if (observation.activation === "shadow") { console.log(JSON.stringify({ id: observation.id, mode: "direct", reason: "shadow" })); return; }
+    let run: any;
+    try { run = externalRun("status", { id: observation.id }); }
+    catch (error) { if (!(error instanceof Error) || error.message !== "external_run_missing") throw error; }
+    if (!run && !options.consultReviewed && observation.decision.mode === "delegate" && observation.decision.consult) {
+      const target = observation.decision.consult;
+      console.log(JSON.stringify({ id: observation.id, mode: "consult", target: { ...target, client: target.client ?? "claude", cliModel: target.cliModel ?? target.model } }));
+      return;
+    }
+    if (!run && observation.decision.mode === "delegate") {
+      console.log(JSON.stringify({ id: observation.id, mode: "unknown", recorded: true, runMissing: true }));
+      return;
+    }
+    console.log(JSON.stringify({ id: observation.id, ...(run ? { run } : observation.decision) }));
+  });
 
 program
   .command("run-status <id>")
