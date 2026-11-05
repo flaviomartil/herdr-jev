@@ -1,6 +1,10 @@
 {
   "name": "harness",
   "version": "0.2.0",
+  "license": "Apache-2.0",
+  "author": {
+    "name": "flaviomartil"
+  },
   "description": "Shows and drives Herdr-Jev role plans inside Claude Code: the advisor is the session, and the implementer, reviewer and reader models come from herdr-jev models list.",
   "types": "./types/index.d.ts",
   "userConfig": {

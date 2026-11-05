@@ -7,9 +7,11 @@ export function resolveStageSpec(
   overrideEffort?: ReasoningEffort,
 ): StageSpec {
   const resolved = resolveActiveModel(client, role);
-  const description = resolved.usedFallback
-    ? `${resolved.entry.description} (FALLBACK from ${resolved.originalRequested} due to quota exhaustion)`
-    : resolved.entry.description;
+  const description = resolved.allExhausted
+    ? `${resolved.entry.description} (ALL MODELS EXHAUSTED for ${client}/${role}; last-resort ${resolved.model})`
+    : resolved.usedFallback
+      ? `${resolved.entry.description} (FALLBACK from ${resolved.originalRequested} due to quota exhaustion)`
+      : resolved.entry.description;
 
   return {
     role,
@@ -18,6 +20,7 @@ export function resolveStageSpec(
     effort: overrideEffort ?? resolved.entry.defaultEffort,
     extraFlags: [...resolved.entry.extraFlags],
     description,
+    ...(resolved.allExhausted ? { allExhausted: true } : {}),
   };
 }
 

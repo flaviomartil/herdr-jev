@@ -21,8 +21,11 @@ export async function resolvePeerStage(input: { prompt: string; source: ClientKi
     throw new Error(`Peer target ${input.target} is disallowed by cross-harness configuration for ${input.source}`);
   }
   const triage = await triageTaskWithJev(input.prompt);
-  const client = input.target ?? resolveDelegatedClient(input.source, role, { triage,
-    config }).client;
+  const delegated = resolveDelegatedClient(input.source, role, { triage, config });
+  const client = input.target ?? delegated.client;
+  if (!input.target && delegated.allExhausted) {
+    throw new Error(`All configured peer and source harnesses are quota exhausted for role ${role}`);
+  }
   if (!BASE_CLIENTS.includes(client as any) && !loadClientAliases()[client]) throw new Error(`Unknown peer harness: ${client}`);
   if (resolveBaseClientKind(client) === "codex" && hasExhaustedUsageQuota("codex")) throw new Error("Codex account quota is exhausted in a fresh usage observation; select another permitted peer");
   if (client === "kiro" && !input.model?.trim()) throw new Error("Kiro peer requires a verified model from kiro-cli chat --list-models --format json");

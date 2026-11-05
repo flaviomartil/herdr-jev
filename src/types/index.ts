@@ -26,6 +26,7 @@ export interface StageSpec {
   description: string;
   client?: ClientKind;
   cliModel?: string;
+  allExhausted?: boolean;
 }
 
 export interface PipelinePlan {
