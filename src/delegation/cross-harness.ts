@@ -220,7 +220,7 @@ export function resolveDelegatedClient(
     config?: CrossHarnessConfig;
     triage?: TriageDecision;
   },
-): { client: ClientKind; delegated: boolean; reason: string } {
+): { client: ClientKind; delegated: boolean; reason: string; allExhausted?: boolean } {
   const config = options?.config ?? parseCrossHarnessConfig();
 
   // Mode 1: Disabled (strictly self-delegation)
@@ -275,10 +275,12 @@ export function resolveDelegatedClient(
     }
 
     // All alternative peers exhausted: fallback to source harness
+    const sourceExhausted = isClientExhausted(sourceClient, targetRole);
     return {
       client: sourceClient,
       delegated: false,
-      reason: `Explicit target ${target} quota exhausted and no alternative peer available: falling back to source harness ${sourceClient}`,
+      ...(sourceExhausted ? { allExhausted: true } : {}),
+      reason: `Explicit target ${target} quota exhausted and no alternative peer available: falling back to source harness ${sourceClient}${sourceExhausted ? " (all harnesses quota exhausted)" : ""}`,
     };
   }
 
@@ -306,10 +308,12 @@ export function resolveDelegatedClient(
       }
     }
 
+    const sourceExhausted = isClientExhausted(sourceClient, targetRole);
     return {
       client: sourceClient,
       delegated: false,
-      reason: `All cross-harness peers quota exhausted: falling back to source harness ${sourceClient}`,
+      ...(sourceExhausted ? { allExhausted: true } : {}),
+      reason: `All cross-harness peers quota exhausted: falling back to source harness ${sourceClient}${sourceExhausted ? " (all harnesses quota exhausted)" : ""}`,
     };
   }
 
@@ -356,10 +360,12 @@ export function resolveDelegatedClient(
   }
 
   // All mapped external peers exhausted: safely return to source harness
+  const sourceExhausted = isClientExhausted(sourceClient, targetRole);
   return {
     client: sourceClient,
     delegated: false,
-    reason: `All mapped peers (${externalPeers.join(", ")}) quota exhausted: falling back to source harness ${sourceClient}`,
+    ...(sourceExhausted ? { allExhausted: true } : {}),
+    reason: `All mapped peers (${externalPeers.join(", ")}) quota exhausted: falling back to source harness ${sourceClient}${sourceExhausted ? " (all harnesses quota exhausted)" : ""}`,
   };
 }
 

@@ -314,31 +314,16 @@ async function inFlight($: Engine, seen: Seen, id: string, command = 'gh pr crea
 const check = ($: Engine, id: string | undefined, command = 'gh pr create --fill') =>
   $.tool.check({ tool: 'Bash', input: { command }, ...(id === undefined ? {} : { tool_use_id: id }) } as never)
 
-test('ask on: the held call is asked, other ids and no id are not, and the hold is released after the call', { options: { prGateAsk: true } }, async ($, on) => {
-  let release: () => void = () => {}
-  const gate = new Promise<void>(resolve => {
-    release = resolve
-  })
-  on('tool.call', { tool: 'Bash' }, async () => {
-    await gate
-    return REPLY as never
-  })
+test('ask on: a held PR call is sent to the permission prompt and the hold is released after the call', { options: { prGateAsk: true } }, async ($, on) => {
+  on('tool.call', { tool: 'Bash' }, () => REPLY as never)
   on('tool.check', () => ({ decision: 'allow' as const, rule: 'Bash(gh:*)' }))
   const seen = wire(on)
   const { done } = await inFlight($, seen, 'toolu_A')
-
-  const asked = await check($, 'toolu_A')
-  expect(asked.decision).toBe('ask')
-  expect(asked.reason).toContain('pending_review')
-  expect(asked.reason).toContain('/work/demo')
-  expect(Object.keys(asked).sort()).toEqual(['decision', 'reason'])
+  const out = await done
+  expect(String(out.result)).toContain('Permission to use Bash has been denied')
+  expect((await check($, 'toolu_A')).decision).toBe('allow')
   expect((await check($, 'toolu_B')).decision).toBe('allow')
   expect((await check($, undefined)).decision).toBe('allow')
-
-  release()
-  const out = await done
-  expect(out.result).toBe('R')
-  expect((await check($, 'toolu_A')).decision).toBe('allow')
 })
 
 test('ask off by default: nothing is held while the call is in flight', async ($, on) => {
@@ -602,29 +587,19 @@ test('a review that the engine refuses is not recorded', async ($, on) => {
 })
 
 test('ask on: a stale and a none status ask, an unknown one does not', { options: { prGateAsk: true } }, async ($, on) => {
-  let release: () => void = () => {}
-  const gate = new Promise<void>(resolve => {
-    release = resolve
-  })
-  on('tool.call', { tool: 'Bash' }, async () => {
-    await gate
-    return REPLY as never
-  })
+  on('tool.call', { tool: 'Bash' }, () => REPLY as never)
   on('tool.check', () => ({ decision: 'allow' as const }))
   const seen = wire(on)
+  const denied = (out: { result?: unknown }) => String(out.result).includes('Permission to use Bash has been denied')
   seen.toplevel = '/none/repo'
-  const none = bash($, 'cd /none/repo && gh pr create', { tool_use_id: 'toolu_N' })
+  const none = await bash($, 'cd /none/repo && gh pr create', { tool_use_id: 'toolu_N' })
+  expect(denied(none)).toBe(true)
   seen.toplevel = '/work/demo'
   await reviewed($, seen)
   seen.statusBody = { status: 'pending_verification' }
-  const stale = bash($, 'gh pr create', { tool_use_id: 'toolu_S' })
-  const blind = bash($, 'cd a; gh pr create', { tool_use_id: 'toolu_U' })
-  await settle()
-  const asked = await check($, 'toolu_S')
-  expect(asked.decision).toBe('ask')
-  expect(asked.reason).toContain('stale')
-  expect((await check($, 'toolu_N')).decision).toBe('ask')
-  expect((await check($, 'toolu_U')).decision).toBe('allow')
-  release()
-  await Promise.all([none, stale, blind])
+  const stale = await bash($, 'gh pr create', { tool_use_id: 'toolu_S' })
+  expect(denied(stale)).toBe(true)
+  const blind = await bash($, 'cd a; gh pr create', { tool_use_id: 'toolu_U' })
+  expect(denied(blind)).toBe(false)
+  expect(blind.result).toBe('R')
 })

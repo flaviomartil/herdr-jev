@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hasExhaustedUsageQuota } from "../harness/bridge.js";
@@ -94,6 +94,12 @@ export function loadUserOverrides(): Record<string, string> {
   return {};
 }
 
+function writeAtomicJson(target: string, data: unknown): void {
+  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
+  renameSync(tmp, target);
+}
+
 export function saveUserOverride(clientRoleKey: string, newModel: string): void {
   const dir = userConfigDir();
   if (!existsSync(dir)) {
@@ -101,7 +107,7 @@ export function saveUserOverride(clientRoleKey: string, newModel: string): void 
   }
   const current = loadUserOverrides();
   current[clientRoleKey] = newModel;
-  writeFileSync(userConfigFile(), JSON.stringify(current, null, 2), "utf-8");
+  writeAtomicJson(userConfigFile(), current);
 }
 
 export function loadQuotaRecords(): QuotaEntry[] {
@@ -128,13 +134,27 @@ export function isModelExhausted(client: string, model: string): boolean {
   );
 }
 
-export function markModelExhausted(client: string, model: string, durationMinutes = 120): void {
+export function parseResetUntil(input?: string): Date | null {
+  if (!input) return null;
+  const direct = Date.parse(input);
+  if (Number.isFinite(direct) && direct > Date.now()) return new Date(direct);
+  const resetMatch = input.match(/(?:resets[_\s]*at|try again at)\s*[:=]?\s*([0-9T:.\-+Z ]+(?:AM|PM|UTC)?)/i)?.[1]?.trim();
+  if (resetMatch) {
+    const parsed = Date.parse(resetMatch);
+    if (Number.isFinite(parsed) && parsed > Date.now()) return new Date(parsed);
+  }
+  return null;
+}
+
+export function markModelExhausted(client: string, model: string, durationMinutes: number | string = 120, untilIso?: string): void {
   const dir = userConfigDir();
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
   const now = new Date();
-  const expires = new Date(now.getTime() + durationMinutes * 60 * 1000);
+  const rawUntil = typeof durationMinutes === "string" ? durationMinutes : untilIso;
+  const minutes = typeof durationMinutes === "number" && Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : 120;
+  const expires = parseResetUntil(rawUntil) ?? new Date(now.getTime() + minutes * 60 * 1000);
   const current = loadQuotaRecords().filter(
     (q) => !(q.client.toLowerCase() === client.toLowerCase() && (q.model === "*" || q.model.toLowerCase() === model.toLowerCase())),
   );
@@ -144,13 +164,13 @@ export function markModelExhausted(client: string, model: string, durationMinute
     exhaustedAt: now.toISOString(),
     expiresAt: expires.toISOString(),
   });
-  writeFileSync(userQuotasFile(), JSON.stringify(current, null, 2), "utf-8");
+  writeAtomicJson(userQuotasFile(), current);
 }
 
 export function resetQuotas(filterClient?: string, filterModel?: string): void {
   mkdirSync(userConfigDir(), { recursive: true });
   if (!filterClient && !filterModel) {
-    writeFileSync(userQuotasFile(), JSON.stringify([], null, 2), "utf-8");
+    writeAtomicJson(userQuotasFile(), []);
     return;
   }
   const current = loadQuotaRecords();
@@ -159,7 +179,7 @@ export function resetQuotas(filterClient?: string, filterModel?: string): void {
     if (filterModel && q.model.toLowerCase() !== filterModel.toLowerCase()) return true;
     return false;
   });
-  writeFileSync(userQuotasFile(), JSON.stringify(filtered, null, 2), "utf-8");
+  writeAtomicJson(userQuotasFile(), filtered);
 }
 
 import { resolveBaseClientKind } from "./aliases.js";
