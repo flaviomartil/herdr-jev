@@ -46,10 +46,11 @@ describe("Model Matrix", () => {
     expect(CLIENT_MODEL_MATRIX.codex.reviewer.model).toBe("gpt-5.6-sol");
   });
 
-  it("defines AntiGravity models: Opus 4.6 advisor, Gemini 3.8 Flash High implementer", () => {
-    expect(CLIENT_MODEL_MATRIX.antigravity.advisor.model).toBe("claude-opus-4-6");
+  it("defines AntiGravity models: Opus 5.5 advisor, Gemini 3.8 Flash High implementer", () => {
+    expect(CLIENT_MODEL_MATRIX.antigravity.advisor.model).toBe("claude-opus-5-5");
     expect(CLIENT_MODEL_MATRIX.antigravity.implementer.model).toBe("gemini-3-8-flash");
-    expect(CLIENT_MODEL_MATRIX.antigravity.reviewer.model).toBe("claude-opus-4-6");
+    expect(CLIENT_MODEL_MATRIX.antigravity.reviewer.model).toBe("claude-opus-5-5");
+    expect(CLIENT_MODEL_MATRIX.antigravity.reviewer.defaultEffort).toBe("high");
   });
 });
 
@@ -235,23 +236,23 @@ describe("Dynamic Model Matrix & Quota Cascade", () => {
 
   it("resolves primary model when quota is healthy", () => {
     const active = resolveActiveModel("antigravity", "advisor");
-    expect(active.model).toBe("claude-opus-4-6");
+    expect(active.model).toBe("claude-opus-5-5");
     expect(active.usedFallback).toBe(false);
   });
 
   it("cascades to next fallback model when primary is quota exhausted", () => {
-    markModelExhausted("antigravity", "claude-opus-4-6", 60);
+    markModelExhausted("antigravity", "claude-opus-5-5", 60);
     const active = resolveActiveModel("antigravity", "advisor");
-    expect(active.model).toBe("gemini-3-8-pro");
+    expect(active.model).toBe("gemini-4-argon");
     expect(active.usedFallback).toBe(true);
-    expect(active.originalRequested).toBe("claude-opus-4-6");
+    expect(active.originalRequested).toBe("claude-opus-5-5");
     resetQuotas("antigravity");
   });
 
   it("restores primary model after quota reset", () => {
     resetQuotas("antigravity");
     const active = resolveActiveModel("antigravity", "advisor");
-    expect(active.model).toBe("claude-opus-4-6");
+    expect(active.model).toBe("claude-opus-5-5");
     expect(active.usedFallback).toBe(false);
   });
 });
@@ -688,16 +689,16 @@ describe("Client Aliases & Executable Resolution", () => {
     markModelExhausted("antigravity", "gemini-3-8-flash", 60);
     const planFallback1 = planExecution("Implement payment gateway", "claude", triage, { crossHarness: config });
     expect(planFallback1.stages[1].client).toBe("antigravity");
-    expect(planFallback1.stages[1].model).toBe("gemini-3-8-pro");
+    expect(planFallback1.stages[1].model).toBe("gemini-4-argon");
 
     // Step 3: Test Level 1 Fallback step 2 (Gemini Pro exhausted -> cascades to Claude Sonnet 4.6)
-    markModelExhausted("antigravity", "gemini-3-8-pro", 60);
+    markModelExhausted("antigravity", "gemini-4-argon", 60);
     const planFallback2 = planExecution("Implement payment gateway", "claude", triage, { crossHarness: config });
     expect(planFallback2.stages[1].client).toBe("antigravity");
-    expect(planFallback2.stages[1].model).toBe("claude-sonnet-4-6");
+    expect(planFallback2.stages[1].model).toBe("claude-sonnet-5-5");
 
     // Step 4: Test Level 2 Cross-Harness Fallback (All AntiGravity models exhausted -> safely falls back to Claude Sonnet 5)
-    markModelExhausted("antigravity", "claude-sonnet-4-6", 60);
+    markModelExhausted("antigravity", "claude-sonnet-5-5", 60);
     const planFallbackFinal = planExecution("Implement payment gateway", "claude", triage, { crossHarness: config });
     expect(planFallbackFinal.stages[1].client).toBe("claude");
     expect(planFallbackFinal.stages[1].model).toBe("sonnet-5");
