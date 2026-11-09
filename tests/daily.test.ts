@@ -553,7 +553,7 @@ test("CLI daily works when run with no caller pane (HERDR_PANE_ID unset) and --w
   const fakeHerdr = join(tmpdir(), `fake-herdr-${Date.now()}.mjs`);
   writeFileSync(
     fakeHerdr,
-    `#!/usr/bin/env node
+    `#!${process.execPath}
 if (process.argv.includes("snapshot")) {
   process.stdout.write(JSON.stringify({ result: { snapshot: {
     workspaces: [{ workspace_id: "w1", label: "my-cli-project" }],
@@ -584,7 +584,7 @@ process.exit(0);
     delete env.HERDR_PANE_ID;
 
     const resJson = spawnSync("bun", ["run", cliScript, "daily", "--json"], { env, encoding: "utf8" });
-    expect(resJson.status).toBe(0);
+    expect(resJson.status, resJson.stderr).toBe(0);
     const parsed = JSON.parse(resJson.stdout);
     expect(parsed.projects).toBeDefined();
 
@@ -593,7 +593,7 @@ process.exit(0);
     expect(resMd.stdout).toContain("Resumo do dia");
 
     const resWrite = spawnSync("bun", ["run", cliScript, "daily", "--write"], { env, encoding: "utf8" });
-    expect(resWrite.status).toBe(0);
+    expect(resWrite.status, resWrite.stderr).toBe(0);
     const lines = resWrite.stdout.trim().split("\n");
     const writtenPath = lines[lines.length - 1];
     expect(existsSync(writtenPath)).toBe(true);
@@ -982,7 +982,7 @@ test("Finding 19: daily honours HERDR_PLUGIN_STATE_DIR via resolveStateDir helpe
   const fakeHerdr = join(tmpdir(), `fake-herdr-f19-${Date.now()}.mjs`);
   writeFileSync(
     fakeHerdr,
-    `#!/usr/bin/env node
+    `#!${process.execPath}
 if (process.argv.includes("snapshot")) {
   process.stdout.write(JSON.stringify({ result: { snapshot: {
     workspaces: [{ workspace_id: "w1", label: "my-f19-project" }],
@@ -1021,7 +1021,7 @@ process.exit(0);
     expect(standupEnv.stateDir).toBe(tempState);
 
     const resWrite = spawnSync("bun", ["run", cliScript, "daily", "--write"], { env, encoding: "utf8" });
-    expect(resWrite.status).toBe(0);
+    expect(resWrite.status, resWrite.stderr).toBe(0);
     const lines = resWrite.stdout.trim().split("\n");
     const writtenPath = lines[lines.length - 1];
     expect(writtenPath).toContain(tempState);

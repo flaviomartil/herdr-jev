@@ -1,8 +1,20 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { launchStageInHerdr, type StageSpec } from "../src/herdr/launcher.js";
 import type { HerdrCommandResult, HerdrClient } from "../src/herdr/client.js";
 
 const stage: StageSpec = { role: "implementer", model: "fake-model", effort: "high", extraFlags: [], description: "" };
+
+let savedEnv: Record<string, string | undefined>;
+beforeEach(() => {
+  savedEnv = { HERDR_ENV: process.env.HERDR_ENV, HERDR_JEV_READY_TIMEOUT_MS: process.env.HERDR_JEV_READY_TIMEOUT_MS };
+  process.env.HERDR_ENV = "1";
+});
+afterEach(() => {
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
 
 function commandResult(ok: boolean, stdout = "", stderr = ""): HerdrCommandResult {
   return { ok, code: ok ? 0 : 1, stdout, stderr };
@@ -19,7 +31,6 @@ describe("launcher prompt readiness and retry", () => {
       }
     };
 
-    process.env.HERDR_ENV = "1";
     process.env.HERDR_JEV_READY_TIMEOUT_MS = "5000";
 
     // 1. Slow boot then delivery

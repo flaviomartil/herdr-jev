@@ -287,7 +287,7 @@ let scopeUserOverridden = false;
 let initialScopeSet = false;
 
 function defaultScopeIfNeeded() {
-  if (initialScopeSet || scopeUserOverridden || argv.has('--all') || argv.has('--widen')) return;
+  if (initialScopeSet || scopeUserOverridden || floorScope === 'all') return;
   if (!roster.people.length) return;
   const inTab = roster.people.filter((p) => {
     const matchWs = !currentWorkspaceId || p.workspaceId === currentWorkspaceId;
@@ -336,6 +336,7 @@ function initScopeFromEnv() {
   if (!currentTabId && process.env.HERDR_TAB_ID) currentTabId = process.env.HERDR_TAB_ID;
 }
 initScopeFromEnv();
+if (DEMO && !currentWorkspaceId && !currentTabId && !process.env.HERDR_PANE_ID && !process.env.HERDR_JEV_SOURCE_PANE_ID) floorScope = 'all';
 
 function updateScopeFromRoster() {
   if (!currentWorkspaceId && currentTabId) {

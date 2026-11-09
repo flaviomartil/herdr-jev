@@ -10,8 +10,15 @@ import { handleNotifyCommand } from "../src/herdr/notify.ts";
 import * as classifier from "../src/triage/pane-classifier.ts";
 import * as notifyArgs from "../herdr-plugin/office/src/notify-args.mjs";
 
-process.env.HERDR_OFFICE_TEST_UNIT = "1";
-const office: any = await import("../herdr-plugin/office/office.mjs");
+const savedOfficeUnit = process.env.HERDR_OFFICE_TEST_UNIT;
+let office: any;
+try {
+  process.env.HERDR_OFFICE_TEST_UNIT = "1";
+  office = await import("../herdr-plugin/office/office.mjs");
+} finally {
+  if (savedOfficeUnit === undefined) delete process.env.HERDR_OFFICE_TEST_UNIT;
+  else process.env.HERDR_OFFICE_TEST_UNIT = savedOfficeUnit;
+}
 const hooks = office._testHooks;
 
 const ROOT = resolve(import.meta.dir, "..");

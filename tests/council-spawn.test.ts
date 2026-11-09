@@ -211,7 +211,7 @@ describe("council default spawn", () => {
 });
 
 function launch(mode: string, signalName: NodeJS.Signals | "SIGKILL") {
-  const child = spawn(process.execPath, ["run", join(import.meta.dir, "fixtures/council-signal-child.ts"), dir, mode], { stdio: "ignore", env: { ...process.env } });
+  const child = spawn("sh", ["-c", 'ulimit -c 0; exec "$@"', "council-signal", process.execPath, "run", join(import.meta.dir, "fixtures/council-signal-child.ts"), dir, mode], { stdio: "ignore", env: { ...process.env } });
   const exited = new Promise<NodeJS.Signals | null>((resolve) => child.on("exit", (_code, signal) => resolve(signal)));
   return { child, exited, signalName };
 }

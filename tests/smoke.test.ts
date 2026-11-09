@@ -110,7 +110,7 @@ process.exit(0);
     };
 
     const res = spawnSync("bash", [smokeScript], { env, cwd: repoDir, encoding: "utf8", timeout: 60000 });
-    expect(res.status).toBe(0);
+    expect(res.status, `${res.stdout}\n${res.stderr}`).toBe(0);
     expect(res.stdout).toContain("ok herdr reachable");
     expect(res.stdout).toContain("ok contract of herdr pane get");
     expect(res.stdout).toContain("ok overview --json");
@@ -198,7 +198,7 @@ test("smoke.sh prints skip and exits 0 when Herdr is unreachable", () => {
     };
 
     const res = spawnSync("bash", [smokeScript], { env, cwd: repoDir, encoding: "utf8", timeout: 60000 });
-    expect(res.status).toBe(0);
+    expect(res.status, `${res.stdout}\n${res.stderr}`).toBe(0);
     expect(res.stdout).toContain("skip herdr reachable");
     expect(res.stdout).toContain("skip contract of herdr pane get");
     expect(res.stdout).toContain("skip overview --json");

@@ -431,7 +431,7 @@ export function listAllGridWorkers(stateDir?: string): TrackedWorkerRecord[] {
     } catch {
     }
   }
-  return result;
+  return result.sort((left, right) => left.callerPaneId.localeCompare(right.callerPaneId));
 }
 
 export function filterWorkerClosePlan(

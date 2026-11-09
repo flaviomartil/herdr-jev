@@ -11,7 +11,9 @@ import { createProcessCommandAdapter } from "../src/herdr/client.ts";
 
 
 let stateDir: string;
+let savedEnv: NodeJS.ProcessEnv;
 beforeAll(() => {
+  savedEnv = { ...process.env };
   stateDir = mkdtempSync(join(tmpdir(), 'herdr-jev-notify-'));
   process.env.HERDR_JEV_STATE_DIR = stateDir;
   process.env.HERDR_BIN_PATH = createFakeHerdr(stateDir);
@@ -19,6 +21,7 @@ beforeAll(() => {
 });
 afterAll(() => {
   try { rmSync(join(stateDir, "notify"), { recursive: true, force: true }); } catch (e) {}
+  process.env = { ...savedEnv };
 });
 
 test("notify skips when attention is not now", async () => {

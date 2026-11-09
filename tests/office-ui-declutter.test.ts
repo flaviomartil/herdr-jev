@@ -8,8 +8,11 @@ import { classifyPane, jevClassificationEnabled } from "../herdr-plugin/office/s
 
 
 const tempDir = mkdtempSync(join(tmpdir(), 'herdr-jev-ui-'));
+const savedJevBin = process.env.HERDR_JEV_BIN;
 afterAll(() => {
   try { rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+  if (savedJevBin === undefined) delete process.env.HERDR_JEV_BIN;
+  else process.env.HERDR_JEV_BIN = savedJevBin;
 });
 
 test("filter terminal chrome from the pane text before showing it", () => {
