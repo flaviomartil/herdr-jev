@@ -4,72 +4,109 @@
     "claude": {
       "advisor": {
         "model": "fable-5",
-        "fallbackChain": ["fable-5", "claude-sonnet-5", "opus-5"],
+        "fallbackChain": [
+          "fable-5",
+          "claude-sonnet-5",
+          "opus-5"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Claude Fable 5: Architectural planning and design advisor"
       },
       "implementer": {
         "model": "sonnet-5",
-        "fallbackChain": ["sonnet-5", "fable-5"],
+        "fallbackChain": [
+          "sonnet-5",
+          "fable-5"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Claude Sonnet 5: Code implementer with 1M tokens context window"
       },
       "reviewer": {
         "model": "opus-5",
-        "fallbackChain": ["opus-5", "sonnet-5"],
+        "fallbackChain": [
+          "opus-5",
+          "sonnet-5"
+        ],
         "defaultEffort": "xhigh",
         "extraFlags": [],
         "description": "Claude Opus 5: Deep code reviewer and verification specialist"
       },
       "researcher": {
         "model": "sonnet-5",
-        "fallbackChain": ["sonnet-5"],
+        "fallbackChain": [
+          "sonnet-5"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Claude Sonnet 5: Codebase search and documentation research subagent"
       },
       "reader": {
-        "model": "claude-haiku-4-5-20251001",
-        "fallbackChain": ["claude-haiku-4-5-20251001", "sonnet-5"],
+        "model": "claude-haiku-5-5",
+        "fallbackChain": [
+          "claude-haiku-5-5",
+          "sonnet-5"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
-        "description": "Claude Haiku 4.5: bulk reading and mechanical tasks, read-only"
+        "description": "Claude Haiku 5.5: bulk reading and mechanical tasks, read-only"
       }
     },
     "codex": {
       "advisor": {
-        "model": "astra",
-        "fallbackChain": ["astra", "gpt-5.6-luna", "gpt-5.6-sol"],
+        "model": "gpt-6-astra",
+        "fallbackChain": [
+          "gpt-6-astra",
+          "gpt-6.1-sol",
+          "gpt-5.6-sol"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Codex Astra: High-level architectural advisor and reasoning guide"
       },
       "implementer": {
         "model": "gpt-5.6-luna",
-        "fallbackChain": ["gpt-5.6-luna", "gpt-5.6-terra"],
+        "fallbackChain": [
+          "gpt-5.6-luna",
+          "gpt-5.6-terra"
+        ],
         "defaultEffort": "xhigh",
-        "extraFlags": ["-c", "model_reasoning_effort=\"xhigh\""],
+        "extraFlags": [
+          "-c",
+          "model_reasoning_effort=\"xhigh\""
+        ],
         "description": "Codex GPT-5.6 Luna: High-velocity implementer at XHIGH reasoning effort"
       },
       "reviewer": {
         "model": "gpt-5.6-sol",
-        "fallbackChain": ["gpt-5.6-sol", "gpt-5.6-luna"],
+        "fallbackChain": [
+          "gpt-5.6-sol",
+          "gpt-5.6-luna"
+        ],
         "defaultEffort": "xhigh",
-        "extraFlags": ["-c", "model_reasoning_effort=\"xhigh\""],
+        "extraFlags": [
+          "-c",
+          "model_reasoning_effort=\"xhigh\""
+        ],
         "description": "Codex GPT-5.6 Sol: Strict verification and review at XHIGH reasoning effort"
       },
       "researcher": {
         "model": "gpt-5.6-terra",
-        "fallbackChain": ["gpt-5.6-terra", "gpt-5.6-luna"],
+        "fallbackChain": [
+          "gpt-5.6-terra",
+          "gpt-5.6-luna"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Codex GPT-5.6 Terra: Background research and codebase analyst"
       },
       "reader": {
         "model": "gpt-5.6-terra",
-        "fallbackChain": ["gpt-5.6-terra", "gpt-5.6-luna"],
+        "fallbackChain": [
+          "gpt-5.6-terra",
+          "gpt-5.6-luna"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Codex gpt-5.6-terra: bulk reading and mechanical tasks, read-only"
@@ -78,35 +115,56 @@
     "antigravity": {
       "advisor": {
         "model": "claude-opus-5-5",
-        "fallbackChain": ["claude-opus-5-5", "gemini-4-argon", "gemini-3-8-flash"],
+        "fallbackChain": [
+          "claude-opus-5-5",
+          "gemini-4-argon",
+          "gemini-3-8-flash"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "AntiGravity Claude Opus 5.5: Senior pair programming and architecture planner (quota cascade to Gemini)"
       },
       "implementer": {
         "model": "gemini-3-8-flash",
-        "fallbackChain": ["gemini-3-8-flash", "gemini-4-argon", "claude-sonnet-5-5"],
+        "fallbackChain": [
+          "gemini-3-8-flash",
+          "gemini-4-argon",
+          "claude-sonnet-5-5"
+        ],
         "defaultEffort": "high",
-        "extraFlags": ["--effort", "high"],
+        "extraFlags": [
+          "--effort",
+          "high"
+        ],
         "description": "AntiGravity Gemini 3.8 Flash High: Fast high-throughput implementer"
       },
       "reviewer": {
         "model": "claude-opus-5-5",
-        "fallbackChain": ["claude-opus-5-5", "gemini-4-argon", "gemini-3-8-flash"],
+        "fallbackChain": [
+          "claude-opus-5-5",
+          "gemini-4-argon",
+          "gemini-3-8-flash"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "AntiGravity Claude Opus 5.5: Comprehensive reviewer and test verifier (quota cascade)"
       },
       "researcher": {
         "model": "gemini-3-8-flash",
-        "fallbackChain": ["gemini-3-8-flash", "gpt-oss-120b"],
+        "fallbackChain": [
+          "gemini-3-8-flash",
+          "gpt-oss-120b"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "AntiGravity Gemini 3.8 Flash: Lightweight read-only research subagent"
       },
       "reader": {
         "model": "gemini-3-8-flash",
-        "fallbackChain": ["gemini-3-8-flash", "gpt-oss-120b"],
+        "fallbackChain": [
+          "gemini-3-8-flash",
+          "gpt-oss-120b"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "AntiGravity gemini-3-8-flash: bulk reading and mechanical tasks, read-only"
@@ -115,35 +173,48 @@
     "cursor": {
       "advisor": {
         "model": "cursor-smart",
-        "fallbackChain": ["cursor-smart", "cursor-fast"],
+        "fallbackChain": [
+          "cursor-smart",
+          "cursor-fast"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Cursor Smart: Strategic planning and code guidance"
       },
       "implementer": {
         "model": "cursor-fast",
-        "fallbackChain": ["cursor-fast", "cursor-smart"],
+        "fallbackChain": [
+          "cursor-fast",
+          "cursor-smart"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Cursor Fast: Rapid code execution and refactoring"
       },
       "reviewer": {
         "model": "cursor-smart",
-        "fallbackChain": ["cursor-smart", "cursor-fast"],
+        "fallbackChain": [
+          "cursor-smart",
+          "cursor-fast"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Cursor Smart: Consistency and regression review"
       },
       "researcher": {
         "model": "cursor-fast",
-        "fallbackChain": ["cursor-fast"],
+        "fallbackChain": [
+          "cursor-fast"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Cursor Fast: Rapid codebase exploration"
       },
       "reader": {
         "model": "cursor-fast",
-        "fallbackChain": ["cursor-fast"],
+        "fallbackChain": [
+          "cursor-fast"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Cursor cursor-fast: bulk reading and mechanical tasks, read-only"
@@ -151,73 +222,103 @@
     },
     "opencode": {
       "advisor": {
-        "model": "opencode-primary",
-        "fallbackChain": ["opencode-primary"],
+        "model": "opencode-go/gpt-6-luna",
+        "fallbackChain": [
+          "opencode-go/gpt-6-luna",
+          "opencode-go/kimi-k3.1-pro"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
-        "description": "OpenCode Primary: Open-weights strategic planning advisor"
+        "description": "OpenCode opencode-go/gpt-6-luna: Open-weights strategic planning advisor"
       },
       "implementer": {
-        "model": "opencode-primary",
-        "fallbackChain": ["opencode-primary"],
+        "model": "opencode-go/gpt-6-luna",
+        "fallbackChain": [
+          "opencode-go/gpt-6-luna",
+          "opencode-go/kimi-k3"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
-        "description": "OpenCode Primary: Open-weights implementation engine"
+        "description": "OpenCode opencode-go/gpt-6-luna: Open-weights implementation engine"
       },
       "reviewer": {
-        "model": "opencode-primary",
-        "fallbackChain": ["opencode-primary"],
+        "model": "opencode-go/gpt-6-luna",
+        "fallbackChain": [
+          "opencode-go/gpt-6-luna",
+          "opencode-go/kimi-k3.1-pro"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
-        "description": "OpenCode Primary: Open-weights code verification"
+        "description": "OpenCode opencode-go/gpt-6-luna: Open-weights code verification"
       },
       "researcher": {
-        "model": "opencode-primary",
-        "fallbackChain": ["opencode-primary"],
+        "model": "opencode-go/glm-5.3-flash",
+        "fallbackChain": [
+          "opencode-go/glm-5.3-flash",
+          "opencode-go/deepseek-v4.1-flash"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
-        "description": "OpenCode Primary: Read-only codebase explorer"
+        "description": "OpenCode opencode-go/glm-5.3-flash: Read-only codebase explorer"
       },
       "reader": {
-        "model": "opencode-primary",
-        "fallbackChain": ["opencode-primary"],
+        "model": "opencode-go/glm-5.3-flash",
+        "fallbackChain": [
+          "opencode-go/glm-5.3-flash",
+          "opencode-go/deepseek-v4.1-flash"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
-        "description": "OpenCode opencode-primary: bulk reading and mechanical tasks, read-only"
+        "description": "OpenCode opencode-go/glm-5.3-flash: bulk reading and mechanical tasks, read-only"
       }
     },
     "kimi": {
       "advisor": {
         "model": "kimi-code/k3",
-        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "fallbackChain": [
+          "kimi-code/k3",
+          "kimi-code/kimi-for-coding"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Kimi K3: Deep reasoning architectural planner and context advisor"
       },
       "implementer": {
         "model": "kimi-code/k3",
-        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "fallbackChain": [
+          "kimi-code/k3",
+          "kimi-code/kimi-for-coding"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Kimi K3: High-capacity code implementer with extended context"
       },
       "reviewer": {
         "model": "kimi-code/k3",
-        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "fallbackChain": [
+          "kimi-code/k3",
+          "kimi-code/kimi-for-coding"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Kimi K3: Comprehensive code and security reviewer"
       },
       "researcher": {
         "model": "kimi-code/k3",
-        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "fallbackChain": [
+          "kimi-code/k3",
+          "kimi-code/kimi-for-coding"
+        ],
         "defaultEffort": "high",
         "extraFlags": [],
         "description": "Kimi K3: Long-context research and codebase search"
       },
       "reader": {
         "model": "kimi-code/k3",
-        "fallbackChain": ["kimi-code/k3", "kimi-code/kimi-for-coding"],
+        "fallbackChain": [
+          "kimi-code/k3",
+          "kimi-code/kimi-for-coding"
+        ],
         "defaultEffort": "standard",
         "extraFlags": [],
         "description": "Kimi kimi-code/k3: bulk reading and mechanical tasks, read-only"

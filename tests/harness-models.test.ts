@@ -129,7 +129,7 @@ describe("model catalog through ai-harness", () => {
     install();
     const first = buildAgentCommand("claude", stage("implementer", "fable-5"));
     const second = buildAgentCommand("claude", stage("implementer", "fable-5"));
-    expect(first).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
+    expect(first).toEqual(["claude", "--model", "claude-fable-5-2", "--effort", "high", "--settings", '{"skipDangerousModePermissionPrompt":true}', CLAUDE_BYPASS]);
     expect(second).toEqual(first);
     const calls = harness!.callsFor("model-resolve");
     expect(calls).toHaveLength(1);
@@ -149,7 +149,7 @@ describe("model catalog through ai-harness", () => {
 
   it("takes the bypass and read-only arguments from the harness answer", () => {
     install("contract", { FAKE_BYPASS_CLAUDE: "--harness-bypass", FAKE_READONLY_CODEX: "--sandbox read-only --harness-readonly" });
-    expect(buildAgentCommand("claude", stage("implementer", "fable-5"))).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", "high", "--harness-bypass"]);
+    expect(buildAgentCommand("claude", stage("implementer", "fable-5"))).toEqual(["claude", "--model", "claude-fable-5-2", "--effort", "high", "--harness-bypass"]);
     expect(readonlyReviewerArgs("codex", stage("reviewer", "gpt-5.6-sol"))).toEqual(["--sandbox", "read-only", "--harness-readonly"]);
     expect(reviewerCommand("codex", stage("reviewer", "gpt-5.6-sol"), "review").slice(-3)).toEqual(["--sandbox", "read-only", "--harness-readonly"]);
   });

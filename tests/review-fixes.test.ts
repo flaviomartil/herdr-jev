@@ -112,8 +112,8 @@ test("15", () => {
 });
 
 test("16", () => {
-  expect(resolveClaudeModel("fable-5")).toBe("claude-fable-5-1");
-  expect(resolveClaudeModel("claude-fable-5")).toBe("claude-fable-5-1");
+  expect(resolveClaudeModel("fable-5")).toBe("claude-fable-5-2");
+  expect(resolveClaudeModel("claude-fable-5")).toBe("claude-fable-5-2");
   expect(resolveClaudeModel("claude-sonnet-5")).toBe("claude-sonnet-5-5");
   expect(resolveClaudeModel("claude-opus-5")).toBe("claude-opus-5-5");
   expect(resolveClaudeModel("haiku-4-5")).toBe("claude-haiku-4-5-20251001");

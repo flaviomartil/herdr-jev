@@ -23,14 +23,14 @@ describe("role matrix", () => {
     expect(matrix).toEqual({
       client: "claude",
       roles: {
-        advisor: { model: "fable-5", cliModel: "claude-fable-5-1", effort: "high", readonly: false, fallbackActive: false },
+        advisor: { model: "fable-5", cliModel: "claude-fable-5-2", effort: "high", readonly: false, fallbackActive: false },
         implementer: { model: "sonnet-5", cliModel: "claude-sonnet-5-5", effort: "high", readonly: false, fallbackActive: false },
         reviewer: { model: "opus-5", cliModel: "claude-opus-5-5", effort: "xhigh", readonly: true, fallbackActive: false },
         researcher: { model: "sonnet-5", cliModel: "claude-sonnet-5-5", effort: "standard", readonly: true, fallbackActive: false },
-        reader: { model: "claude-haiku-4-5-20251001", cliModel: "claude-haiku-4-5-20251001", effort: "standard", readonly: true, fallbackActive: false },
+        reader: { model: "claude-haiku-5-5", cliModel: "claude-haiku-5-5", effort: "standard", readonly: true, fallbackActive: false },
       },
     });
-    const readerCall = harness.callsFor("model-resolve").find((argv) => argv.includes("claude-haiku-4-5-20251001"))!;
+    const readerCall = harness.callsFor("model-resolve").find((argv) => argv.includes("claude-haiku-5-5"))!;
     expect(readerCall[readerCall.indexOf("--role") + 1]).toBe("researcher");
   });
 
@@ -54,6 +54,6 @@ describe("role matrix", () => {
     const parsed = JSON.parse(stdout);
     expect(parsed.client).toBe("claude");
     expect(Object.keys(parsed.roles)).toEqual(["advisor", "implementer", "reviewer", "researcher", "reader"]);
-    expect(parsed.roles.reader.cliModel).toBe("claude-haiku-4-5-20251001");
+    expect(parsed.roles.reader.cliModel).toBe("claude-haiku-5-5");
   });
 });

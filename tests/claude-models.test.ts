@@ -2,8 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { buildAgentCommand, buildInlineCommand, type StageSpec } from "../src/herdr/launcher.js";
 
 describe("Claude model resolution", () => {
-  it("maps fable-5 and fable-5.1 to claude-fable-5-1", () => {
-    expect(buildAgentCommand("claude", { role: "implementer", model: "fable-5", effort: "standard", extraFlags: [], description: "" })).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", "medium", "--settings", '{"skipDangerousModePermissionPrompt":true}', "--dangerously-skip-permissions"]);
+  it("maps fable-5 to claude-fable-5-2 and fable-5.1 to claude-fable-5-1", () => {
+    expect(buildAgentCommand("claude", { role: "implementer", model: "fable-5", effort: "standard", extraFlags: [], description: "" })).toEqual(["claude", "--model", "claude-fable-5-2", "--effort", "medium", "--settings", '{"skipDangerousModePermissionPrompt":true}', "--dangerously-skip-permissions"]);
     expect(buildAgentCommand("claude", { role: "implementer", model: "fable-5.1", effort: "standard", extraFlags: [], description: "" })).toEqual(["claude", "--model", "claude-fable-5-1", "--effort", "medium", "--settings", '{"skipDangerousModePermissionPrompt":true}', "--dangerously-skip-permissions"]);
   });
   it("maps sonnet-5 variants to claude-sonnet-5-5", () => {

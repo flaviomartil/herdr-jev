@@ -973,6 +973,24 @@ modelsCommand
     console.log("  herdr-jev models classify <client> <model_name>\n");
   });
 
+modelsCommand
+  .command("sync")
+  .description("Discover live models from every installed CLI, add missing ids to the AI Harness catalog and repair role assignments that are no longer live")
+  .option("--apply", "Write harness.yml and config/models.json; without it only report drift")
+  .option("--probe-claude", "Probe each cataloged Claude id with a one-word request, since Claude has no list command")
+  .option("--json", "Print the report as JSON")
+  .action(async (options: { apply?: boolean; probeClaude?: boolean; json?: boolean }) => {
+    const { syncModels, formatSyncReport } = await import("./discovery/model-sync.js");
+    try {
+      const report = syncModels({ apply: options.apply, probeClaude: options.probeClaude });
+      console.log(options.json ? JSON.stringify(report, null, 2) : formatSyncReport(report));
+      if (report.validation && !report.validation.ok) process.exitCode = 1;
+    } catch (error) {
+      console.error(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+      process.exitCode = 1;
+    }
+  });
+
 
 // Quota Subcommand
 const quotaCommand = program.command("quota").description("Manage model quota status and circuit breakers");

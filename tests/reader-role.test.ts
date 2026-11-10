@@ -8,7 +8,7 @@ import { ROLE_KINDS, type StageSpec } from "../src/types/index.js";
 import { createFakeHarness, type FakeHarness } from "./fake-harness.js";
 
 const CLAUDE_BYPASS = "--dangerously-skip-permissions";
-const HAIKU = "claude-haiku-4-5-20251001";
+const HAIKU = "claude-haiku-5-5";
 
 function readerStage(model: string): StageSpec {
   return { role: "reader", model, effort: "standard", extraFlags: [], description: "synthetic" };
@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe("reader role", () => {
-  it("resolves for claude with Haiku 4.5 at standard effort", () => {
+  it("resolves for claude with Haiku 5.5 at standard effort", () => {
     const spec = resolveStageSpec("claude", "reader");
     expect(spec.role).toBe("reader");
     expect(spec.model).toBe(HAIKU);

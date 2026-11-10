@@ -46,8 +46,8 @@ function save(state) {
   writeFileSync(join(dir, "state.json"), JSON.stringify(state));
 }
 
-const CLAUDE_IDS = ["claude-fable-5-1", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-4-5-20251001"];
-const CLAUDE_ALIASES = { "fable-5": "claude-fable-5-1", "sonnet-5": "claude-sonnet-5-5", "claude-sonnet-5": "claude-sonnet-5-5", "opus-5": "claude-opus-5-5" };
+const CLAUDE_IDS = ["claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "claude-haiku-4-5-20251001"];
+const CLAUDE_ALIASES = { "fable-5": "claude-fable-5-2", "sonnet-5": "claude-sonnet-5-5", "claude-sonnet-5": "claude-sonnet-5-5", "opus-5": "claude-opus-5-5" };
 const CATALOG = {
   claude: { bypass_args: ["--dangerously-skip-permissions"], readonly_args: ["--tools", "Read,Glob,Grep"] },
   codex: { bypass_args: ["--dangerously-bypass-approvals-and-sandbox"], readonly_args: ["--sandbox", "read-only"] },

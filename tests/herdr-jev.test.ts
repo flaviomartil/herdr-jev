@@ -40,7 +40,7 @@ describe("Model Matrix", () => {
   });
 
   it("defines Codex models: Astra advisor, Luna implementer with XHIGH, Sol reviewer with XHIGH", () => {
-    expect(CLIENT_MODEL_MATRIX.codex.advisor.model).toBe("astra");
+    expect(CLIENT_MODEL_MATRIX.codex.advisor.model).toBe("gpt-6-astra");
     expect(CLIENT_MODEL_MATRIX.codex.implementer.model).toBe("gpt-5.6-luna");
     expect(CLIENT_MODEL_MATRIX.codex.implementer.extraFlags).toContain("-c");
     expect(CLIENT_MODEL_MATRIX.codex.reviewer.model).toBe("gpt-5.6-sol");
@@ -137,7 +137,7 @@ describe("Pipeline Planner", () => {
     const plan = planExecution("Fix typo in doc", "codex", trivialTriage, { forceTriad: true });
     expect(plan.stages.length).toBe(3);
     expect(plan.stages[0].role).toBe("advisor");
-    expect(plan.stages[0].model).toBe("astra");
+    expect(plan.stages[0].model).toBe("gpt-6-astra");
     expect(plan.stages[1].role).toBe("implementer");
     expect(plan.stages[1].model).toBe("gpt-5.6-luna");
     expect(plan.stages[2].role).toBe("reviewer");

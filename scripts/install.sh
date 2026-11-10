@@ -81,6 +81,7 @@ GEMINI_SKILLS_DIR="$HOME/.gemini/config/skills"
 
 mkdir -p "$AGENTS_SKILLS_DIR"
 ln -sfn "$REPO_DIR/skills/herdr-jev" "$AGENTS_SKILLS_DIR/herdr-jev"
+ln -sfn "$REPO_DIR/skills/herdr-jev-models-sync" "$AGENTS_SKILLS_DIR/herdr-jev-models-sync"
 
 if [ -d "$GEMINI_SKILLS_DIR" ]; then
   ln -sfn "$REPO_DIR/skills/herdr-jev" "$GEMINI_SKILLS_DIR/herdr-jev"
