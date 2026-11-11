@@ -59,6 +59,14 @@ import {
 } from './plan'
 import { registerPrGate } from './pr-gate'
 import { registerRules, rulesPromptContext } from './rules'
+import {
+  delegateBatch,
+  noteTurnComplete,
+  registerDelegationHooks,
+  registerDelegationTools,
+  registerJudgeAgents,
+  spawnWithTier,
+} from './delegation'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
 import type { ConsultTarget, Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
@@ -1698,6 +1706,7 @@ export const register: Register = (on, options) => {
 
   registerPrGate(on, options)
   registerRules(on, options)
+  registerDelegationHooks(on, options)
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
@@ -1723,6 +1732,8 @@ export const register: Register = (on, options) => {
         inputSchema: RUN_SCHEMA,
       }),
     )
+    await attempt('register judge agents', $, () => registerJudgeAgents($, options))
+    await attempt('register harness_wait', $, () => registerDelegationTools($, options))
     await attempt('register codex agent', $, () => registerCodexAgent($, external, options))
     await attempt('register harness_status', $, () =>
       $.tool.register({
@@ -1736,7 +1747,7 @@ export const register: Register = (on, options) => {
       inputSchema: { type: 'object', properties: { verify: { type: 'boolean', description: 'Resume the original unclaimed implementation, which may launch its worker, or verify returned work.' } } } }))
     await attempt('register harness_delegate', $, () => $.tool.register({ name: 'harness_delegate',
       description: 'After reading a completed automatic consult in harness_status, accept its recommendation and start the shared execution plan, or pass accept=false to decline and continue directly. Main session only.',
-      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' } } } }))
+      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' }, tasks: { type: 'array', description: 'Batch: tasks to route through the judge and run in parallel. Returns runIds at once; read them with harness_wait.', items: { type: 'object', properties: { task: { type: 'string' }, class: { type: 'string' }, size: { type: 'string' }, prefer: { type: 'string' }, cwd: { type: 'string' } }, required: ['task'] } } } } }))
 
     await attempt('reset automatic session state', $, async () => {
       await update($, automaticAtom, () => null)
@@ -1806,7 +1817,7 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const denial = spawnDenial(e, options.codex === true)
     if (denial !== null) return { deny: denial }
-    const started = await next(e)
+    const started = await spawnWithTier($, e, next, options)
     await attempt('note codex spawn', $, () => noteSpawn(externalPorts($), e.subagentType, e.prompt, e.cwd, started.agentId))
     return started
   })
@@ -2002,6 +2013,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: TOOL_DELEGATE }, async ($, e, next) => {
     if (e.agentId !== undefined) return { result: 'harness_delegate: main session only.' }
+    if (Array.isArray((e as unknown as { tasks?: unknown }).tasks)) return { result: await delegateBatch($, e as unknown as Record<string, unknown>, options) }
     const run = await read($, automaticAtom)
     if (options.autoDelegate === false || run?.state !== 'consult_ready') return { result: 'Read a completed consult with harness_status first.' }
     if ((e as { accept?: unknown }).accept === false) {
@@ -2042,6 +2054,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+    noteTurnComplete($, e, options)
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('automatic consult complete', $, async () => {

@@ -80,6 +80,12 @@
       "description": "Longest a Codex run may last before it is killed.",
       "default": 30
     },
+    "delegation": {
+      "type": "boolean",
+      "title": "Judge delegation",
+      "description": "Registers the judge agent types, batch harness_delegate with harness_wait, and enforces tiers on Agent tool spawns: Sonnet implements, Opus reviews, Haiku explores, and every brief gets the skills step.",
+      "default": false
+    },
     "rules": {
       "type": "boolean",
       "title": "Enforce shared rules",

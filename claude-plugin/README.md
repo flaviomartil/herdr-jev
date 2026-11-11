@@ -157,6 +157,25 @@ claude plugin test claude-plugin
 
 As ferramentas aparecem para o modelo como `mcp__harness__harness_plan`, `mcp__harness__harness_run` e `mcp__harness__harness_status`. `harness_plan` e `harness_run` recusam qualquer chamada que traga `agentId`: só a sessão principal planeja e dispara workers.
 
+## Juiz e delegação (opção `delegation`, desligada por padrão)
+
+O juiz (`src/judge/`, cópia em `hooks/judge-core.ts` via `bun scripts/sync-rules.ts`) lê o texto da tarefa e devolve classe, worker, modelo, effort e motivo. Sem chamada de rede nem de modelo.
+
+| Classe | Worker padrão | Effort |
+| --- | --- | --- |
+| explore, search, summary, mechanical | Haiku 5.5, ou `codex` luna, ou `agy` flash | low, ou high se a tarefa for grande |
+| feature, fix | Sonnet 5.5 (codex terra, agy pro) | medium |
+| review | Opus 5.5 em contexto novo (codex sol, agy pro) | high |
+| architecture | só a pedido explícito (`use fable`, `T0`, dica `architecture`) | high |
+
+Ids de modelo vêm de uma tabela genérica pública, sobrescrita por `~/.config/jev/models.local.yml` (grupos `claude`, `codex`, `agy`, uma chave por tier). `codex` e `agy` só entram se `command -v` os achar; sem eles o worker volta para subagente Claude.
+
+Com a opção ligada:
+- `session.start` registra um tipo por par modelo e effort: `harness:haiku-low`, `harness:haiku-high`, `harness:sonnet-medium`, `harness:opus-high`, `harness:fable-high`.
+- `harness_delegate` aceita `tasks: [{ task, class?, size?, prefer?, cwd? }]` (sem `tasks` mantém o comportamento antigo de aceitar a consulta). Devolve os `runId` na hora, até `maxWorkers` rodando e o resto na fila. `harness_wait({ runIds, mode?, timeoutMs? })` devolve o estado e o resultado de cada um.
+- Runs de `codex` e `agy` são STUB nesta fase: registram a decisão e terminam sem iniciar processo. O runner real vem na P3.
+- O hook `agent.spawn` corrige chamadas diretas da Agent tool: implementar com Opus vira Sonnet, review vira Opus, explorar vira Haiku, effort errado vira o tipo certo. Nunca sobe de tier para implementar. Todo brief ganha o prefixo "Passo 0: localizar e seguir as skills que cobrem a tarefa; reportar quais usou." Se a reescrita falhar, nega com a instrução de usar `harness_delegate`.
+
 ## Modelos
 
 Todo modelo e effort vem de `herdr-jev models list --json --client claude`. O mod não tem nomes de modelo próprios. O spawn usa o `cliModel` exato (por exemplo `claude-sonnet-5-5`) e o tipo de agente é registrado com esse modelo e o effort do papel, mapeado para o Claude Code: `standard` vira `medium`, `high` fica `high`, `xhigh` fica `xhigh`. Se o effort de uma tarefa diferir do registrado, o tipo é registrado de novo antes do spawn, sob o mesmo lock do spawn.
@@ -239,6 +258,7 @@ Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuá
 - `scopeMode` (padrão `enforce`), `runbook` (vazio), `alwaysAllowSkills` e `alwaysAllowAgents`: ver a seção Scope.
 - `autoReview` (padrão `false`): dispara o review do harness uma vez quando tudo está `done` ou `approved` e há ao menos uma `approved`.
 - `prGateAsk` (padrão `false`): ver PR gate.
+- `delegation` (padrão `false`): ver Juiz e delegação.
 - `codex` (padrão `false`): registra e oferece o agente `harness:codex`. `codexMaxMinutes` (padrão `30`): tempo máximo de uma execução do Codex.
 
 ## Limites conhecidos
