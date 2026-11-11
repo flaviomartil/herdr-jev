@@ -21,6 +21,10 @@ function setup(on: Parameters<typeof wire>[0], files: Map<string, string> = new 
   const seen = wire(on)
   const cli: { argv: string[]; stdin?: string }[] = []
   seen.runHook = async (argv, init) => {
+    if (argv[0] === 'sleep') {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return { exitCode: 0, stdout: '', stderr: '' }
+    }
     if (argv[1] === 'panes') {
       cli.push({ argv: [...argv], stdin: init?.stdin })
       const sub = argv[2]

@@ -199,7 +199,7 @@ export async function registerDelegationTools($: EngineInterface, options: Plugi
   if (!delegationEnabled(options)) return
   await $.tool.register({
     name: 'harness_wait',
-    description: 'Wait for runs started by harness_delegate. Takes runIds, mode all or first, timeoutMs. Returns state and result per run; when it returns with a non-empty pending list, call it again with those runIds.',
+    description: 'Wait for runs started by harness_delegate. Takes runIds, mode all or first, timeoutMs. Returns state and result per run; if pending is not empty, call it again with those runIds.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -590,24 +590,28 @@ export function waitWindowMs(asked: number, budgetMs: number): number {
   return Number.isFinite(budgetMs) ? Math.max(0, Math.min(asked, budgetMs - WAIT_MARGIN_MS)) : asked
 }
 
+async function pause($: EngineInterface, ms: number): Promise<void> {
+  const out = await $.process.run(['sleep', String(ms / 1000)], { timeoutMs: ms + 5000 }).catch(() => null)
+  if (out === null || out.exitCode !== 0) await $.clock.sleep(ms)
+}
+
 async function waitRuns($: EngineInterface, input: Record<string, unknown>, options: PluginOptions, budgetMs = Infinity): Promise<string> {
   const ids = Array.isArray(input.runIds) ? input.runIds.filter((x): x is string => typeof x === 'string') : []
   if (ids.length === 0) return 'harness_wait: runIds must be a non-empty array.'
   const lost = ids.filter(id => !runs.has(id)).map(id => ({ runId: id, state: 'lost', result: 'run perdido (reload ou expirado)' }))
   const picked = ids.map(id => runs.get(id)).filter((r): r is Run => r !== undefined)
   const asked = typeof input.timeoutMs === 'number' && input.timeoutMs > 0 ? input.timeoutMs : WAIT_DEFAULT_MS
-  const timeout = waitWindowMs(asked, budgetMs)
   const pending = picked.map(r => r.done)
   const joined = input.mode === 'first' ? Promise.race(pending) : Promise.all(pending).then(() => undefined)
   if (picked.some(r => r.ext !== undefined && !finished(r))) {
     const settled = () => (input.mode === 'first' ? picked.some(finished) : picked.every(finished))
-    for (let waited = 0; waited < timeout; waited += EXT_POLL_MS) {
+    for (let waited = 0; waited < asked; waited += EXT_POLL_MS) {
       await Promise.all(picked.map(r => refreshExternal($, r, options)))
       if (settled()) break
       if (waited % (EXT_POLL_MS * 5) === 0) await pumpPanes($, options)
-      await Promise.race([joined, $.clock.sleep(EXT_POLL_MS)])
+      await pause($, EXT_POLL_MS)
     }
-  } else if (pending.length > 0) await Promise.race([joined, $.clock.sleep(timeout)])
+  } else if (pending.length > 0) await Promise.race([joined, $.clock.sleep(waitWindowMs(asked, budgetMs))])
   return JSON.stringify({
     results: [...picked.map(view), ...lost],
     pending: picked.filter(r => r.state === 'queued' || r.state === 'running').map(r => r.id),

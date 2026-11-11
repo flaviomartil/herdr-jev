@@ -16,6 +16,10 @@ function arrange(on: Parameters<typeof wire>[0], files: Record<string, string> =
   on('fs.read', (_$, e) => ({ value: store.get((e as unknown as { path: string }).path) ?? '' }))
   const starts: string[][] = []
   seen.runHook = async argv => {
+    if (argv[0] === 'sleep') {
+      await new Promise(resolve => setTimeout(resolve, 20))
+      return { exitCode: 0, stdout: '', stderr: '' }
+    }
     if (argv[1] === 'health' && argv[2] === 'check') return { exitCode: 0, stdout: JSON.stringify({ locked: locked.includes(String(argv[4])) }), stderr: '' }
     if (argv[1] === 'panes' && argv[2] === 'start') {
       starts.push([...argv])
@@ -63,14 +67,13 @@ test('chain: all external targets exhausted falls to the claude haiku subagent',
   const id = await delegate($, 'Find where routes live')
   store.set('/ev/run.jsonl', `${JSON.stringify({ type: 'failover-end', code: 1, attempts: 3 })}\n${JSON.stringify({ type: 'exit', code: 1, outcome: 'failed', tail: 'quota' })}\n`)
   const waiting = call($, 'harness_wait', { runIds: [id] })
-  await seen.clock.advance(2500)
+  for (let i = 0; i < 200 && seen.spawns.length === 0; i++) await new Promise(resolve => setTimeout(resolve, 20))
   expect(seen.spawns).toHaveLength(1)
   expect(seen.spawns[0]!.subagentType).toBe('harness:haiku-low')
   await finish($, 'agent-1', 'found by haiku')
   const done = JSON.parse(String((await waiting).result)) as { results: { state: string; result: string }[] }
   expect(done.results[0]).toMatchObject({ state: 'done', result: 'found by haiku' })
 })
-
 test('chain: a request error never falls back', opts, async ($, on) => {
   const { seen, store } = arrange(on)
   await start($)
