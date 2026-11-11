@@ -198,6 +198,7 @@ export type DelegationRow = {
   state: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
   task: string
 }
+export type ProposalRow = { id: string; kind: 'agent' | 'runbook' | 'skill' | 'rule'; name: string; count: number; sessions: number; evidence: string[]; diff: string }
 export type OddFeatureRow = { name: string; path: string; done: number; total: number; percent: number }
 export type OddView = { repo: string; current: string | null; features: OddFeatureRow[]; phase: 'explore' | 'implement' | 'verify' | null }
 declare module 'claude-code' {
@@ -227,6 +228,8 @@ declare module 'claude-code' {
       delegations: Shaped<DelegationRow[]>
       rosterIds: Shaped<Record<string, number>>
       odd: Shaped<OddView>
+      proposals: Shaped<ProposalRow[]>
+      proposalExpanded: string
     }
   }
 }

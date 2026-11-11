@@ -110,6 +110,18 @@
       "description": "Adds /harness feature, harness_task_done with verified evidence, a feature progress bar and resume on session start. Off keeps the default small path with no question, file or block.",
       "default": false
     },
+    "improve": {
+      "type": "boolean",
+      "title": "Self-improvement proposals",
+      "description": "Mines ~/.claude/failed-attempts.jsonl and route/health events for failures seen 3 times in 2 sessions and lists at most 3 proposals in the Jev pane. Nothing is applied until you approve; a rejected proposal is quarantined.",
+      "default": false
+    },
+    "router": {
+      "type": "string",
+      "title": "Router (conclave or harness)",
+      "description": "conclave keeps routing in conclave and records what the harness judge would route to ~/.local/state/herdr-jev/route-shadow.jsonl (herdr-jev router compare reports the difference). harness turns the shadow off.",
+      "default": "conclave"
+    },
     "rules": {
       "type": "boolean",
       "title": "Enforce shared rules",

@@ -72,6 +72,7 @@ import {
   spawnWithTier,
 } from './delegation'
 import { registerModPane } from './mod-pane'
+import { improveStart, recordShadow } from './improve'
 import { oddAfterPlan, oddCommand, oddStart, oddToolCall, registerOdd } from './odd'
 import { proxyNote, startProxies } from './proxies'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
@@ -1720,6 +1721,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
     await attempt('odd start', $, () => oddStart($, options))
+    await attempt('improve start', $, () => improveStart($, options))
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -2043,6 +2045,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next.called ? next(e) : { result: 'Delegation requires reconciliation; no replacement was launched.' })
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    await attempt('router shadow', $, () => recordShadow($, options, e as unknown as Record<string, unknown>))
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
     if (!isReviewerResult(e, ran.result)) return ran

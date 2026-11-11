@@ -3,6 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 import type { OddView, DelegationRow, HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
 import { CLI_THEME, avatar, avatarRuns, cliKind, nameFor, parseRosterFile } from './identity-core'
 import type { Avatar, CliKind } from './identity-core'
+import { proposalAction, toggleDiff, visibleProposals } from './improve'
 import { noteAgents } from './jev-state'
 
 export const MOD_PANE_ID = 'jev'
@@ -36,6 +37,8 @@ const externalAtom = atom({ plugin: 'harness', key: 'external' } as const, {})
 const delegationsAtom = atom({ plugin: 'harness', key: 'delegations' } as const, [], { shape: 'delegations-1' })
 const rosterIdsAtom = atom({ plugin: 'harness', key: 'rosterIds' } as const, {}, { shape: 'roster-1' })
 const oddAtom = atom({ plugin: 'harness', key: 'odd' } as const, { repo: '', current: null, features: [], phase: null } as OddView, { shape: 'odd-1' })
+const proposalsAtom = atom({ plugin: 'harness', key: 'proposals' } as const, [], { shape: 'proposals-1' })
+const expandedAtom = atom({ plugin: 'harness', key: 'proposalExpanded' } as const, '')
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 
 const WORKER_CLI = { 'claude-subagent': 'claude', codex: 'codex', agy: 'agy' } as const
@@ -188,6 +191,8 @@ export function registerModPane(on: On): void {
       usage: await read($, usageAtom),
     }
     const odd = await read($, oddAtom)
+    const proposals = visibleProposals(await read($, proposalsAtom))
+    const expanded = await read($, expandedAtom)
     const rows = agentRows(data)
     const share = featureShare(data.plan)
     const needs = needsRows(data, rows)
@@ -264,7 +269,23 @@ export function registerModPane(on: On): void {
         </Box>
         <Box key="proposals" flexDirection="column">
           {head('prop-h', 'Propostas')}
-          {empty('prop-0', 'Sem propostas.')}
+          {proposals.shown.length === 0 && empty('prop-0', 'Sem propostas.')}
+          {proposals.shown.map(p => (
+            <Box key={`prop-${p.id}`} flexDirection="column">
+              <Box flexDirection="row" columnGap={1}>
+                <Text bold>{p.kind}</Text>
+                <Text wrap="truncate-end">{p.name}</Text>
+                <Text dimColor>{`${p.count}x/${p.sessions}s`}</Text>
+              </Box>
+              <Box flexDirection="row" columnGap={2}>
+                <Button key={`ok-${p.id}`} label="Approve" onPress={() => void proposalAction($, 'approve', p.id)} />
+                <Button key={`no-${p.id}`} label="Reject" onPress={() => void proposalAction($, 'reject', p.id)} />
+                <Button key={`df-${p.id}`} plain dimColor label="View diff" onPress={() => void toggleDiff($, p.id)} />
+              </Box>
+              {expanded === p.id && p.diff.split('\n').slice(0, 14).map((line, i) => <Text key={`d${p.id}-${i}`} dimColor wrap="truncate-end">{line}</Text>)}
+            </Box>
+          ))}
+          {proposals.hidden > 0 && empty('prop-more', `+${proposals.hidden} mais`)}
         </Box>
       </Box>
     )
