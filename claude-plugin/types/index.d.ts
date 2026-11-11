@@ -220,6 +220,13 @@ export type Activity = {
 }
 export type OddFeatureRow = { name: string; path: string; done: number; total: number; percent: number }
 export type OddView = { repo: string; current: string | null; features: OddFeatureRow[]; phase: 'explore' | 'implement' | 'verify' | null }
+export type CrewState = {
+  parents: Record<string, string>
+  gone: Record<string, true>
+  waiting: Record<string, true>
+  listed: string[]
+}
+export type FlowProgressState = { title: string; phase: string; planned: number; accepted: number }
 declare module 'claude-code' {
   interface PluginState {
     harness: {
@@ -250,6 +257,9 @@ declare module 'claude-code' {
       expandedAgents: Record<string, boolean>
       rosterIds: Shaped<Record<string, number>>
       odd: Shaped<OddView>
+      crew: CrewState
+      crewPage: number
+      flowProgress: FlowProgressState | null
     }
   }
 }

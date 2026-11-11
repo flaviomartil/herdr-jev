@@ -121,6 +121,18 @@
       "title": "Enforce shared rules",
       "description": "Blocks commit attribution lines, secrets in files and docs in work repos, asks before rm -rf and risky git push, and reminds about skills once per session. Rules live in rules/jev-rules.yml plus ~/.config/jev/rules.local.yml.",
       "default": true
+    },
+    "autoOpenMode": {
+      "type": "string",
+      "title": "When to open the Jev pane",
+      "description": "delegated opens the pane when a delegation or an Agent tool call starts. any also opens it when any subagent is spawned or runs a tool.",
+      "default": "delegated"
+    },
+    "reducedMotion": {
+      "type": "boolean",
+      "title": "Reduced motion",
+      "description": "Draws the pixel crew static: no walk, blink, shake or sparkle frames and no frame timer.",
+      "default": false
     }
   }
 }

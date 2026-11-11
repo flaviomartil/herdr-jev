@@ -1,12 +1,18 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On } from 'claude-code'
+import type { EngineInterface, On, PluginOptions } from 'claude-code'
 import type { OddView, DelegationRow, HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
-import { CLI_THEME, avatar, avatarRuns, cliKind, nameFor, parseRosterFile } from './identity-core'
-import type { Avatar, CliKind } from './identity-core'
+import { CLI_THEME, avatar, cliKind, nameFor, parseRosterFile } from './identity-core'
+import type { CliKind } from './identity-core'
 import { noteAgents } from './jev-state'
-import { elapsedWord, percentOf, resetActivity, signalOf, spinnerFrame, tokenWord } from './activity'
+import { elapsedWord, percentOf, resetActivity, spinnerFrame, tokenWord } from './activity'
 import { markUserClosed, paneWanted, resetAutoOpen } from './activity-hooks'
 import type { Activity } from '../types'
+import { roleMarkOf } from './art-core'
+import type { RoleMark } from './art-core'
+import { Art } from './pane-art'
+import { currentTick, emptyCrew, reducedMotion, resetCrew } from './pane-crew'
+import { buildCrew, headerText, reportLines } from './pane-rows'
+import type { CrewInput, CrewModel } from './pane-rows'
 
 export const MOD_PANE_ID = 'jev'
 const ROSTER_FILE = '.config/jev/roster.json'
@@ -22,6 +28,7 @@ export type AgentRow = {
   state: AgentState
   percent: number | null
   detail: string
+  role: RoleMark | null
   act: Activity | null
 }
 export type ModData = {
@@ -44,9 +51,13 @@ const oddAtom = atom({ plugin: 'harness', key: 'odd' } as const, { repo: '', cur
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 
 const activityAtom = atom({ plugin: 'harness', key: 'activity' } as const, {}, { shape: 'activity-1' })
+const crewAtom = atom({ plugin: 'harness', key: 'crew' } as const, emptyCrew())
+const pageAtom = atom({ plugin: 'harness', key: 'crewPage' } as const, 0)
+const progressAtom = atom({ plugin: 'harness', key: 'flowProgress' } as const, null)
 const expandedAtom = atom({ plugin: 'harness', key: 'expandedAgents' } as const, {})
 const WORKER_CLI = { 'claude-subagent': 'claude', codex: 'codex', agy: 'agy' } as const
 
+const WORKER_ROLE: Record<string, RoleMark> = { implementer: 'implement', reviewer: 'review', reader: 'explore' }
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 const realPercent = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? Math.round(value) : null
@@ -67,6 +78,7 @@ export function agentRows(data: ModData): AgentRow[] {
       state,
       percent: percentOf(data.activity?.[run.act ?? '']),
       detail: clip(run.task, 60),
+      role: roleMarkOf(run.class),
       act: data.activity?.[run.act ?? ''] ?? null,
     })
   }
@@ -82,6 +94,7 @@ export function agentRows(data: ModData): AgentRow[] {
       state: task?.state === 'failed' ? 'failed' : task?.state === 'done' ? 'done' : 'working',
       percent: percentOf(data.activity?.[worker.agentId]),
       detail: worker.lastTool ?? clip(task?.title ?? '', 60),
+      role: WORKER_ROLE[worker.role] ?? null,
       act: data.activity?.[worker.agentId] ?? null,
     })
   }
@@ -96,6 +109,7 @@ export function agentRows(data: ModData): AgentRow[] {
       state: ext.status === 'running' ? 'working' : ext.status === 'done' ? 'done' : 'failed',
       percent: percentOf(data.activity?.[ext.agentId]),
       detail: clip(ext.lastLine, 60),
+      role: null,
       act: data.activity?.[ext.agentId] ?? null,
     })
   }
@@ -112,10 +126,50 @@ export function agentRows(data: ModData): AgentRow[] {
       state: act.end === 'done' ? 'done' : act.end === 'failed' ? 'failed' : 'working',
       percent: percentOf(act),
       detail: clip(act.line, 60),
+      role: null,
       act,
     })
   }
   return [...rows.values()]
+}
+
+export async function readModData($: EngineInterface): Promise<ModData> {
+  return {
+    delegations: await read($, delegationsAtom),
+    roster: await read($, rosterIdsAtom),
+    plan: await read($, planAtom),
+    asks: await read($, needsYouAtom),
+    workers: await read($, workersAtom),
+    external: await read($, externalAtom),
+    usage: await read($, usageAtom),
+    activity: await read($, activityAtom),
+  }
+}
+
+export function crewInputs(rows: AgentRow[], roster: Record<string, number>, names: string[]): CrewInput[] {
+  return rows.map((row, at) => {
+    const unknown = rows.slice(0, at).filter(r => roster[r.id] === undefined).length
+    return {
+      id: row.id,
+      actId: row.act?.id ?? null,
+      name: nameFor(roster, row.id, unknown, names.length > 0 ? names : undefined),
+      kind: row.kind,
+      cli: row.cli,
+      role: row.role,
+      state: row.state,
+      line: row.act !== null && row.act.line !== '' ? row.act.line : row.detail,
+      percent: row.percent,
+      act: row.act,
+    }
+  })
+}
+
+export async function crewModelNow($: EngineInterface): Promise<{ model: CrewModel; data: ModData; rows: AgentRow[] }> {
+  const data = await readModData($)
+  const rows = agentRows(data)
+  const crew = await read($, crewAtom)
+  const model = buildCrew(crewInputs(rows, data.roster, await personalNames($)), { ...crew, now: await $.clock.now(), page: await read($, pageAtom) })
+  return { model, data, rows }
 }
 
 export function featureShare(plan: HarnessPlan | null): { done: number; total: number; percent: number } | null {
@@ -141,10 +195,11 @@ let rosterNames: string[] | null = null
 export function resetModPane(): void {
   rosterNames = null
   resetActivity()
+  resetCrew()
   resetAutoOpen()
 }
 
-async function personalNames($: EngineInterface): Promise<string[]> {
+export async function personalNames($: EngineInterface): Promise<string[]> {
   if (rosterNames !== null) return rosterNames
   try {
     const home = await $.env.get('HOME')
@@ -160,22 +215,6 @@ const EXPAND_LINES = 8
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
 const limitLabel = (kind: string): string => LIMIT_LABEL[kind] ?? kind.replace(/_/g, ' ')
 
-function Face({ Box, Text }: { Box: any; Text: any }, av: Avatar, key: string) {
-  return (
-    <Box key={key} flexDirection="column" width={6} flexShrink={0}>
-      {avatarRuns(av).map((row, y) => (
-        <Box key={`${key}-${y}`} flexDirection="row">
-          {row.map((run, x) => (
-            <Text key={`${key}-${y}-${x}`} color={run.fg} backgroundColor={run.bg}>
-              {run.text}
-            </Text>
-          ))}
-        </Box>
-      ))}
-    </Box>
-  )
-}
-
 function bar(kit: { Box: any; Text: any }, key: string, percent: number, color: string) {
   const { Box, Text } = kit
   const filled = Math.round(percent / 10)
@@ -188,7 +227,7 @@ function bar(kit: { Box: any; Text: any }, key: string, percent: number, color: 
   )
 }
 
-export function registerModPane(on: On): void {
+export function registerModPane(on: On, options: PluginOptions): void {
   on('state.set', async ($, e, next) => {
     const done = await next(e)
     if (e.plugin === 'harness' && (e.key === 'external' || e.key === 'workers')) {
@@ -197,31 +236,36 @@ export function registerModPane(on: On): void {
     }
     return done
   })
-  on('command.run', { command: 'jev' }, async $ => {
+  on('command.run', { command: 'jev' }, async ($, e) => {
     paneWanted()
-    await $.ui.open({ id: MOD_PANE_ID, title: 'Jev', closeOnEscape: true })
-    return { text: 'Jev pane opened.' }
+    const focus = e.args.trim() === 'open'
+    const opened = await $.ui.open({ id: MOD_PANE_ID, title: 'Jev', closeOnEscape: true, ...(focus ? { focus: true } : {}) })
+    if (opened?.isPlaced !== false) return { text: focus ? 'Jev pane focused.' : 'Jev pane opened.' }
+    return { text: reportLines((await crewModelNow($)).model).join('\n') }
   })
   on('ui.render', { component: 'Pane', requestId: MOD_PANE_ID }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const table = $.ui.resolve(e) as unknown as Record<string, any>
+    const { Box, Button, Text } = table
     const kit = { Box, Text }
     const names = await personalNames($)
     const columns = Math.max(24, e.props.bodyColumns)
     const withFace = columns >= 44
-    const data: ModData = {
-      delegations: await read($, delegationsAtom),
-      roster: await read($, rosterIdsAtom),
-      plan: await read($, planAtom),
-      asks: await read($, needsYouAtom),
-      workers: await read($, workersAtom),
-      external: await read($, externalAtom),
-      usage: await read($, usageAtom),
-      activity: await read($, activityAtom),
-    }
+    const data = await readModData($)
     const expanded = await read($, expandedAtom)
     const now = await $.clock.now()
     const odd = await read($, oddAtom)
     const rows = agentRows(data)
+    const crew = await read($, crewAtom)
+    const model = buildCrew(crewInputs(rows, data.roster, names), { ...crew, now, page: await read($, pageAtom) })
+    const byId = new Map(rows.map(r => [r.id, r]))
+    const flow = await read($, progressAtom)
+    const oddNow = odd.current === null ? undefined : odd.features.find(f => f.name === odd.current)
+    const header = headerText(
+      flow,
+      oddNow === undefined ? null : { name: oddNow.name, done: oddNow.done, total: oddNow.total, phase: odd.phase === null ? null : PHASE_WORD[odd.phase] },
+    )
+    const isTerminal = e.surface === 'terminal'
+    const artKit = { Box, Text, Raster: isTerminal ? table.Raster : undefined, Svg: isTerminal ? undefined : table.Svg }
     const share = featureShare(data.plan)
     const needs = needsRows(data, rows)
     const limits = data.usage?.limits ?? []
@@ -233,6 +277,7 @@ export function registerModPane(on: On): void {
       <Box flexDirection="column" paddingX={1} rowGap={1}>
         <Box flexDirection="row" alignItems="center">
           <Text bold>Jev</Text>
+          {header !== null && <Text key="flow-header" dimColor wrap="truncate-end">{`  ${header}`}</Text>}
           <Box flexGrow={1} />
           <Button key="close" plain dimColor label="✕" onPress={() => {
             markUserClosed()
@@ -260,11 +305,12 @@ export function registerModPane(on: On): void {
               {odd.current === f.name && odd.phase !== null && <Text dimColor>{PHASE_WORD[odd.phase]}</Text>}
             </Box>
           ))}
+          {model.hub !== null && <Text key="hub" bold>{`◆ lead · ${model.hub.running}/${model.hub.total} trabalhando`}</Text>}
           {rows.length === 0
             ? empty('work-0', 'Nenhum agente ativo.')
-            : rows.map((row, at) => {
-                const unknown = rows.slice(0, at).filter(r => data.roster[r.id] === undefined).length
-                const name = nameFor(data.roster, row.id, unknown, names.length > 0 ? names : undefined)
+            : model.pageRows.map(view => {
+                const row = byId.get(view.id) as AgentRow
+                const name = view.name
                 const color = CLI_THEME[row.kind]
                 const chip = row.effort === null ? row.model : `${row.model}·${row.effort}`
                 const act = row.act
@@ -291,7 +337,7 @@ export function registerModPane(on: On): void {
                   const mark = row.state === 'done' ? '✓' : '✗'
                   const result = clip(act?.snippet ?? row.detail, Math.max(10, columns - 34))
                   return (
-                    <Box key={row.id} flexDirection="column">
+                    <Box key={row.id} flexDirection="column" paddingLeft={view.depth * 2}>
                       <Box flexDirection="row" columnGap={1}>
                         {toggle}
                         <Text bold color={color}>{name}</Text>
@@ -320,15 +366,15 @@ export function registerModPane(on: On): void {
                   )
                 const doing = act !== null && act.line !== '' ? act.line : row.detail
                 return (
-                  <Box key={row.id} flexDirection="row" columnGap={1} marginTop={1}>
-                    {withFace && Face(kit, avatar(row.kind, row.id), `av-${row.id}`)}
+                  <Box key={row.id} flexDirection="row" columnGap={1} marginTop={1} paddingLeft={view.depth * 2}>
+                    {withFace && Art(artKit, { key: `av-${row.id}`, kind: row.kind, state: view.artState, role: row.role, lead: view.isLead, ageMs: view.ageMs, tick: currentTick(), reducedMotion: reducedMotion(options), fallback: avatar(row.kind, row.id) })}
                     <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                       <Box flexDirection="row" columnGap={1}>
                         {toggle}
                         <Text bold color={color}>{name}</Text>
                         <Text dimColor>{row.cli}</Text>
                         <Text color={color}>{`[${chip}]`}</Text>
-                        <Text color={STATE_COLOR[row.state]}>{STATE_WORD[row.state]}</Text>
+                        <Text color={view.color}>{`${view.glyph} ${row.state === 'queued' ? STATE_WORD.queued : view.word}`}</Text>
                         <Box flexGrow={1} />
                         {elapsed !== '' && <Text dimColor>{elapsed}</Text>}
                       </Box>
@@ -336,8 +382,6 @@ export function registerModPane(on: On): void {
                         <Text dimColor>{act?.phase ?? row.phase}</Text>
                         {act?.attempt != null && act.attempt > 1 && <Text dimColor>{`tentativa ${act.attempt}`}</Text>}
                         {progress}
-                        {act !== null && signalOf(act, now) === 'slow' && <Text color="warning">lento</Text>}
-                        {act !== null && signalOf(act, now) === 'quiet' && <Text color="warning">quieto</Text>}
                       </Box>
                       <Text dimColor wrap="truncate-end">{clip(doing, Math.max(10, columns - (withFace ? 12 : 4)))}</Text>
                       {act !== null && act.snippet !== '' && <Text dimColor wrap="truncate-end">{`» ${clip(act.snippet, Math.max(10, columns - (withFace ? 14 : 6)))}`}</Text>}
@@ -346,6 +390,14 @@ export function registerModPane(on: On): void {
                   </Box>
                 )
               })}
+          {model.unknown.length > 0 && <Text key="unknown" dimColor>{`? ${model.unknown.length} agentes desconhecidos`}</Text>}
+          {model.pages > 1 && (
+            <Box key="pager" flexDirection="row" columnGap={1}>
+              <Button key="pg-prev" plain hotkey="p" label="◀" onPress={() => update($, pageAtom, cur => Math.max(0, cur - 1))} />
+              <Text dimColor>{`${model.page + 1}/${model.pages}`}</Text>
+              <Button key="pg-next" plain hotkey="n" label="▶" onPress={() => update($, pageAtom, cur => Math.min(model.pages - 1, cur + 1))} />
+            </Box>
+          )}
         </Box>
         <Box key="models" flexDirection="column">
           {head('models-h', 'Modelos e proxies')}

@@ -753,6 +753,18 @@ The bar shows a percent only when it is real: a worker calls `harness_step(done,
 
 When a delegation (`harness_delegate`) or an `Agent` spawn starts and the pane is closed, the mod opens it (option `autoOpenPane`, default on, needs `delegation` or `panes`). If the terminal is too narrow to place it, the band shows `/jev para acompanhar`. Closing the pane with its close button stops auto-opening for the session; `/jev` reopens it. Redraws are throttled to 4 per second, a 1 s tick runs only while an agent is running, and each agent keeps a 12-line ring buffer (200 agents max).
 
+### Pixel crew
+
+Each agent row draws an original pixel sprite: one silhouette and hue per CLI (claude, codex, agy, haiku), a role accessory by judge class (magnifier explore, wrench implement, checklist review, gear mechanical) and a lead marker on an agent that delegates. The terminal draws it as a `Raster` of quadrant glyphs (2x2 pixels per cell, unpainted cells keep the terminal background), desktop, vscode and mobile as a crisp `Svg`. Without either element the row keeps the old text avatar. The pure sprite code is `src/identity/art.ts`, mirrored byte for byte in `claude-plugin/hooks/art-core.ts` (a test keeps them equal).
+
+States are overlays on the sprite: running walks and blinks over 2 frames, waiting approval shows `!`, failed shakes one cell with a red bar, done sparkles briefly then greys to about 70%, idle shows `z`. One frame counter ticks at 8 fps only while an agent runs. Option `reducedMotion` pins frame 0 and starts no frame timer.
+
+The signal of each row is classified in `pane-signal.ts`: running, waiting approval (a `tool.check` verdict of ask), slow (no event for 30 s), quiet (2 min), done, failed or gone. Every 2 s the pane compares its running agents with `$.agent.list()`: an agent missing from 2 consecutive lists is gone and toasted once, and listed agents the mod does not track are grouped in one `? N agentes desconhecidos` line. Each spawn stores its `parentId`, and the pane indents hub, workers and reviewer. It shows 3 agents per page (keys `p` and `n`).
+
+One row model feeds the pane and the text views: the band under the pane shows a crew button (`◉ N`, opens the pane focused) and up to 5 rows that need attention while the pane is closed, and `/jev` returns the same rows as text where no surface can place the pane (for example `-p`). `/jev open` focuses the pane without toggling it.
+
+Two progress tools split by caller: `harness_progress` (main agent only, ignored when it comes from a subagent) sets the flow title, phase and planned and accepted tasks shown in the pane header as `title · phase · accepted/planned`, and the open ODD feature wins when there is one; `harness_step` stays worker only. Option `autoOpenMode` is `delegated` (default: a delegation or an `Agent` call opens the pane) or `any` (any subagent spawn or tool call opens it).
+
 ## Worker panes (`worker-run`, `panes`)
 
 `herdr-jev worker-run --cli codex|agy|claude --model M [--effort E] --prompt-file F --run-id R [--cwd D] [--timeout S] [--inactivity S]` runs one external worker in its own process group and appends `start`, `out` and `exit` events to `<state>/runs/<R>/events.jsonl`. Timeouts kill the whole group.

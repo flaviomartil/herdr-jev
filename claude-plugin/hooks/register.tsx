@@ -72,6 +72,7 @@ import {
   spawnWithTier,
 } from './delegation'
 import { registerModPane } from './mod-pane'
+import { paneSpawned, paneToolCall, registerPaneVisual, registerProgressTool } from './pane-hooks'
 import { liveStep, liveToolCall, liveTurnComplete, registerActivity, registerStepTool } from './activity-hooks'
 import { STEP_BRIEF, liveEnabled } from './activity'
 import { oddAfterPlan, oddCommand, oddStart, oddToolCall, registerOdd } from './odd'
@@ -1717,7 +1718,8 @@ export const register: Register = (on, options) => {
   registerPrGate(on, options)
   registerRules(on, options)
   registerDelegationHooks(on, options)
-  registerModPane(on)
+  registerModPane(on, options)
+  registerPaneVisual(on, options)
   registerActivity(on, options)
   registerOdd(on, options)
 
@@ -1725,6 +1727,7 @@ export const register: Register = (on, options) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
     await attempt('odd start', $, () => oddStart($, options))
     await attempt('register harness_step', $, () => registerStepTool($, options))
+    await attempt('register harness_progress', $, () => registerProgressTool($, options))
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -1836,6 +1839,7 @@ export const register: Register = (on, options) => {
     const briefed = <T extends { prompt: string; subagentType?: string }>(x: T): T => liveEnabled(options) && x.subagentType !== 'harness:codex' && !x.prompt.includes('harness_step') ? { ...x, prompt: x.prompt + STEP_BRIEF } : x
     const started = await spawnWithTier($, e, x => next(briefed(x)), options)
     await attempt('note codex spawn', $, () => noteSpawn(externalPorts($), e.subagentType, e.prompt, e.cwd, started.agentId))
+    await attempt('pane spawn', $, () => paneSpawned($, options, e.parentAgentId, started.agentId))
     return started
   })
 
@@ -2068,6 +2072,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', async ($, e, next) => {
     await attempt('live tool call', $, () => liveToolCall($, options, e))
+    await attempt('pane tool call', $, () => paneToolCall($, options, e.agentId))
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('note tool call', $, () =>
