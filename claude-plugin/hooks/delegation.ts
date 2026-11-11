@@ -49,6 +49,10 @@ const byAgent = new Map<string, string>()
 const ownPrompts = new Map<string, number>()
 const queue: string[] = []
 let counter = 0
+const newSalt = (): string => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
+let salt = newSalt()
+let dirty = false
+let flushing: Promise<void> | null = null
 let modelsLoaded: Promise<Models> | null = null
 let availableLoaded: Promise<Partial<Record<Worker, boolean>>> | null = null
 
@@ -63,6 +67,9 @@ export function resetDelegation(): void {
   ownPrompts.clear()
   queue.length = 0
   counter = 0
+  salt = newSalt()
+  dirty = false
+  flushing = null
   modelsLoaded = null
   availableLoaded = null
 }
@@ -180,7 +187,7 @@ function settle(run: Run, state: 'done' | 'failed' | 'skipped', result: string, 
 
 async function startClaude($: EngineInterface, run: Run, options: PluginOptions): Promise<void> {
   run.state = 'running'
-  await publish($)
+  void publish($)
   const prompt = withPasso0(run.task)
   ownPrompts.set(prompt, (ownPrompts.get(prompt) ?? 0) + 1)
   try {
@@ -200,13 +207,13 @@ async function startClaude($: EngineInterface, run: Run, options: PluginOptions)
     settle(run, 'failed', `spawn failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
   } finally {
     releaseOwn(prompt)
-    await publish($)
+    void publish($)
   }
 }
 
 async function startExternal($: EngineInterface, run: Run, options: PluginOptions): Promise<void> {
   run.state = 'running'
-  await publish($)
+  void publish($)
   const id = `x${Date.now().toString(36)}-${run.id.replace(/\D/g, '')}`
   const name = `${run.decision.class}-${run.id.replace(/\D/g, '')}`
   const cwd = run.cwd
@@ -228,7 +235,7 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
   } catch (error) {
     settle(run, 'failed', `worker-run failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
   } finally {
-    await publish($)
+    void publish($)
   }
 }
 
@@ -246,7 +253,7 @@ async function refreshExternal($: EngineInterface, run: Run): Promise<void> {
   if (sum.state === 'running') return
   if (sum.state === 'done') settle(run, 'done', sum.tail)
   else settle(run, 'failed', `${sum.outcome}${sum.exitCode === null ? '' : ` (exit ${sum.exitCode})`}: ${sum.tail}`.slice(0, 4000))
-  await publish($)
+  void publish($)
 }
 
 async function pumpPanes($: EngineInterface, options: PluginOptions): Promise<void> {
@@ -344,9 +351,9 @@ function view(run: Run) {
   }
 }
 
-function publish($: EngineInterface): Promise<void> {
-  const rows = [...runs.values()].map(run => ({
-    id: run.id,
+function snapshot() {
+  return [...runs.values()].slice(-50).map(run => ({
+    id: `${salt}-${run.id}`,
     worker: run.decision.worker,
     model: run.decision.model,
     effort: run.decision.effort,
@@ -354,7 +361,21 @@ function publish($: EngineInterface): Promise<void> {
     state: run.state,
     task: run.task.slice(0, 80),
   }))
-  return publishDelegations($, rows.slice(-50)).catch(() => undefined)
+}
+function publish($: EngineInterface): Promise<void> {
+  dirty = true
+  flushing ??= (async () => {
+    await Promise.resolve()
+    try {
+      while (dirty) {
+        dirty = false
+        await publishDelegations($, snapshot()).catch(() => undefined)
+      }
+    } finally {
+      flushing = null
+    }
+  })()
+  return flushing
 }
 
 export async function delegateBatch($: EngineInterface, input: Record<string, unknown>, options: PluginOptions): Promise<string> {
@@ -377,7 +398,7 @@ export async function delegateBatch($: EngineInterface, input: Record<string, un
     if (run.decision.worker === 'claude-subagent') queue.push(run.id)
     else await startExternal($, run, options)
   }
-  await publish($)
+  void publish($)
   await pump($, options)
   return JSON.stringify({ runs: created.map(view) })
 }
