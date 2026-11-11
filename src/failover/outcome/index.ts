@@ -1,4 +1,6 @@
 import { classifyAgy } from "./agy.js";
+
+export { AGY_AUTH, AGY_AUTH_EARLY } from "./agy.js";
 import { classifyClaude } from "./claude.js";
 import { classifyCodex } from "./codex.js";
 import type { AttemptResult, Classifier, Outcome } from "./types.js";

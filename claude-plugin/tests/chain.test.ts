@@ -101,3 +101,34 @@ test('chain: models.local.yml chains override the defaults per class', opts, asy
   expect(flag(starts[0]!, '--cli')).toBe('agy')
   expect(starts[0]).not.toContain('--chain')
 })
+
+test('chain: a refusal from a claude subagent does not fall back', opts, async ($, on) => {
+  const { seen, starts } = arrange(on)
+  await start($)
+  await delegate($, 'Fix the parser bug')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'x', reason: 'refusal', refusal: { category: null, explanation: null }, agentId: 'agent-1' } as never)
+  await seen.clock.advance(5)
+  expect(starts).toHaveLength(0)
+})
+
+test('chain: the 6 attempt cap is tracked across external and claude steps', opts, async ($, on) => {
+  const { seen, starts, store } = arrange(on)
+  await start($)
+  const id = await delegate($, 'Find where routes live')
+  expect(flag(starts[0]!, '--attempts-left')).toBe('6')
+  store.set('/ev/run.jsonl', `${JSON.stringify({ type: 'failover-end', code: 1, attempts: 6 })}\n${JSON.stringify({ type: 'exit', code: 1, outcome: 'failed', tail: 'x' })}\n`)
+  const waiting = call($, 'harness_wait', { runIds: [id] })
+  await seen.clock.advance(2500)
+  const done = JSON.parse(String((await waiting).result)) as { results: { state: string }[] }
+  expect(done.results[0]!.state).toBe('failed')
+  expect(seen.spawns).toHaveLength(0)
+})
+
+test('chain: attempts used by a claude step are passed on to the next external as attempts-left', opts, async ($, on) => {
+  const { seen, starts } = arrange(on)
+  await start($)
+  await delegate($, 'Fix the parser bug')
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'x', reason: 'error', agentId: 'agent-1' } as never)
+  await seen.clock.advance(5)
+  expect(flag(starts[0]!, '--attempts-left')).toBe('5')
+})

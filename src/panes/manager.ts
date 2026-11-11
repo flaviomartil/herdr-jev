@@ -30,6 +30,7 @@ export interface Entry {
   inactivitySec: number | null;
   failover?: boolean;
   chain?: string;
+  attemptsLeft?: number;
   generation: number;
 }
 
@@ -110,7 +111,7 @@ export function buildLine(ctx: Ctx, entry: Entry, interactive: boolean): string 
     "--prompt-file", shq(entry.promptFile), "--run-id", shq(entry.runId), "--cwd", shq(entry.cwd),
     ...(entry.timeoutSec ? ["--timeout", String(entry.timeoutSec)] : []),
     ...(entry.inactivitySec ? ["--inactivity", String(entry.inactivitySec)] : []),
-    ...(entry.failover ? ["--failover"] : []), ...(entry.chain ? ["--chain", shq(entry.chain)] : [])].join(" ");
+    ...(entry.failover ? ["--failover"] : []), ...(entry.chain ? ["--chain", shq(entry.chain)] : []), ...(entry.attemptsLeft ? ["--attempts-left", String(entry.attemptsLeft)] : [])].join(" ");
   const pump = `${bin} panes pump >/dev/null 2>&1`;
   if (!interactive) return `${worker}; ${pump}`;
   return `${worker}; rc=$?; ${pump}; if [ "$rc" -eq 0 ]; then sleep ${entry.lingerSec}; exit 0; else echo "worker exited with $rc"; exec "\${SHELL:-sh}"; fi`;
@@ -133,6 +134,7 @@ export interface StartInput {
   inactivitySec?: number;
   failover?: boolean;
   chain?: string;
+  attemptsLeft?: number;
 }
 
 export interface StartResult {
@@ -197,7 +199,7 @@ export async function start(ctx: Ctx, input: StartInput): Promise<StartResult> {
     cwd: input.cwd || process.cwd(), promptFile, host: input.host ?? detectHost(ctx.env), paneId: null,
     tab: input.tab ?? null, status: "queued", session: input.session ?? null, createdAt: Date.now(),
     lingerSec: input.lingerSec ?? DEFAULT_LINGER_SEC, timeoutSec: input.timeoutSec ?? null, inactivitySec: input.inactivitySec ?? null, generation: 1,
-    ...(input.failover ? { failover: true } : {}), ...(input.chain ? { chain: input.chain } : {}),
+    ...(input.failover ? { failover: true } : {}), ...(input.chain ? { chain: input.chain } : {}), ...(input.attemptsLeft ? { attemptsLeft: input.attemptsLeft } : {}),
   };
   return withLock(ctx, async () => {
     const reg = readRegistry(ctx);

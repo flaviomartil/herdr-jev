@@ -1855,7 +1855,7 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.abort', async ($, e, next) => {
-    await attempt('cancel wait on abort', $, () => cancelWait($))
+    await attempt('cancel wait on abort', $, () => cancelWait($, options))
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -1905,7 +1905,7 @@ export const register: Register = (on, options) => {
       return {}
     }
     if (/^wait(\s+cancel)?$/.test(e.args.trim())) {
-      if (e.args.trim() === 'wait cancel') return { text: (await cancelWait($)) ? 'Wait cancelled.' : 'No wait is active.' }
+      if (e.args.trim() === 'wait cancel') return { text: (await cancelWait($, options)) ? 'Wait cancelled.' : 'No wait is active.' }
       const view = await read($, waitAtom)
       return { text: view === null ? 'No wait is active.' : view.text }
     }
@@ -1967,7 +1967,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
-    if (isWaiting() && e.origin?.kind !== 'plugin') await attempt('cancel wait on prompt', $, () => cancelWait($))
+    if (isWaiting() && e.origin?.kind !== 'plugin') await attempt('cancel wait on prompt', $, () => cancelWait($, options))
     let eligible = options.autoDelegate !== false && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
       && !e.attachments?.length && e.text.trim().length > 0 && e.text.length <= 16384 && !e.text.trim().startsWith('/')
     if (eligible) eligible = (await $.env.get('HERDR_JEV_MOD_WORKER')) !== '1'

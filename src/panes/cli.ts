@@ -52,7 +52,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     const timeout = num(opts.timeout);
     const inactivity = num(opts.inactivity);
     const run = opts.failover === true || str(opts.chain)
-      ? (o: Parameters<typeof runWorker>[0]) => runWorkerFailover({ ...o, chain: parseChain(str(opts.chain)), setTitle: (t) => process.stdout.write(`\x1b]2;${t}\x07`) })
+      ? (o: Parameters<typeof runWorker>[0]) => runWorkerFailover({ ...o, chain: parseChain(str(opts.chain)), maxAttempts: num(opts["attempts-left"]), setTitle: (t) => process.stdout.write(`\x1b]2;${t}\x07`) })
       : runWorker;
     return run({
       runId: str(opts["run-id"])!, cli: cli as WorkerCli, model: str(opts.model)!, effort: str(opts.effort),
@@ -80,7 +80,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
           runId: str(opts.run)!, name: str(opts.name), cli: cli as WorkerCli, model: str(opts.model)!, effort: str(opts.effort),
           prompt, promptFile: str(opts["prompt-file"]), cwd, host: str(opts.host) as HostKind | undefined, tab: str(opts.tab),
           session: str(opts.session), lingerSec: num(opts.linger), timeoutSec: num(opts.timeout), inactivitySec: num(opts.inactivity),
-          failover: opts.failover === true, chain: str(opts.chain),
+          failover: opts.failover === true, chain: str(opts.chain), attemptsLeft: num(opts["attempts-left"]),
         });
         out({ ...started, eventsFile: eventsFile(started.runId, env) });
         return 0;

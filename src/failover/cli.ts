@@ -1,7 +1,7 @@
 import { Health } from "./health.js";
 import type { LockReason } from "./health.js";
 
-const REASONS = ["quota", "auth", "model_gone", "proxy_down"];
+const REASONS = ["quota", "overload", "auth", "model_gone", "proxy_down"];
 
 function flag(argv: string[], name: string): string | undefined {
   const at = argv.indexOf(`--${name}`);

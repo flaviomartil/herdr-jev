@@ -153,3 +153,16 @@ test("route log records each decision", async () => {
   const log = (await Bun.file(join(s.health.file, "..", "route-log.jsonl")).text()).trim().split("\n").map((l) => JSON.parse(l));
   expect(log.map((l) => l.outcome)).toEqual(["Transient", "Success"]);
 });
+
+test("timeouts count toward the breaker once retries are spent", async () => {
+  const s = setup((t) => (t.cli === "codex" ? { code: 124, outcome: "timeout", output: "" } : ok()));
+  await runChain([A, B], s.deps);
+  expect(s.health.read().breakers.codex?.fails).toBe(1);
+});
+
+test("maxAttempts passed by the caller caps the chain", async () => {
+  const s = setup(() => bad("503"), { maxWaitMs: 1000 });
+  (s.deps as { maxAttempts?: number }).maxAttempts = 2;
+  await runChain([A, B, C], s.deps);
+  expect(s.ran.length).toBe(2);
+});

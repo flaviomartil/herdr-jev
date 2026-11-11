@@ -12,6 +12,7 @@ export interface FailoverWorkerOptions extends WorkerOptions {
   sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
   random?: () => number;
   setTitle?: (title: string) => void;
+  maxAttempts?: number;
 }
 
 const realSleep = (ms: number, signal: AbortSignal): Promise<void> =>
@@ -43,6 +44,7 @@ export async function runWorkerFailover(opts: FailoverWorkerOptions): Promise<nu
       sleep: opts.sleep ?? realSleep,
       random: opts.random,
       signal: controller.signal,
+      maxAttempts: opts.maxAttempts,
       echo,
       setTitle: opts.setTitle,
       emit: (event) => appendEvent(opts.runId, event, env),

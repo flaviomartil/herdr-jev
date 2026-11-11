@@ -51,16 +51,20 @@ export function classifyStatus(status: number | null): 'quota' | 'overload' | 'a
   return 'overload'
 }
 
-async function lockState($: EngineInterface, options: PluginOptions, key: string): Promise<{ locked: boolean; until: number | null }> {
+async function lockState($: EngineInterface, options: PluginOptions, key: string): Promise<{ locked: boolean; until: number | null; reason: string | null }> {
   const cwd = await $.session.cwd()
   const ran = await runJson((a, init) => $.process.run(a, init), cliConfig(options, cwd), ['health', 'check', '--key', key], HEALTH_TIMEOUT_MS)
-  const value = ran.ok && typeof ran.value === 'object' && ran.value !== null ? (ran.value as { locked?: unknown; until?: unknown }) : {}
-  return { locked: value.locked === true, until: typeof value.until === 'number' ? value.until : null }
+  const value = ran.ok && typeof ran.value === 'object' && ran.value !== null ? (ran.value as { locked?: unknown; until?: unknown; reason?: unknown }) : {}
+  return { locked: value.locked === true, until: typeof value.until === 'number' ? value.until : null, reason: typeof value.reason === 'string' ? value.reason : null }
 }
+
+const LOCK_MS: Record<string, number> = { quota: 1_800_000, overload: 300_000, auth: 0 }
 
 async function lock($: EngineInterface, options: PluginOptions, key: string, reason: string): Promise<void> {
   const cwd = await $.session.cwd()
-  await runJson((a, init) => $.process.run(a, init), cliConfig(options, cwd), ['health', 'lock', '--key', key, '--reason', reason], HEALTH_TIMEOUT_MS)
+  const span = LOCK_MS[reason] ?? 0
+  const until = span > 0 ? [`--until`, String((await $.clock.now()) + span)] : []
+  await runJson((a, init) => $.process.run(a, init), cliConfig(options, cwd), ['health', 'lock', '--key', key, '--reason', reason, ...until], HEALTH_TIMEOUT_MS)
 }
 
 export async function diagnose($: EngineInterface, options: PluginOptions, model: string): Promise<Diagnosis | 'skipped'> {
@@ -75,7 +79,7 @@ export async function diagnose($: EngineInterface, options: PluginOptions, model
   if (r.isAnswered || r.reason === 'empty-reply') return { kind: 'ok' }
   if (r.reason !== 'api-error') return { kind: 'ok' }
   const kind = classifyStatus(r.status)
-  await lock($, options, key, kind === 'auth' ? 'auth' : 'quota').catch(() => undefined)
+  await lock($, options, key, kind).catch(() => undefined)
   return { kind, status: r.status }
 }
 
@@ -86,7 +90,7 @@ export async function onTurnComplete($: EngineInterface, options: PluginOptions,
   if (!failoverEnabled(options) || reason !== 'error' || model === undefined || isWaiting()) return
   try {
     const state = await lockState($, options, `claude/${family(model)}`)
-    if (state.locked) return await startWait($, options, { model, reason: 'quota', until: state.until })
+    if (state.locked) return await startWait($, options, { model, reason: state.reason === 'overload' ? 'overload' : 'quota', until: state.until })
     const out = await diagnose($, options, model)
     if (out === 'skipped' || out.kind === 'ok') return
     if (out.kind === 'auth') {

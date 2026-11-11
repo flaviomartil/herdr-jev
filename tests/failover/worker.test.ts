@@ -64,3 +64,24 @@ test("worker-run CLI runs the same chain without Claude", async () => {
   expect(existsSync(join(env.HERDR_JEV_HEALTH_DIR!, "health.json"))).toBe(true);
   expect(summarize("fo-cli", readEvents("fo-cli", env)).state).toBe("done");
 }, 20_000);
+
+test("agy OAuth prompt is detected early, the group is killed, stdin is closed and the cli is locked as Auth", async () => {
+  const env = envFor();
+  script("agy", `if read -t 1 line; then echo "stdin had data"; else echo "stdin closed"; fi\necho "Authentication required. Open https://accounts.google.com/o/oauth2/v2/auth?x=1"\nsleep 60`);
+  const started = Date.now();
+  const code = await runWorkerFailover({ runId: "fo-agy-auth", cli: "agy", model: "flash", promptFile, cwd: work, env, graceMs: 200, echo: () => undefined, inactivityMs: 30_000 });
+  expect(Date.now() - started).toBeLessThan(8000);
+  expect(code).toBe(1);
+  const events = readEvents("fo-agy-auth", env);
+  expect(events.find((e) => e.type === "attempt")).toMatchObject({ outcome: "Auth" });
+  expect(new Health({ env }).lockoutFor("agy", "any")?.reason).toBe("auth");
+  expect(events.filter((e) => e.type === "out").map((e) => e.line).join("\n")).toContain("stdin closed");
+}, 20_000);
+
+test("attempts-left caps worker-run across the whole chain", async () => {
+  const env = envFor();
+  script("codex", `cat >/dev/null; echo "503 Service Unavailable"; exit 1`);
+  const code = await runWorkerFailover({ runId: "fo-cap", cli: "codex", model: "gpt-5", promptFile, cwd: work, env, maxAttempts: 1, echo: () => undefined });
+  expect(code).toBe(1);
+  expect(readEvents("fo-cap", env).filter((e) => e.type === "attempt")).toHaveLength(1);
+});

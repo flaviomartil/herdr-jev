@@ -146,10 +146,12 @@ export async function startWait($: EngineInterface, options: PluginOptions, info
   $.ui.toast(`Waiting for ${family(info.model)} (${info.reason}). Any message cancels the wait.`, { timeoutMs: 10000 })
 }
 
-export async function cancelWait($: EngineInterface): Promise<boolean> {
+export async function cancelWait($: EngineInterface, options?: PluginOptions): Promise<boolean> {
   if (current === null) return false
-  const name = family(current.info.model)
+  const info = current.info
+  const name = family(info.model)
   await clear($)
+  if (options !== undefined) await health($, options, ['clear', '--key', `claude/${name}`])
   $.ui.toast(`Wait for ${name} cancelled`, { timeoutMs: 5000 })
   return true
 }

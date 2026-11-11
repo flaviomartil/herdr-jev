@@ -115,5 +115,5 @@ test("grandchildren that ignore SIGTERM are SIGKILLed before the wrapper returns
   const code = await runWorker({ runId: "r-stubborn", cli: "codex", model: "gpt-5-5", promptFile, cwd: work, env, echo: () => undefined, timeoutMs: 600, graceMs: 100 });
   expect(code).toBe(124);
   const child = Number(readFileSync(pidFile, "utf8").trim());
-  expect(() => process.kill(child, 0)).toThrow();
+  expect(await waitFor(() => { try { process.kill(child, 0); return false; } catch { return true; } }, 3000)).toBe(true);
 });

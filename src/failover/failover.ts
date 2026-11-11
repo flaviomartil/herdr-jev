@@ -184,7 +184,10 @@ export async function runChain(chain: Target[], deps: ChainDeps): Promise<number
       advance();
     } else if (outcome.kind === "Timeout") {
       if (timeoutRetries < 1) timeoutRetries += 1;
-      else advance();
+      else {
+        health.failure(target.cli);
+        advance();
+      }
     } else {
       failedCount += 1;
       if (failedCount >= 2) {

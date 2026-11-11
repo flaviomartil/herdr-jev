@@ -52,6 +52,8 @@ export function parseReset(output: string, now: number): number | undefined {
   return parseResetIn(output, now) ?? parseResetDate(output, now);
 }
 
+const STRONG_REQUEST = /invalid_request_error|INVALID_ARGUMENT|context_length_exceeded|prompt is too long/i;
+
 export interface Rules {
   quota: RegExp;
   auth: RegExp;
@@ -69,6 +71,7 @@ export function classifyWith(rules: Rules, result: AttemptResult): Outcome {
     const resetAt = (rules.reset ?? parseReset)(text, result.now);
     return { kind: "Quota", ...(resetAt ? { resetAt } : {}), why: "quota exhausted" };
   }
+  if (STRONG_REQUEST.test(text)) return { kind: "Failed", request: true, why: "invalid request" };
   if (rules.auth.test(text)) return { kind: "Auth", why: "authentication failed" };
   if (rules.transient.test(text)) return { kind: "Transient", ...(retryAfterMs ? { retryAfterMs } : {}), why: "transient upstream error" };
   if (rules.request.test(text)) return { kind: "Failed", request: true, why: "invalid request" };

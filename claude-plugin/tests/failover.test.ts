@@ -194,3 +194,45 @@ test('failover: /harness wait cancel stops the wait', on_, async ($, on) => {
   expect(await say($, 'wait cancel')).toBe('Wait cancelled.')
   expect(await say($, 'wait cancel')).toBe('No wait is active.')
 })
+
+async function lockCase($: Engine, on: Parameters<typeof wire>[0], status: number, reason: string, ms: number) {
+  resetWait()
+  resetFailover()
+  const { seen } = arrange(on, () => empty)
+  health(seen, () => ({ locked: false }))
+  modelComplete(on, () => ({ isAnswered: false, status }))
+  await start($)
+  await step($, 't1')
+  const before = seen.clock.now()
+  await fail($, 't1')
+  await seen.clock.advance(5)
+  const lock = seen.runs.find(argv => argv[1] === 'health' && argv[2] === 'lock')
+  expect(lock?.[argv_index(lock, '--reason')]).toBe(reason)
+  expect(Number(lock?.[argv_index(lock, '--until')])).toBeGreaterThanOrEqual(before + ms)
+  expect(Number(lock?.[argv_index(lock, '--until')])).toBeLessThan(before + ms + 5000)
+}
+
+test('failover: a quota diagnosis locks for 30 minutes', on_, ($, on) => lockCase($, on, 429, 'quota', 1_800_000))
+
+test('failover: an overload diagnosis locks for 5 minutes under its own reason', on_, ($, on) => lockCase($, on, 529, 'overload', 300_000))
+
+function argv_index(argv: string[] | undefined, flag: string): number {
+  return (argv ?? []).indexOf(flag) + 1
+}
+
+const cancel = ($: Engine) => say($, 'wait cancel')
+
+test('failover: cancelling the wait clears the lockout', on_, async ($, on) => {
+  resetWait()
+  resetFailover()
+  const { seen } = arrange(on, () => empty)
+  health(seen, () => ({ locked: false }))
+  modelComplete(on, () => ({ isAnswered: false, status: 429 }))
+  await start($)
+  await step($, 't1')
+  await fail($, 't1')
+  await seen.clock.advance(5)
+  seen.runs.length = 0
+  await cancel($)
+  expect(seen.runs.some(argv => argv[1] === 'health' && argv[2] === 'clear' && argv.includes('claude/opus'))).toBe(true)
+})

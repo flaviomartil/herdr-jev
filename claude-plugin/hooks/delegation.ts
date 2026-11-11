@@ -18,6 +18,7 @@ import { summarizeEvents } from './panes-core'
 
 const TOOL_WAIT = /^mcp__harness__harness_wait$/
 const HARD_CAP = 20
+const MAX_CHAIN_ATTEMPTS = 6
 const MAX_RUNS = 200
 const MAX_QUEUE = 100
 const WAIT_DEFAULT_MS = 120_000
@@ -35,6 +36,7 @@ type Run = {
   tab?: string
   decision: Decision
   rest: ChainStep[]
+  used: number
   state: RunState
   agentId?: string
   watch?: string
@@ -140,6 +142,7 @@ const chainArg = (steps: ChainStep[]): ChainStep[] => {
 }
 
 async function advanceRun($: EngineInterface, run: Run, options: PluginOptions, why: string): Promise<boolean> {
+  if (run.used >= MAX_CHAIN_ATTEMPTS) return false
   const next = run.rest.shift()
   if (next === undefined) return false
   run.decision = applyStep(run.decision, next)
@@ -220,7 +223,7 @@ function newRun(task: TaskInput, decision: Decision): Run {
   const done = new Promise<void>(resolve => {
     finish = resolve
   })
-  const run: Run = { id: `run-${counter}`, task: task.task, cwd: task.cwd, tab: typeof task.tab === 'string' && task.tab !== '' ? task.tab : undefined, decision, rest: [], state: 'queued', done, finish }
+  const run: Run = { id: `run-${counter}`, task: task.task, cwd: task.cwd, tab: typeof task.tab === 'string' && task.tab !== '' ? task.tab : undefined, decision, rest: [], used: 0, state: 'queued', done, finish }
   runs.set(run.id, run)
   evict()
   return run
@@ -287,6 +290,7 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
     '--session', await $.session.id(), '--max', String(maxWorkers(options)),
     ...(options.failover === true ? ['--failover'] : []),
     ...chain,
+    ...(options.failover === true ? ['--attempts-left', String(Math.max(1, MAX_CHAIN_ATTEMPTS - run.used))] : []),
     ...(panesEnabled(options) ? [] : ['--host', 'background']),
     ...(run.tab === undefined ? [] : ['--tab', run.tab]),
   ]
@@ -303,6 +307,20 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
   } finally {
     void publish($)
   }
+}
+
+function attemptsIn(text: string): number {
+  let used = 0
+  for (const line of text.split('\n')) {
+    if (!line.includes('failover-end')) continue
+    try {
+      const n = (JSON.parse(line) as { attempts?: number }).attempts
+      if (typeof n === 'number') used = n
+    } catch {
+      continue
+    }
+  }
+  return used
 }
 
 function requestError(text: string): boolean {
@@ -330,7 +348,7 @@ async function refreshExternal($: EngineInterface, run: Run, options: PluginOpti
   const sum = summarizeEvents(text)
   if (sum.state === 'running') return
   if (sum.state === 'done') settle(run, 'done', sum.tail)
-  else if (options.failover === true && sum.outcome !== 'interrupted' && !requestError(text) && await advanceRun($, run, options, `${sum.outcome} ${sum.tail.slice(0, 80)}`)) return
+  else if (options.failover === true && sum.outcome !== 'interrupted' && !requestError(text) && (run.used += Math.max(1, attemptsIn(text)), true) && await advanceRun($, run, options, `${sum.outcome} ${sum.tail.slice(0, 80)}`)) return
   else settle(run, 'failed', `${sum.outcome}${sum.exitCode === null ? '' : ` (exit ${sum.exitCode})`}: ${sum.tail}`.slice(0, 4000))
   void publish($)
 }
@@ -500,7 +518,7 @@ export async function noteTurnComplete($: EngineInterface, e: { agentId?: string
   if (run === undefined || run.state !== 'running') return
   byAgent.delete(e.agentId)
   if (e.reason === 'answer') settle(run, 'done', e.answer)
-  else if (options.failover === true && e.reason !== 'aborted' && await advanceRun($, run, options, `worker turn ended: ${e.reason}`)) return pump($, options).catch(() => undefined)
+  else if (options.failover === true && e.reason === 'error' && (run.used += 1, true) && await advanceRun($, run, options, `worker turn ended: ${e.reason}`)) return pump($, options).catch(() => undefined)
   else settle(run, 'failed', `worker turn ended: ${e.reason}`)
   await publish($)
   await watchClaudeEnd($, run, options, e.reason === 'answer', e.reason === 'answer' ? e.answer : e.reason)

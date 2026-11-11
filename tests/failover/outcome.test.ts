@@ -45,3 +45,11 @@ test("unrecognized failing output is Failed, never Success", () => {
   for (const cli of ["codex", "agy", "claude"]) expect(run(cli, 3, "segfault somewhere").kind).toBe("Failed");
   expect(run("mystery", 1, "x").kind).toBe("Failed");
 });
+
+test("agy real auth messages classify as Auth and request type wins over a 5xx status", () => {
+  expect(run("agy", 1, "Authentication required. Opening browser to sign in").kind).toBe("Auth");
+  expect(run("agy", 1, "Error: authentication failed or timed out").kind).toBe("Auth");
+  expect(run("claude", 1, 'API Error: 500 {"type":"error","error":{"type":"invalid_request_error","message":"x"}}')).toMatchObject({ kind: "Failed", request: true });
+  expect(run("codex", 1, "500 Internal Server Error invalid_request_error").kind).toBe("Failed");
+  expect(run("claude", 1, "invalid_request_error: Your credit balance is too low").kind).toBe("Quota");
+});

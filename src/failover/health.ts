@@ -1,8 +1,8 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, appendFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-export type LockReason = "quota" | "auth" | "model_gone" | "proxy_down";
+export type LockReason = "quota" | "overload" | "auth" | "model_gone" | "proxy_down";
 
 export interface Lockout {
   until?: number;
@@ -26,6 +26,7 @@ export interface HealthOptions {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   pidAlive?: (pid: number) => boolean;
+  lockWaitMs?: number;
 }
 
 const LOCK_TTL_MS = 10_000;
@@ -63,11 +64,13 @@ export class Health {
   private readonly env: NodeJS.ProcessEnv;
   private readonly clock: () => number;
   private readonly alive: (pid: number) => boolean;
+  private readonly lockWaitMs: number;
 
   constructor(opts: HealthOptions = {}) {
     this.env = opts.env ?? process.env;
     this.clock = opts.now ?? Date.now;
     this.alive = opts.pidAlive ?? defaultPidAlive;
+    this.lockWaitMs = opts.lockWaitMs ?? LOCK_WAIT_MS;
   }
 
   get file(): string {
@@ -78,9 +81,9 @@ export class Health {
     return `${this.file}.lock`;
   }
 
-  private stale(): boolean {
+  private stale(path: string): boolean {
     try {
-      const held = JSON.parse(readFileSync(this.lockFile(), "utf8")) as { pid?: number; expires?: number };
+      const held = JSON.parse(readFileSync(path, "utf8")) as { pid?: number; expires?: number };
       if (typeof held.expires === "number" && held.expires < this.clock()) return true;
       return typeof held.pid === "number" && !this.alive(held.pid);
     } catch {
@@ -90,7 +93,7 @@ export class Health {
 
   private locked<T>(fn: () => T): T {
     mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
-    const deadline = Date.now() + LOCK_WAIT_MS;
+    const deadline = Date.now() + this.lockWaitMs;
     for (;;) {
       try {
         const fd = openSync(this.lockFile(), "wx", 0o600);
@@ -99,13 +102,29 @@ export class Health {
         break;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        if (this.stale()) {
+        const grave = `${this.lockFile()}.${process.pid}.${Math.random().toString(36).slice(2)}.grave`;
+        try {
+          renameSync(this.lockFile(), grave);
+        } catch {
+          continue;
+        }
+        if (this.stale(grave)) {
           try {
-            unlinkSync(this.lockFile());
+            unlinkSync(grave);
           } catch {
             void 0;
           }
           continue;
+        }
+        try {
+          linkSync(grave, this.lockFile());
+        } catch {
+          void 0;
+        }
+        try {
+          unlinkSync(grave);
+        } catch {
+          void 0;
         }
         if (Date.now() > deadline) throw new Error("health lock timeout");
         pause(15);

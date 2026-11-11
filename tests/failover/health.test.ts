@@ -76,3 +76,20 @@ test("gc drops expired lockouts and breakers closed for over 24h", () => {
   health.gc();
   expect(health.read().breakers.a).toBeUndefined();
 });
+
+test("a live lock is never stolen and stale recovery leaves no grave file", () => {
+  const now = { t: 3_000_000 };
+  const live = mk(now);
+  const lockPath = join(live.dir, "health.json.lock");
+  const body = JSON.stringify({ pid: process.pid, expires: now.t + 600_000 });
+  writeFileSync(lockPath, body);
+  const impatient = new Health({ env: { HERDR_JEV_HEALTH_DIR: live.dir }, now: () => now.t, lockWaitMs: 150 });
+  expect(() => impatient.lock("a/x", "quota", now.t + 10)).toThrow("health lock timeout");
+  expect(readFileSync(lockPath, "utf8")).toBe(body);
+  const stale = mk(now, () => false);
+  writeFileSync(join(stale.dir, "health.json.lock"), JSON.stringify({ pid: 999_999, expires: now.t + 600_000 }));
+  stale.health.lock("b/x", "overload", now.t + 10);
+  const leftovers = require("node:fs").readdirSync(stale.dir).filter((n: string) => n.includes("grave") || n.endsWith(".lock"));
+  expect(leftovers).toEqual([]);
+  expect(stale.health.read().lockouts["b/x"]?.reason).toBe("overload");
+});

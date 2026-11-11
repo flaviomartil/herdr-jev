@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AGY_AUTH_EARLY } from "../failover/outcome/agy.js";
 import { redactSecrets } from "../herdr/pane-text.js";
 import { parseModelOverrides } from "../judge/index.js";
 import { appendEvent } from "./events.js";
@@ -156,7 +157,15 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
     appendEvent(opts.runId, { type: "start", pid, pgid: pid, wrapperPid: process.pid, cli: opts.cli, model: opts.model, effort: opts.effort ?? null, argv: [bin, ...shownArgs], cwd: opts.cwd ?? process.cwd() }, env);
     reportHerdr(env, opts.cli, "working", `${opts.cli} ${opts.model}`);
 
-    const stop = (kind: "timeout" | "interrupted") => {
+    let authKilled = false;
+    const stop = (kind: "timeout" | "interrupted" | "auth") => {
+      if (kind === "auth") {
+        if (finished || authKilled) return;
+        authKilled = true;
+        killGroup(pid, "SIGTERM");
+        killTimer = setTimeout(() => killGroup(pid, "SIGKILL"), grace);
+        return;
+      }
       if (finished || outcome === "timeout" || outcome === "interrupted") return;
       outcome = kind;
       if (kind === "timeout") appendEvent(opts.runId, { type: "timeout", kind: stopKind }, env);
@@ -183,6 +192,7 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
       const text = redactSecrets(raw).slice(0, MAX_LINE);
       echo(text);
       tail.push(text);
+      if (opts.cli === "agy" && !authKilled && AGY_AUTH_EARLY.test(text)) stop("auth");
       if (tail.length > TAIL_LINES) tail.shift();
       if (outCount < MAX_OUT_EVENTS) {
         outCount += 1;
@@ -225,7 +235,7 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
       killGroup(pid, "SIGKILL");
       for (const [s, h] of handlers) process.off(s, h);
       if (outcome === "failed" && code === 0) outcome = "done";
-      const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : code ?? 1;
+      const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : authKilled ? 1 : code ?? 1;
       const joined = tail.join("\n");
       if (opts.finalExit !== false) {
         appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined }, env);
