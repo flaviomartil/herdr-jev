@@ -6,7 +6,7 @@ export type RunOutcome = "queued" | "running" | "done" | "failed" | "timeout" | 
 
 export interface RunEvent {
   t: number;
-  type: "queued" | "start" | "out" | "timeout" | "interrupted" | "detached" | "exit";
+  type: "queued" | "start" | "out" | "timeout" | "interrupted" | "detached" | "exit" | "wait" | "attempt" | "failover" | "failover-end";
   [key: string]: unknown;
 }
 
@@ -59,7 +59,7 @@ export function readEvents(id: string, env: NodeJS.ProcessEnv = process.env): Ru
 }
 
 export function summarize(runId: string, events: RunEvent[]): RunSummary {
-  const start = events.find((e) => e.type === "start");
+  const start = [...events].reverse().find((e) => e.type === "start");
   const exit = [...events].reverse().find((e) => e.type === "exit");
   const interrupted = events.find((e) => e.type === "interrupted");
   const timedOut = events.find((e) => e.type === "timeout");

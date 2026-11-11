@@ -182,6 +182,51 @@ export function mergeModels(base: Models, over: ReturnType<typeof parseModelOver
   return { claude: pick(base.claude, over.claude), codex: pick(base.codex, over.codex), agy: pick(base.agy, over.agy) };
 }
 
+export type ChainStep = { worker: Worker; model: string; effort: Effort; tier: string; agentType?: string };
+export type ChainOverrides = Partial<Record<JudgeClass, string>>;
+
+const DEFAULT_CHAINS: Record<Level, string> = {
+  cheap: "codex/luna, agy/flash, claude/haiku",
+  mid: "claude/sonnet, codex/terra",
+  high: "claude/opus, codex/sol",
+  top: "claude/fable, codex/astra",
+};
+const CHAIN_CLASSES: readonly JudgeClass[] = ["explore", "search", "summary", "mechanical", "feature", "fix", "review", "architecture"];
+
+export function parseChainOverrides(text: string): ChainOverrides {
+  const raw = (parseModelOverrides(text) as unknown as Record<string, Record<string, string>>).chains ?? {};
+  const out: ChainOverrides = {};
+  for (const cls of CHAIN_CLASSES) if (typeof raw[cls] === "string") out[cls] = raw[cls];
+  return out;
+}
+
+function claudePair(tier: ClaudeTier, wanted: Effort | undefined, fallback: Effort): { tier: ClaudeTier; effort: Effort } {
+  const exact = REGISTERED_PAIRS.find(p => p.tier === tier && p.effort === (wanted ?? fallback));
+  return exact ?? (REGISTERED_PAIRS.find(p => p.tier === tier) as { tier: ClaudeTier; effort: Effort });
+}
+
+export function chainFor(cls: JudgeClass, effort: Effort, models: Models = DEFAULT_MODELS, overrides: ChainOverrides = {}, available: Hints["available"] = {}): ChainStep[] {
+  const spec = overrides[cls] ?? DEFAULT_CHAINS[LEVEL_OF[cls]];
+  const steps: ChainStep[] = [];
+  for (const part of spec.split(",")) {
+    const m = /^\s*(codex|agy|claude)\/([A-Za-z0-9._:-]+?)(?:-(low|medium|high))?\s*$/.exec(part);
+    if (m === null) continue;
+    const cli = m[1] as "codex" | "agy" | "claude";
+    const alias = m[2] as string;
+    const wanted = m[3] as Effort | undefined;
+    if (cli === "claude") {
+      if (!(alias in models.claude)) continue;
+      const pair = claudePair(alias as ClaudeTier, wanted, effort);
+      steps.push({ worker: "claude-subagent", model: models.claude[pair.tier], effort: pair.effort, tier: pair.tier, agentType: agentTypeFor(pair.tier, pair.effort) });
+    } else {
+      if (available?.[cli] === false) continue;
+      const table = models[cli] as Record<string, string>;
+      steps.push({ worker: cli, model: table[alias] ?? alias, effort: wanted ?? effort, tier: alias });
+    }
+  }
+  return steps;
+}
+
 export function isRegisteredType(name: string | undefined): boolean {
   return REGISTERED_PAIRS.some(pair => agentTypeFor(pair.tier, pair.effort) === name);
 }

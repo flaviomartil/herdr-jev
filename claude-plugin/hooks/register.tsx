@@ -75,8 +75,11 @@ import { registerModPane } from './mod-pane'
 import { paneSpawned, paneToolCall, registerPaneVisual, registerProgressTool } from './pane-hooks'
 import { liveStep, liveToolCall, liveTurnComplete, registerActivity, registerStepTool } from './activity-hooks'
 import { STEP_BRIEF, liveEnabled } from './activity'
+import { improveStart, recordShadow } from './improve'
 import { oddAfterPlan, oddCommand, oddStart, oddToolCall, registerOdd } from './odd'
 import { proxyNote, startProxies } from './proxies'
+import { failoverEnabled, failoverStep, onTurnComplete, resetFailover } from './failover'
+import { cancelWait, isWaiting, resetWait } from './wait'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
 import type { ConsultTarget, Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
@@ -151,6 +154,7 @@ const scopeAtom = atom({ plugin: 'harness', key: 'scope' } as const, EMPTY_SCOPE
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 const externalAtom = atom({ plugin: 'harness', key: 'external' } as const, {})
 const costsAtom = atom({ plugin: 'harness', key: 'costs' } as const, {})
+const waitAtom = atom({ plugin: 'harness', key: 'wait' } as const, null)
 const automaticAtom = atom({ plugin: 'harness', key: 'automatic' } as const, null)
 const automaticPromptsAtom = atom({ plugin: 'harness', key: 'automaticPrompts' } as const, [])
 const permissionModeAtom = atom({ plugin: 'harness', key: 'permissionMode' } as const, '')
@@ -1728,6 +1732,7 @@ export const register: Register = (on, options) => {
     await attempt('odd start', $, () => oddStart($, options))
     await attempt('register harness_step', $, () => registerStepTool($, options))
     await attempt('register harness_progress', $, () => registerProgressTool($, options))
+    await attempt('improve start', $, () => improveStart($, options))
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -1792,6 +1797,9 @@ export const register: Register = (on, options) => {
       }
     }
     await attempt('start proxies', $, () => startProxies($, options, e.cwd, e.isInteractive))
+    resetWait()
+    resetFailover()
+    if (failoverEnabled(options)) await attempt('health gc', $, () => $.process.run([cliConfig(options, e.cwd).bin, 'health', 'gc'], { cwd: e.cwd, timeoutMs: 10000 }))
     await attempt('read session model', $, async () => {
       const model = await $.session.model()
       await update($, advisorModelAtom, () => model)
@@ -1845,7 +1853,7 @@ export const register: Register = (on, options) => {
 
   on('turn.step', async function* ($, e, next) {
     const agentId = e.agentId
-    if (agentId === undefined) return yield* next(e)
+    if (agentId === undefined) return yield* failoverStep(options, e, next)
     const ports = externalPorts($)
     const isExternal = options.codex === true && (await externalRole(ports, external, agentId)) === 'codex'
     const source = isExternal
@@ -1858,7 +1866,14 @@ export const register: Register = (on, options) => {
     return yield* externalRefusal(e)
   })
 
+  on('turn.abort', async ($, e, next) => {
+    await attempt('cancel wait on abort', $, () => cancelWait($, options))
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   on('session.end', async ($, e, next) => {
+    resetWait()
+    resetFailover()
     automaticRuntime.pendingVerify = false
     automaticRuntime.dispatchTimer?.cancel()
     automaticRuntime.dispatchTimer = null
@@ -1900,6 +1915,11 @@ export const register: Register = (on, options) => {
       if (!hasScreen) return { text }
       $.ui.log(text)
       return {}
+    }
+    if (/^wait(\s+cancel)?$/.test(e.args.trim())) {
+      if (e.args.trim() === 'wait cancel') return { text: (await cancelWait($, options)) ? 'Wait cancelled.' : 'No wait is active.' }
+      const view = await read($, waitAtom)
+      return { text: view === null ? 'No wait is active.' : view.text }
     }
     if (e.args.trim() === 'review') {
       return { text: await refreshReview($, options, await $.session.cwd()) }
@@ -1959,6 +1979,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
+    if (isWaiting() && e.origin?.kind !== 'plugin') await attempt('cancel wait on prompt', $, () => cancelWait($, options))
     let eligible = options.autoDelegate !== false && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
       && !e.attachments?.length && e.text.trim().length > 0 && e.text.length <= 16384 && !e.text.trim().startsWith('/')
     if (eligible) eligible = (await $.env.get('HERDR_JEV_MOD_WORKER')) !== '1'
@@ -2053,6 +2074,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next.called ? next(e) : { result: 'Delegation requires reconciliation; no replacement was launched.' })
 
   on('tool.call', { tool: 'Agent' }, async ($, e, next) => {
+    await attempt('router shadow', $, () => recordShadow($, options, e as unknown as Record<string, unknown>))
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError === true) return ran
     if (!isReviewerResult(e, ran.result)) return ran
@@ -2083,6 +2105,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) void onTurnComplete($, options, e.turnId, e.reason)
     await attempt('delegation turn complete', $, () => noteTurnComplete($, e, options))
     await attempt('live turn complete', $, () => liveTurnComplete($, options, e))
     if (e.agentId !== undefined) {
@@ -2125,12 +2148,13 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const plan = await read($, planAtom)
+    const waiting = await read($, waitAtom)
     const isHidden = await read($, isHiddenAtom)
     const running = runningExternal(await read($, externalAtom))
     if (e.props.hasSurvey || isHidden) return next(e)
     if (plan === null) {
       const automatic = await read($, automaticAtom)
-      if (running === 0 && automatic === null) return next(e)
+      if (running === 0 && automatic === null && waiting === null) return next(e)
       const rendered = await next(e)
       const { Box, Text } = $.ui.resolve(e)
       const native = Object.keys(await read($, workersAtom)).length
@@ -2138,7 +2162,7 @@ export const register: Register = (on, options) => {
         <Box key="external" flexDirection="column">
           {rendered}
           <Box paddingX={1}>
-            <Text key="workers" dimColor>{automatic === null ? workersText(native, running) : `Herdr-Jev · ${automatic.state} · ${automatic.stages.map(stage => `${stage.client}/${shortModel(stage.model)}`).join(' · ') || automatic.reason}`}</Text>
+            <Text key="workers" dimColor>{automatic === null ? (waiting?.text ?? workersText(native, running)) : `Herdr-Jev · ${automatic.state} · ${automatic.stages.map(stage => `${stage.client}/${shortModel(stage.model)}`).join(' · ') || automatic.reason}`}</Text>
           </Box>
         </Box>
       )
@@ -2164,7 +2188,7 @@ export const register: Register = (on, options) => {
 
     const failedTitle = state.failed === undefined || state.failed.id === shown?.id ? null : state.failed.title
     const jevHint = await read($, jevHintAtom)
-    const note = [bandNote(state.word, failedTitle, isReviewing, phase(lastReview)), proxyNote(), jevHint].filter(one => one !== '').join(' · ')
+    const note = [bandNote(state.word, failedTitle, isReviewing, phase(lastReview)), proxyNote(), waiting?.text ?? '', jevHint].filter(one => one !== '').join(' · ')
     const elapsed = shown === undefined || state.word === 'all verified' ? '' : elapsedOf(shown, workers, now)
     const title = state.word === 'all verified' ? 'Done' : (shown?.title ?? '')
     const titleWidth = title.length === 0 ? 0 : Math.min(title.length, Math.max(MIN_TITLE, Math.floor(columns * 0.3)))

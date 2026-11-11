@@ -218,6 +218,7 @@ export type Activity = {
   phase: string | null
   end: 'done' | 'failed' | null
 }
+export type ProposalRow = { id: string; kind: 'agent' | 'runbook' | 'skill' | 'rule'; name: string; count: number; sessions: number; evidence: string[]; diff: string }
 export type OddFeatureRow = { name: string; path: string; done: number; total: number; percent: number }
 export type OddView = { repo: string; current: string | null; features: OddFeatureRow[]; phase: 'explore' | 'implement' | 'verify' | null }
 export type CrewState = {
@@ -256,7 +257,10 @@ declare module 'claude-code' {
       jevHint: string
       expandedAgents: Record<string, boolean>
       rosterIds: Shaped<Record<string, number>>
+      wait: { text: string; until: number | null } | null
       odd: Shaped<OddView>
+      proposals: Shaped<ProposalRow[]>
+      proposalExpanded: string
       crew: CrewState
       crewPage: number
       flowProgress: FlowProgressState | null

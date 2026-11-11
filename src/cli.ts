@@ -1334,4 +1334,28 @@ program.command("rules")
     process.exit(await main([action, ...(options.client ? ["--client", options.client] : [])]));
   });
 
+program.command("improve")
+  .description("Mine failures into proposals; nothing changes until approve")
+  .argument("<action>", "mine|list|show|approve|reject")
+  .argument("[id]", "proposal id")
+  .option("--events <file>", "route/health events jsonl")
+  .option("--failed <file>", "failed-attempts.jsonl")
+  .option("--json", "JSON output")
+  .option("--dry-run", "mine without writing to the ledger")
+  .action(async (action: string, id: string | undefined, options: { events?: string; failed?: string; json?: boolean; dryRun?: boolean }) => {
+    const { improveMain } = await import("./improve/cli.js");
+    process.exit(await improveMain(action, id, options));
+  });
+
+program.command("router")
+  .description("Router shadow tools")
+  .argument("<action>", "compare")
+  .option("--shadow <file>", "route-shadow.jsonl")
+  .option("--log <file>", "conclave route-log.jsonl")
+  .option("--json", "JSON output")
+  .action(async (action: string, options: { shadow?: string; log?: string; json?: boolean }) => {
+    const { routerMain } = await import("./improve/cli.js");
+    process.exit(await routerMain(action, options));
+  });
+
 program.parse(process.argv);

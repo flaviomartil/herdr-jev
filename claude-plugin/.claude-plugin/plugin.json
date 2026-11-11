@@ -110,11 +110,41 @@
       "description": "Checks the proxies in ~/.config/jev/proxies.local.yml every 30 s, restarts a live but unresponsive user unit once per 10 min, and toasts the result.",
       "default": false
     },
+    "failover": {
+      "type": "boolean",
+      "title": "Failover and wait",
+      "description": "Swaps the main turn to the next Claude tier when a step gets no answer, diagnoses quota and overload outside the hook, and waits with a countdown before offering to continue. Workers retry and fall back through their chain.",
+      "default": false
+    },
+    "autoResume": {
+      "type": "boolean",
+      "title": "Resume automatically after a wait",
+      "description": "With failover on, sends a continue prompt when the model is back. Off: the mod only tells you and asks.",
+      "default": false
+    },
+    "maxWaitMinutes": {
+      "type": "number",
+      "title": "Longest wait in minutes",
+      "description": "After this the wait ends with a notice.",
+      "default": 360
+    },
     "odd": {
       "type": "boolean",
       "title": "Lean ODD feature documents",
       "description": "Adds /harness feature, harness_task_done with verified evidence, a feature progress bar and resume on session start. Off keeps the default small path with no question, file or block.",
       "default": false
+    },
+    "improve": {
+      "type": "boolean",
+      "title": "Self-improvement proposals",
+      "description": "Mines ~/.claude/failed-attempts.jsonl and route/health events for failures seen 3 times in 2 sessions and lists at most 3 proposals in the Jev pane. Nothing is applied until you approve; a rejected proposal is quarantined.",
+      "default": false
+    },
+    "router": {
+      "type": "string",
+      "title": "Router (conclave or harness)",
+      "description": "conclave keeps routing in conclave and records what the harness judge would route to ~/.local/state/herdr-jev/route-shadow.jsonl (herdr-jev router compare reports the difference). harness turns the shadow off.",
+      "default": "conclave"
     },
     "rules": {
       "type": "boolean",

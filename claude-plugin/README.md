@@ -186,7 +186,21 @@ Precisa de `delegation`. Cada delegação a `codex` ou `agy` roda sob `herdr-jev
 - Esc no turno principal ou `/harness close` mandam SIGTERM ao `pgid` gravado. O fim da sessão marca os runs em segundo plano como `interrupted`.
 - Comandos: `/harness tab <feature>`, `focus <nome>`, `close <nome>`, `restart <nome>`, `send <nome> <texto>`, `layout save` e `layout restore`. `close` e `restart` de worker em execução pedem `--yes`. `layout restore` reabre runs terminados com `watch` e só oferece `restart` para os interrompidos, nunca reexecuta.
 - `watchClaudeAgents` (padrão `false`): com `panes` ligada, abre um pane só de leitura para cada subagente Claude delegado.
-- Falha de worker sem fallback: a cadeia de failover entra na P6.
+- Falha de worker: ver Failover e espera.
+
+## Failover e espera (opção `failover`, desligada por padrão)
+
+Workers: `herdr-jev worker-run --failover [--chain cli/modelo,cli/modelo]` roda a cadeia dentro do próprio wrapper, sem o Claude aberto. Cada tentativa vira um `Outcome` (`Success`, `Quota`, `Auth`, `Transient`, `Failed`, `Timeout`) por parser de CLI em `src/failover/outcome/<cli>.ts`. Saída não reconhecida vira `Failed`.
+
+- `Transient` (429 sem quota, 5xx, conexão): até 2 retries no mesmo alvo, com `Retry-After` quando existe, senão 2 s e 8 s com jitter. `Quota`: lockout até o reset lido da mensagem do CLI, senão 30 min, e vai ao próximo. `Auth`: lockout do CLI. `Timeout`: 1 retry. `Failed`: próximo uma vez, de novo devolve. Erro de requisição nunca vai a fallback. Teto de 6 tentativas.
+- Cadeia vazia por lockout: o wrapper espera o menor `until` (contagem no pane) e retoma sozinho, até 6 h.
+- Estado em `~/.local/state/herdr-jev/health.json` (lockouts por `cli/modelo`, breaker por CLI com 3 falhas, 5 s dobrando até 120 s) e `route-log.jsonl`. Escrita atômica com lock de PID e expiração em 10 s. `HERDR_JEV_HEALTH_DIR` troca a pasta. `herdr-jev health check|lock|clear|gc --key cli/modelo` expõe o estado.
+- Cadeia por classe (com `delegation` e `failover`): cheap (explore, search, summary, mechanical) `codex luna, agy flash, claude haiku`; mid (feature, fix) `claude sonnet, codex terra`; review `claude opus, codex sol`; architecture `claude fable, codex astra`. Override em `~/.config/jev/models.local.yml`: `chains:` com uma linha por classe, ex. `search: agy/flash, claude/haiku-high`. Alvos sem o CLI instalado ou com lockout no `health.json` são pulados (se todos estiverem travados a cadeia inteira vai ao wrapper, que espera). Os alvos externos seguintes vão em `--chain` ao `worker-run`. Alvos `claude` ficam fora do wrapper: a delegação cai neles via `$.agent.spawn` quando o wrapper reporta a cadeia esgotada (nunca em erro de requisição), e de um claude que falha vai ao próximo externo.
+
+- `agy` roda com stdin fechado. Texto de OAuth ou "Authentication required" no começo da saída mata o grupo na hora, vira `Auth` e trava `agy/*`. Timeout esgotado conta no breaker. O teto de 6 tentativas é da tarefa inteira: a delegação passa `--attempts-left` e soma o que o wrapper e os passos claude já gastaram.
+- Limite conhecido: o engine não separa erro de requisição de erro de servidor no `turn.complete` de um subagente claude. Só `reason: error` cai no próximo da cadeia (refusal e abort não caem).
+
+Turno principal: com a opção ligada, um `turn.step` sem resposta troca uma vez para o tier abaixo (opus, sonnet, haiku) enquanto houver budget. Se o turno termina em erro, um diagnóstico mínimo via `$.model.complete` (no máximo uma vez a cada 5 min por modelo, pulado com lockout ativo) separa quota (429), login (401) e sobrecarga. O diagnóstico grava o lockout com validade (quota 30 min, `overload` 5 min); cancelar a espera limpa o lockout. Quota e sobrecarga abrem a espera: timer do `session.start`, contagem na band, sonda em 1, 2, 5, 10 e 15 min quando não há horário. Ao liberar, o mod avisa e pergunta se continua. `autoResume` envia sozinho. Qualquer prompt, Esc ou `/harness wait cancel` cancela. `/harness wait` mostra o estado. Teto de `maxWaitMinutes` (360).
 
 ## Modelos
 
@@ -272,6 +286,7 @@ Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuá
 - `prGateAsk` (padrão `false`): ver PR gate.
 - `delegation` (padrão `false`): ver Juiz e delegação.
 - `panes` (padrão `false`) e `watchClaudeAgents` (padrão `false`): ver Panes.
+- `failover` (padrão `false`), `autoResume` (padrão `false`) e `maxWaitMinutes` (padrão `360`): ver Failover e espera.
 - `codex` (padrão `false`): registra e oferece o agente `harness:codex`. `codexMaxMinutes` (padrão `30`): tempo máximo de uma execução do Codex.
 
 ## Limites conhecidos
@@ -284,3 +299,6 @@ Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuá
 - Smoke test do harness mod: `claude plugin validate` e `claude plugin test` cobrem comportamento de plano, spawn, reviewer e restauração; validação local é pré-requisito para mudanças.
 - Com a opção `odd` ligada (padrão desligado): `/harness feature <nome> <pedido>` cria o documento da feature fora do repo, `harness_task_add` e `harness_task_done` o editam e a tarefa só fica verde com evidência conferida (commit existente, comando com saída 0 registrada ou reexecutada, arquivos alterados no git). O pane mostra a barra feito/total e o selo de etapa. Sem feature aberta, o `tool.call` só passa adiante.
 - Limite conhecido do ODD: a data de um commit pode ser forjada com `GIT_COMMITTER_DATE`. A checagem de evidência aceita isso, porque exige fraude deliberada e o sha fica registrado no documento da feature.
+
+## Propostas e shadow do roteador
+Flag `improve` (padrao desligada): ao iniciar a sessao, minera `~/.claude/failed-attempts.jsonl` e `~/.local/state/herdr-jev/events.jsonl` e lista no pane, em `Propostas`, ate 3 propostas com Approve, Reject e View diff. Nada e aplicado antes do Approve. Opcao `router` (`conclave` por padrao): grava em `~/.local/state/herdr-jev/route-shadow.jsonl` o que o juiz do harness roteraria para cada Agent; `harness` desliga o shadow. `herdr-jev router compare` compara com o route-log do conclave.
