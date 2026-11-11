@@ -88,6 +88,13 @@ export interface WorkerOptions {
   env?: NodeJS.ProcessEnv;
   echo?: (line: string) => void;
   graceMs?: number;
+  finalExit?: boolean;
+}
+
+export interface WorkerReport {
+  code: number;
+  outcome: "done" | "failed" | "timeout" | "interrupted";
+  output: string;
 }
 
 const MAX_OUT_EVENTS = 5000;
@@ -115,6 +122,10 @@ function reportHerdr(env: NodeJS.ProcessEnv, cli: string, state: string, message
 }
 
 export async function runWorker(opts: WorkerOptions): Promise<number> {
+  return (await runWorkerDetailed(opts)).code;
+}
+
+export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerReport> {
   const env = opts.env ?? process.env;
   const echo = opts.echo ?? ((line: string) => process.stdout.write(`${line}\n`));
   const prompt = readFileSync(opts.promptFile, "utf8");
@@ -124,8 +135,8 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     echo(message);
-    appendEvent(opts.runId, { type: "exit", code: 2, outcome: "failed", tail: message }, env);
-    return 2;
+    if (opts.finalExit !== false) appendEvent(opts.runId, { type: "exit", code: 2, outcome: "failed", tail: message }, env);
+    return { code: 2, outcome: "failed", output: message };
   }
   const [bin, ...args] = invocation.argv as [string, ...string[]];
   const shownArgs = args.map((a) => (a.startsWith("-p=") ? "-p=<prompt>" : a));
@@ -133,7 +144,7 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
   const inactivityMs = opts.inactivityMs ?? 300_000;
   const grace = opts.graceMs ?? 3000;
 
-  return new Promise<number>((resolve) => {
+  return new Promise<WorkerReport>((resolve) => {
     const child = spawn(bin, args, { cwd: opts.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env });
     const pid = child.pid ?? 0;
     let finished = false;
@@ -216,9 +227,11 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
       if (outcome === "failed" && code === 0) outcome = "done";
       const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : code ?? 1;
       const joined = tail.join("\n");
-      appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined }, env);
-      reportHerdr(env, opts.cli, outcome === "done" ? "done" : "blocked", `${outcome} (${exitCode})`);
-      resolve(exitCode);
+      if (opts.finalExit !== false) {
+        appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined }, env);
+        reportHerdr(env, opts.cli, outcome === "done" ? "done" : "blocked", `${outcome} (${exitCode})`);
+      }
+      resolve({ code: exitCode, outcome, output: joined });
     };
     child.on("error", (error) => {
       line(`spawn failed: ${error.message}`);
