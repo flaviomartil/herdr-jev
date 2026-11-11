@@ -70,7 +70,7 @@ test("agent, skill and rule kinds apply to their own targets", async () => {
   const { ports, files, ran } = mem();
   const mk = (tool: string, error: string, input = "{}") =>
     [0, 1, 2].map((i) => JSON.stringify({ ts: String(1_700_000_000 + i * DAY), tool, input, error, project: "cast", cwd: `/c${i}` })).join("\n");
-  const found = await mineAndSave(ports, w, { failed: [mk("Agent", "agent crashed"), mk("Skill", "skill missing"), mk("Bash", "commit rejected: co-authored-by line found", "{'command': 'git commit -m x'}")].join("\n") }, 5);
+  const found = await mineAndSave(ports, w, { failed: [mk("Agent", "agent crashed while loading the config"), mk("Skill", "skill missing from the registry"), mk("Bash", "commit rejected: co-authored-by line found", "{'command': 'git commit -m x'}")].join("\n") }, 5);
   expect(found.map((p) => p.kind).sort()).toEqual(["agent", "rule", "skill"]);
   for (const p of found) expect((await approve(ports, w, p.id)).ok).toBe(true);
   const agent = found.find((p) => p.kind === "agent")!;
