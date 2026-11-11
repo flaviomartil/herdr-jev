@@ -32,8 +32,13 @@ function world(on: On, files: Record<string, string>) {
     return { value: names.map(name => ({ name, kind: 'file', size: 0, mtimeMs: 1, isLink: false })) } as never
   })
   on('tool.call', { tool: 'Agent' }, () => ({ result: 'ok' }) as never)
-  seen.runHook = async argv => {
+  seen.runHook = async (argv, init) => {
     if (argv[0] === 'rm') fs.delete(argv[2] as string)
+    if (argv[0] === 'mv') {
+      fs.set(argv[3] as string, fs.get(argv[2] as string) as string)
+      fs.delete(argv[2] as string)
+    }
+    if (argv[0] === 'tee') fs.set(argv[2] as string, (fs.get(argv[2] as string) ?? '') + String(init?.stdin ?? ''))
     return argv[0] === 'git' ? undefined : { exitCode: 0, stdout: '', stderr: '' }
   }
   return { fs, seen }

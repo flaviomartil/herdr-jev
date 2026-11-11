@@ -1,14 +1,8 @@
-/**
- * Lógica pura do swarm: gatilho, plano, prompts dos agentes, parser SSE,
- * progresso e relatório para o orquestrador. Nada aqui toca `$`.
- */
 import type { SwarmRun, SwarmTask } from "./types.js"
 
 export const TAIL_MAX = 1200
 
-// ---------- gatilho ----------
 
-/** "swarm" como palavra solta: ativa em "Swarm 5: ...", não em "swarm-mod" ou "swarm_run". */
 const TRIGGER = /(^|[^\p{L}\p{N}_\-/])swarm(?![\p{L}\p{N}_\-])/iu
 
 export function swarmTrigger(text: string): { count: number | null } | null {
@@ -37,7 +31,6 @@ Se ${tools.run} falhar por configuração (URL/token do OmniRouter), diga ao usu
 </swarm_mode>`
 }
 
-// ---------- plano ----------
 
 export const modelList = (v: unknown): string[] =>
   (Array.isArray(v) ? v : typeof v === 'string' ? v.split(',') : []).map(m => (typeof m === 'string' ? m.trim() : '')).filter(Boolean)
@@ -74,7 +67,6 @@ export function validatePlan(tasks: unknown): PlanTask[] {
       if (!ids.has(d)) throw new Error(`tarefa ${t.id} depende de "${d}", que não existe`)
       if (d === t.id) throw new Error(`tarefa ${t.id} depende de si mesma`)
     }
-  // ciclo (Kahn)
   const indeg = new Map(list.map(t => [t.id, (t.depends_on ?? []).length]))
   const queue = list.filter(t => !(t.depends_on ?? []).length).map(t => t.id)
   let seen = 0
@@ -91,7 +83,6 @@ export function validatePlan(tasks: unknown): PlanTask[] {
   return list
 }
 
-/** Próximas tarefas prontas para rodar, e as que devem ser puladas porque uma dependência falhou. */
 export function schedule(tasks: SwarmTask[], running: number, limit: number): { start: string[]; skip: string[] } {
   const byId = new Map(tasks.map(t => [t.id, t]))
   const start: string[] = []
@@ -131,7 +122,6 @@ export function userPrompt(prompt: string, deps: { id: string; title: string; ou
   return p
 }
 
-// ---------- streaming (SSE do /v1/chat/completions) ----------
 
 export type StreamEvent = { kind: 'text'; text: string } | { kind: 'usage'; tokens: number } | { kind: 'error'; message: string }
 
@@ -142,10 +132,6 @@ export const retryAfterSeconds = (v: string): number | undefined => {
   return Number.isFinite(n) && n > 0 ? n : undefined
 }
 
-/**
- * Parser incremental: recebe pedaços do stdout do curl e devolve eventos.
- * O curl imprime o corpo e, no fim, `STATUS_MARK<código>` (via -w).
- */
 export function createSseParser() {
   let buf = ''
   let raw = ''
@@ -189,7 +175,6 @@ export function createSseParser() {
       }
       return out
     },
-    /** Fecha o stream: interpreta o que sobrou (status, erro HTTP ou resposta não-SSE). */
     end(): { status: number | null; retryAfter?: number; events: StreamEvent[] } {
       const out: StreamEvent[] = []
       const rest = buf
@@ -219,7 +204,6 @@ export function errorText(body: string): string {
   }
 }
 
-/** Resposta sem stream (gateway que ignorou `stream: true`, ou o caminho via $.http.fetch). */
 export function parseJsonCompletion(body: string): StreamEvent[] {
   try {
     const j = JSON.parse(body)
@@ -234,11 +218,9 @@ export function parseJsonCompletion(body: string): StreamEvent[] {
   }
 }
 
-/** Uma string entre aspas no formato de config do curl (`-K -`). */
 export const curlQuote = (s: string) =>
   `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')}"`
 
-/** Config do curl lida do stdin: assim o token não aparece na lista de processos. */
 export function curlConfig(url: string, apiKey: string, body: string): string {
   const lines = [
     `url = ${curlQuote(url)}`,
@@ -250,7 +232,6 @@ export function curlConfig(url: string, apiKey: string, body: string): string {
   return lines.join('\n') + '\n'
 }
 
-// ---------- falhas disfarçadas e reparo de texto ----------
 
 const SOFT_FAILURE =
   /no longer available|(no|insufficient|out of) (credits?|balance|quota)|quota (exceeded|exhausted)|exceeded (your )?(current )?quota|rate[ -]?limit(ed| exceeded| reached)?|too many requests|model (is |has been )?(deprecated|discontinued)/i
@@ -316,9 +297,7 @@ export function fixMojibake(s: string): string {
   return out.includes('�') && !s.includes('�') ? s : out
 }
 
-// ---------- texto e progresso ----------
 
-/** Remove sequências ANSI e caracteres de controle vindos dos modelos antes de desenhar. */
 export const clean = (s: string) =>
   s.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\x1b[\]P^_][\s\S]*?(\x07|\x1b\\)/g, '').replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, '')
 
@@ -327,16 +306,10 @@ export const appendTail = (tail: string, text: string) => {
   return t.length > TAIL_MAX ? t.slice(t.length - TAIL_MAX) : t
 }
 
-/**
- * O "ticker": o texto corrido quebrado por palavras em linhas de `width`
- * colunas, devolvendo as últimas `lines`. A última linha cresce conforme os
- * tokens chegam e, quando enche, tudo sobe uma linha.
- */
 export function tickerLines(tail: string, width: number, lines: number): string[] {
   const flat = tail.replace(/\s+/g, ' ').trimStart()
   if (!flat.trim()) return []
   const w = Math.max(10, width)
-  // começa numa fronteira de palavra para a quebra não "pular" a cada quadro
   const window = flat.length > w * (lines + 2) ? flat.slice(flat.indexOf(' ', flat.length - w * (lines + 2)) + 1) : flat
   const out: string[] = []
   let line = ''
@@ -407,7 +380,6 @@ export const PHASE_LABEL: Record<SwarmRun['phase'], string> = {
   cancelled: 'cancelado',
 }
 
-// ---------- relatório para o orquestrador ----------
 
 export function report(run: SwarmRun, outputs: Map<string, string>, maxChars: number): string {
   const c = counts(run)
@@ -431,9 +403,7 @@ export function report(run: SwarmRun, outputs: Map<string, string>, maxChars: nu
   return lines.join('\n')
 }
 
-// ---------- visual fino ----------
 
-/** Barra fina: `━` preenchido, `╸` meia célula, `─` trilho. */
 export function thin(p: number, width: number): { fill: string; rest: string } {
   const w = Math.max(4, width)
   const cells = Math.max(0, Math.min(1, p)) * w
@@ -442,7 +412,6 @@ export function thin(p: number, width: number): { fill: string; rest: string } {
   return { fill: '━'.repeat(full) + (half ? '╸' : ''), rest: '─'.repeat(Math.max(0, w - full - (half ? 1 : 0))) }
 }
 
-/** Texto corrido sem marcação de Markdown, para o ticker. */
 export const plain = (s: string) =>
   s
     .replace(/```[\s\S]*?(```|$)/g, ' ')
@@ -453,7 +422,6 @@ export const plain = (s: string) =>
     .replace(/\s+/g, ' ')
     .trim()
 
-/** Duração curta: 4.1s, 52s, 1m07s. */
 export function dur(ms: number): string {
   const s = ms / 1000
   if (s < 10) return `${s.toFixed(1)}s`
@@ -461,7 +429,6 @@ export function dur(ms: number): string {
   return `${Math.floor(s / 60)}m${String(Math.round(s % 60)).padStart(2, '0')}s`
 }
 
-/** Ticker de uma linha: o fim do texto, rolando para a esquerda conforme chega mais. */
 export function slideLine(flow: string, width: number): string {
   const w = Math.max(10, width)
   if (flow.length <= w) return flow

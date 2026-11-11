@@ -4,7 +4,7 @@ import type { ProposalRow } from '../types'
 import { approve, listProposals, mineAndSave, reject, visible, whereFor } from './improve-core'
 import type { Ports, Where } from './improve-core'
 import { judge } from './judge-core'
-import { appendShadow, shadowEntry } from './shadow-core'
+import { shadowEntry, shadowLine, trimShadow } from './shadow-core'
 
 export const improveEnabled = (options: PluginOptions): boolean => options.improve === true
 export const routerMode = (options: PluginOptions): 'conclave' | 'harness' => (options.router === 'harness' ? 'harness' : 'conclave')
@@ -72,6 +72,9 @@ export async function improveStart($: EngineInterface, options: PluginOptions): 
   const failedText = (await ports.read(`${w.home}/.claude/failed-attempts.jsonl`)) ?? ''
   const failed = failedText.split('\n').slice(-FAILED_LINES).join('\n')
   const events = (await ports.read(`${w.state}/events.jsonl`)) ?? ''
+  const shadowFile = `${w.state}/route-shadow.jsonl`
+  const shadowText = await ports.read(shadowFile)
+  if (shadowText !== undefined && trimShadow(shadowText) !== shadowText) await ports.write(shadowFile, trimShadow(shadowText))
   await mineAndSave(ports, w, { failed, events }, Math.floor((await $.clock.now()) / 1000))
   await refreshProposals($)
 }
@@ -103,7 +106,6 @@ export async function recordShadow($: EngineInterface, options: PluginOptions, e
   const decision = judge(`${description ?? ''}\n${prompt}`)
   const ts = Math.floor((await $.clock.now()) / 1000)
   const entry = shadowEntry({ subagentType: kind, model: typeof e.model === 'string' ? e.model : undefined, prompt, description }, decision, ts)
-  const ports = portsOf($)
-  const file = `${w.state}/route-shadow.jsonl`
-  await ports.write(file, appendShadow((await ports.read(file)) ?? '', entry))
+  await $.process.run(['mkdir', '-p', w.state], { timeoutMs: 5000 })
+  await $.process.run(['tee', '-a', `${w.state}/route-shadow.jsonl`], { stdin: shadowLine(entry), timeoutMs: 5000 })
 }

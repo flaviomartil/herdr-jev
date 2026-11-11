@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { approve, listProposals, loadProposal, mineAndSave, reject, whereFor } from "./index.js";
@@ -13,6 +13,10 @@ export const nodePorts: Ports = {
     writeFileSync(p, text);
   },
   list: async (d) => (existsSync(d) ? readdirSync(d) : []),
+  append: async (p, text) => {
+    mkdirSync(dirname(p), { recursive: true });
+    appendFileSync(p, text);
+  },
   run: async (argv) => {
     const r = spawnSync(argv[0]!, argv.slice(1), { encoding: "utf8" });
     return { code: r.status ?? 1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
@@ -26,14 +30,14 @@ export function routeLogPath(): string {
   return env().CONCLAVE_ROUTE_LOG ?? join(env().CONCLAVE_HOME ?? join(home(), "conclave-home"), ".conclave", "route-log.jsonl");
 }
 
-export async function improveMain(action: string, id: string | undefined, options: { events?: string; failed?: string; json?: boolean }): Promise<number> {
+export async function improveMain(action: string, id: string | undefined, options: { events?: string; failed?: string; json?: boolean; dryRun?: boolean }): Promise<number> {
   const w = whereFor(env(), home());
   const out = (text: string): void => console.log(text);
   if (action === "mine") {
     const failed = (await nodePorts.read(options.failed ?? join(home(), ".claude", "failed-attempts.jsonl"))) ?? "";
     const events = (await nodePorts.read(options.events ?? join(w.state, "events.jsonl"))) ?? "";
-    const found = await mineAndSave(nodePorts, w, { failed, events }, Math.floor(Date.now() / 1000));
-    out(options.json ? JSON.stringify(found) : found.length === 0 ? "no new proposals" : found.map((p) => `${p.id} ${p.kind} ${p.name} (${p.count}x, ${p.sessions} sessions)`).join("\n"));
+    const found = await mineAndSave(nodePorts, w, { failed, events }, Math.floor(Date.now() / 1000), options.dryRun === true);
+    out(options.json ? JSON.stringify(found) : found.length === 0 ? "no new proposals" : `${options.dryRun ? "dry run, nothing written\n" : ""}${found.map((p) => `${p.id} ${p.kind} ${p.name} (${p.count}x, ${p.sessions} sessions)`).join("\n")}`);
     return 0;
   }
   if (action === "list") {

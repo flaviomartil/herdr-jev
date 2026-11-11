@@ -1341,7 +1341,8 @@ program.command("improve")
   .option("--events <file>", "route/health events jsonl")
   .option("--failed <file>", "failed-attempts.jsonl")
   .option("--json", "JSON output")
-  .action(async (action: string, id: string | undefined, options: { events?: string; failed?: string; json?: boolean }) => {
+  .option("--dry-run", "mine without writing to the ledger")
+  .action(async (action: string, id: string | undefined, options: { events?: string; failed?: string; json?: boolean; dryRun?: boolean }) => {
     const { improveMain } = await import("./improve/cli.js");
     process.exit(await improveMain(action, id, options));
   });

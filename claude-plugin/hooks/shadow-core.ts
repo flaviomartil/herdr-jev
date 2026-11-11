@@ -116,8 +116,9 @@ export function formatCompare(c: Compare): string {
   return lines.join("\n");
 }
 
-export function appendShadow(existing: string, entry: ShadowEntry, cap = SHADOW_CAP): string {
-  const lines = existing.split("\n").filter(Boolean);
-  lines.push(JSON.stringify(entry));
-  return `${lines.slice(-cap).join("\n")}\n`;
+export const shadowLine = (entry: ShadowEntry): string => `${JSON.stringify(entry)}\n`;
+
+export function trimShadow(text: string, cap = SHADOW_CAP): string {
+  const lines = text.split("\n").filter(Boolean);
+  return lines.length <= cap ? text : `${lines.slice(-cap).join("\n")}\n`;
 }
