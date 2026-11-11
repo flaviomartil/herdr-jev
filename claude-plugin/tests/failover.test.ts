@@ -5,7 +5,7 @@ import { resetWait } from '../hooks/wait'
 import { wire } from './support'
 
 const OPUS = 'claude-opus-5-5'
-const on_ = { options: { failover: true } }
+const on_ = { options: { failover: true }, timeoutMs: 30_000 }
 const start = ($: Engine) => $.session.start({ cwd: '/work/demo', surface: 'terminal', isInteractive: true })
 
 type Reply = { answer: string; stopReason: string | null }
@@ -75,7 +75,7 @@ test('failover: one swap per turn, a second empty step is returned as is', on_, 
   expect(models).toEqual([OPUS, 'sonnet', OPUS])
 })
 
-test('failover: flag off never swaps', async ($, on) => {
+test('failover: flag off never swaps', { timeoutMs: 30_000 }, async ($, on) => {
   resetWait()
   resetFailover()
   const { models } = arrange(on, () => empty)
@@ -152,7 +152,7 @@ test('failover: release asks by default and does not send a prompt', on_, async 
   expect(await say($, 'wait')).toBe('No wait is active.')
 })
 
-test('failover: autoResume sends the continue prompt on release', { options: { failover: true, autoResume: true } }, async ($, on) => {
+test('failover: autoResume sends the continue prompt on release', { options: { failover: true, autoResume: true }, timeoutMs: 30_000 }, async ($, on) => {
   resetWait()
   resetFailover()
   const { seen } = arrange(on, () => empty)

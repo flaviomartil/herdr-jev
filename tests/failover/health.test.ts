@@ -93,3 +93,14 @@ test("a live lock is never stolen and stale recovery leaves no grave file", () =
   expect(leftovers).toEqual([]);
   expect(stale.health.read().lockouts["b/x"]?.reason).toBe("overload");
 });
+
+test("when the live lock cannot be restored the caller keeps waiting instead of owning it", () => {
+  const now = { t: 4_000_000 };
+  const { dir } = mk(now);
+  const lockPath = join(dir, "health.json.lock");
+  writeFileSync(lockPath, JSON.stringify({ pid: process.pid, expires: now.t + 600_000 }));
+  const h = new Health({ env: { HERDR_JEV_HEALTH_DIR: dir }, now: () => now.t, lockWaitMs: 100 });
+  expect(() => h.lock("c/x", "quota", now.t + 10)).toThrow("health lock timeout");
+  expect(h.read().lockouts["c/x"]).toBeUndefined();
+  expect(require("node:fs").readdirSync(dir).filter((n: string) => n.includes("grave"))).toEqual([]);
+});

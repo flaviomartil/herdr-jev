@@ -128,6 +128,7 @@ export class Health {
         }
         if (Date.now() > deadline) throw new Error("health lock timeout");
         pause(15);
+        continue;
       }
     }
     try {
