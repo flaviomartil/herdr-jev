@@ -1328,9 +1328,10 @@ program.command("notify")
 program.command("rules")
   .description("Rule engine: check a hook payload from stdin (exit 2 on deny)")
   .argument("<action>", "check")
-  .action(async (action: string) => {
+  .option("--client <name>", "claude or codex (codex turns ask into exit 2)")
+  .action(async (action: string, options: { client?: string }) => {
     const { main } = await import("./rules/cli.js");
-    process.exit(await main([action]));
+    process.exit(await main([action, ...(options.client ? ["--client", options.client] : [])]));
   });
 
 program.parse(process.argv);

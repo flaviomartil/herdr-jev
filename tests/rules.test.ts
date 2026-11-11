@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createEvaluator, loadRules, mergeRules, parseRules } from "../src/rules/index.js";
+import { createEvaluator, failureVerdict, loadRules, mergeRules, parseRules } from "../src/rules/index.js";
 import type { RuleEvent } from "../src/rules/index.js";
 
 const HOME = "/home/dev";
@@ -109,6 +109,83 @@ describe("performance", () => {
     });
     times.sort((a, b) => a - b);
     expect(times[Math.floor(times.length * 0.95)]!).toBeLessThan(1);
+  });
+});
+
+describe("review regressions", () => {
+  const commitMsg = "-m \"x\" -m \"Co-Authored-By: A <a@b.c>\"";
+  test.each([
+    `env -i git commit ${commitMsg}`,
+    `env -u FOO FOO=1 git commit ${commitMsg}`,
+    `sudo -u root git commit ${commitMsg}`,
+    `nice -n 5 git commit ${commitMsg}`,
+    `command git commit ${commitMsg}`,
+    `time -p git commit ${commitMsg}`,
+    `xargs -I{} git commit ${commitMsg}`,
+    `FOO=bar git commit ${commitMsg}`,
+    `git -c user.name=x commit ${commitMsg}`,
+    `/usr/bin/git commit ${commitMsg}`,
+    `bash -c 'git commit ${commitMsg}'`,
+  ])("F2 blocks a wrapped commit: %s", command => expect(decision(bash(command))).toBe("deny"));
+
+  test("F2 a commit file that could not be read is denied", () => {
+    expect(decision(bash("git commit -F gone.txt", { unreadable: ["gone.txt"] } as Partial<RuleEvent>))).toBe("deny");
+  });
+
+  test.each(["/bin/rm -rf x", "/usr/bin/rm -fr x", "rm --recursive --force x", "rm -r -f x", "bash -c \"rm -rf x\"", "sh -c 'cd a && rm -rf b'", "zsh -c 'bash -c \"rm -rf x\"'", "sudo rm -rf x", "env -i rm -rf x"])(
+    "F3 asks for %s",
+    command => expect(decision(bash(command))).toBe("ask"),
+  );
+  test("F3 plain rm and rm -r stay allowed", () => {
+    expect(decision(bash("rm -r build"))).toBe("allow");
+    expect(decision(bash("bash -c 'rm file'"))).toBe("allow");
+  });
+
+  test("F4 an allowlisted first match does not hide a real key later", () => {
+    const text = `a = "your-api-key-placeholder-value-here"\nk = "${awsKey}"`;
+    expect(decision(write("/tmp/a.ts", text))).toBe("deny");
+    expect(decision(write("/tmp/a.ts", `token = "${awsKey.toLowerCase()}"\nx = "${awsKey}"`))).toBe("deny");
+  });
+
+  test("F5 sk- inside prose is not a key and a real key is", () => {
+    expect(decision(write("/tmp/a.md", `see risk-assessment-${"abcd".repeat(10)} for details`))).toBe("allow");
+    expect(decision(write("/tmp/a.ts", `k = "sk-${"a1".repeat(20)}"`))).toBe("deny");
+  });
+
+  test("F6 NotebookEdit is covered", () => {
+    const nb = (path: string, source: string): RuleEvent => ({ type: "tool", tool: "NotebookEdit", input: { notebook_path: path, new_source: source }, cwd: `${HOME}/projects/acme/app`, home: HOME });
+    expect(decision(nb("/tmp/a.ipynb", `k = "${awsKey}"`))).toBe("deny");
+    expect(decision(nb("/tmp/a.ipynb", "x = 1"))).toBe("allow");
+  });
+  test("F6 a real path inside a work repo denies even through a link", () => {
+    const event = { ...write("/tmp/link.md"), realPaths: { "/tmp/link.md": `${HOME}/projects/acme/app/docs/real.md` } } as RuleEvent;
+    expect(decision(event)).toBe("deny");
+  });
+  test("F6 .claude and personal are not work docs", () => {
+    expect(decision(write(`${HOME}/projects/acme/app/.claude/skills/x/SKILL.md`))).toBe("allow");
+    expect(decision(write(`${HOME}/projects/acme/app/.claude/agents/a.md`))).toBe("allow");
+    const plain = createEvaluator(loadRules({ JEV_CONFIG_DIR: "/nonexistent" }));
+    expect(plain.evaluate(write(`${HOME}/projects/personal/tool/doc.md`)).decision).toBe("allow");
+  });
+
+  test("F7 a bare push asks on a protected branch only", () => {
+    expect(decision(bash("git push", { branch: "main" } as Partial<RuleEvent>))).toBe("ask");
+    expect(decision(bash("git push origin", { branch: "master" } as Partial<RuleEvent>))).toBe("ask");
+    expect(decision(bash("git push", { branch: "feature/x" } as Partial<RuleEvent>))).toBe("allow");
+    expect(decision(bash("git push origin feature/x", { branch: "main" } as Partial<RuleEvent>))).toBe("allow");
+  });
+
+  test("F1 failure policy denies writes and commits, allows the rest", () => {
+    expect(failureVerdict(write("/tmp/a.ts")).decision).toBe("deny");
+    expect(failureVerdict({ type: "tool", tool: "NotebookEdit", input: {} }).decision).toBe("deny");
+    expect(failureVerdict(bash("git commit -m x")).decision).toBe("deny");
+    expect(failureVerdict(bash("ls")).decision).toBe("allow");
+    expect(failureVerdict({ type: "prompt" }).decision).toBe("allow");
+  });
+  test("F1 an internal error on a write is denied by evaluate", () => {
+    const e = createEvaluator(config);
+    const bad = { type: "tool", tool: "Write", input: { file_path: "/tmp/a.ts", content: "x" }, get cwd(): never { throw new Error("boom"); } } as unknown as RuleEvent;
+    expect(e.evaluate(bad).decision).toBe("deny");
   });
 });
 

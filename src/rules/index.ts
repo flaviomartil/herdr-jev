@@ -17,11 +17,7 @@ export function loadRules(env: Record<string, string | undefined> = process.env)
   const base = parseRules(readFileSync(DEFAULT_FILE, "utf8"));
   const local = localRulesPath(env);
   if (!existsSync(local)) return base;
-  try {
-    return mergeRules(base, parseRules(readFileSync(local, "utf8")));
-  } catch {
-    return base;
-  }
+  return mergeRules(base, parseRules(readFileSync(local, "utf8")));
 }
 
 export function evaluate(event: RuleEvent, evaluator: Evaluator = createEvaluator(loadRules())): Verdict {

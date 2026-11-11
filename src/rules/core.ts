@@ -89,6 +89,9 @@ export type RuleEvent =
       home?: string
       sessionId?: string
       files?: Record<string, string>
+      unreadable?: string[]
+      realPaths?: Record<string, string>
+      branch?: string
       isNew?: boolean
     }
   | { type: 'prompt'; sessionId?: string }
@@ -104,9 +107,11 @@ const section = (config: RuleConfig, key: string): { [key: string]: Json } => {
   const v = config[key]
   return isMap(v) ? v : {}
 }
-const build = (pattern: string, caseless: boolean): RegExp =>
-  pattern.startsWith('(?i)') ? new RegExp(pattern.slice(4), 'i') : new RegExp(pattern, caseless ? 'i' : '')
-const compile = (patterns: string[], caseless = true): RegExp[] => patterns.map(p => build(p, caseless))
+const build = (pattern: string, caseless: boolean, global: boolean): RegExp => {
+  const flags = (global ? 'g' : '') + (caseless || pattern.startsWith('(?i)') ? 'i' : '')
+  return new RegExp(pattern.startsWith('(?i)') ? pattern.slice(4) : pattern, flags)
+}
+const compile = (patterns: string[], caseless = true, global = false): RegExp[] => patterns.map(p => build(p, caseless, global))
 
 export function shellSplit(input: string): string[][] {
   const segments: string[][] = []
@@ -151,26 +156,82 @@ export function shellSplit(input: string): string[][] {
   return segments
 }
 
-const WRAPPERS = new Set(['sudo', 'command', 'env', 'time', 'nohup', 'exec', 'xargs'])
+const baseName = (path: string): string => path.split('/').pop() ?? path
+
+const WRAPPERS: Record<string, Set<string>> = {
+  env: new Set(['-u', '--unset', '-C', '--chdir', '-S', '--split-string']),
+  sudo: new Set(['-u', '-g', '-h', '-p', '-C', '-D', '-R', '-T', '-U', '--user', '--group', '--host', '--prompt', '--chdir', '--chroot']),
+  doas: new Set(['-u', '-C']),
+  nice: new Set(['-n', '--adjustment']),
+  ionice: new Set(['-c', '-n', '-p', '-P', '-u']),
+  time: new Set(['-f', '-o', '--format', '--output']),
+  command: new Set(),
+  builtin: new Set(),
+  nohup: new Set(),
+  exec: new Set(['-a']),
+  setsid: new Set(),
+  stdbuf: new Set(['-i', '-o', '-e']),
+  timeout: new Set(['-s', '-k', '--signal', '--kill-after']),
+  xargs: new Set(['-I', '-n', '-P', '-L', '-d', '-E', '-s', '-a', '--max-args', '--max-procs', '--replace', '--delimiter']),
+}
+
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh'])
 
 function stripLead(tokens: string[]): string[] {
   let i = 0
-  while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!) || WRAPPERS.has(tokens[i]!))) i++
+  while (i < tokens.length) {
+    const token = tokens[i]!
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      i++
+      continue
+    }
+    const name = baseName(token)
+    const flags = WRAPPERS[name]
+    if (flags === undefined) break
+    i++
+    while (i < tokens.length && tokens[i]!.startsWith('-')) {
+      if (tokens[i] === '--') {
+        i++
+        break
+      }
+      i += flags.has(tokens[i]!) ? 2 : 1
+    }
+    if (name === 'timeout') i++
+  }
   return tokens.slice(i)
 }
 
+export function expandSegments(segments: string[][], depth = 0): string[][] {
+  const out: string[][] = []
+  for (const segment of segments) {
+    out.push(segment)
+    const t = stripLead(segment)
+    if (t.length === 0 || depth >= 3) continue
+    const name = baseName(t[0]!)
+    if (name === 'eval') {
+      out.push(...expandSegments(shellSplit(t.slice(1).join(' ')), depth + 1))
+    } else if (SHELLS.has(name)) {
+      const k = t.findIndex((a, idx) => idx > 0 && /^-[A-Za-z]*c[A-Za-z]*$/.test(a))
+      if (k > 0 && t[k + 1] !== undefined) out.push(...expandSegments(shellSplit(t[k + 1]!), depth + 1))
+    }
+  }
+  return out
+}
+
+const GIT_ARG_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--super-prefix', '--config-env'])
+
 export function gitCall(segment: string[]): { sub: string; args: string[] } | null {
   const t = stripLead(segment)
-  if (t[0] !== 'git' && !t[0]?.endsWith('/git')) return null
+  if (t.length === 0 || baseName(t[0]!) !== 'git') return null
   let i = 1
-  while (i < t.length && t[i]!.startsWith('-')) i += t[i] === '-C' || t[i] === '-c' ? 2 : 1
+  while (i < t.length && t[i]!.startsWith('-')) i += GIT_ARG_OPTIONS.has(t[i]!) ? 2 : 1
   if (i >= t.length) return null
   return { sub: t[i]!, args: t.slice(i + 1) }
 }
 
 export function commitFiles(command: string): string[] {
   const out: string[] = []
-  for (const seg of shellSplit(command)) {
+  for (const seg of expandSegments(shellSplit(command))) {
     const call = gitCall(seg)
     if (call?.sub !== 'commit') continue
     for (let i = 0; i < call.args.length; i++) {
@@ -185,7 +246,7 @@ export function commitFiles(command: string): string[] {
 
 function isRmRf(seg: string[]): boolean {
   const t = stripLead(seg)
-  if (t[0] !== 'rm') return false
+  if (t.length === 0 || baseName(t[0]!) !== 'rm') return false
   let r = false
   let f = false
   for (const a of t.slice(1)) {
@@ -204,7 +265,9 @@ const isProtectedRef = (ref: string, protectedBranches: string[]): boolean => {
   return protectedBranches.includes(target)
 }
 
-function pushReason(seg: string[], protectedBranches: string[]): string | null {
+type PushInfo = { force: boolean; positional: string[] }
+
+function pushInfo(seg: string[]): PushInfo | null {
   const call = gitCall(seg)
   if (call?.sub !== 'push') return null
   const positional: string[] = []
@@ -214,9 +277,24 @@ function pushReason(seg: string[], protectedBranches: string[]): string | null {
     else if (/^-[A-Za-z]*f[A-Za-z]*$/.test(a)) force = true
     else if (!a.startsWith('-')) positional.push(a)
   }
+  return { force, positional }
+}
+
+export function pushNeedsBranch(command: string): boolean {
+  return expandSegments(shellSplit(command)).some(seg => {
+    const info = pushInfo(seg)
+    return info !== null && !info.force && info.positional.length <= 1
+  })
+}
+
+function pushReason(seg: string[], protectedBranches: string[], branch: string | undefined): string | null {
+  const info = pushInfo(seg)
+  if (info === null) return null
+  const { force, positional } = info
   if (force) return 'git push with force'
   if (positional.slice(1).some(r => r.startsWith('+'))) return 'git push with force refspec'
   if (positional.slice(1).some(r => isProtectedRef(r, protectedBranches))) return 'git push to a protected branch'
+  if (positional.length <= 1 && branch !== undefined && protectedBranches.includes(branch)) return 'git push from a protected branch'
   return null
 }
 
@@ -244,6 +322,7 @@ export function writtenText(tool: string, input: Record<string, unknown>): strin
   }
   if (tool === 'Write') take(input.content)
   else if (tool === 'Edit') take(input.new_string)
+  else if (tool === 'NotebookEdit') take(input.new_source)
   else if (tool === 'MultiEdit' && Array.isArray(input.edits)) {
     for (const edit of input.edits) if (edit && typeof edit === 'object') take((edit as Record<string, unknown>).new_string)
   } else if (tool === 'apply_patch') take(input.patch ?? input.command ?? input.input)
@@ -255,21 +334,39 @@ export function writtenPaths(tool: string, input: Record<string, unknown>): stri
     const text = writtenText(tool, input)
     return [...text.matchAll(/^\*\*\* (?:Add|Update) File: (.+)$/gm)].map(m => m[1]!.trim())
   }
-  return typeof input.file_path === 'string' ? [input.file_path] : []
+  const path = tool === 'NotebookEdit' ? input.notebook_path : input.file_path
+  return typeof path === 'string' ? [path] : []
 }
 
-const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'apply_patch'])
+const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'apply_patch'])
 const SHELL_TOOLS = new Set(['Bash', 'shell', 'local_shell'])
+
+export function failureVerdict(event: RuleEvent): Verdict {
+  const blocked: Verdict = { decision: 'deny', rule: 'evaluator-error', reason: 'Rule check failed on a file write or commit; blocked.' }
+  if (event.type !== 'tool') return { decision: 'allow' }
+  if (FILE_TOOLS.has(event.tool)) return blocked
+  if (SHELL_TOOLS.has(event.tool)) {
+    try {
+      const raw = event.input?.command
+      const text = Array.isArray(raw) ? raw.join(' ') : String(raw ?? '')
+      if (/\bgit\b[\s\S]*\bcommit\b/.test(text)) return blocked
+    } catch {
+      return { decision: 'allow' }
+    }
+  }
+  return { decision: 'allow' }
+}
 
 export function createEvaluator(config: RuleConfig, log: (message: string) => void = () => {}): Evaluator {
   const commit = section(config, 'commit')
   const forbidden = compile(list(commit.forbidden))
   const secrets = section(config, 'secrets')
-  const secretPatterns = compile(list(secrets.patterns), false)
+  const secretPatterns = compile(list(secrets.patterns), false, true)
   const secretAllow = compile(list(secrets.allow))
   const workRepo = section(config, 'workRepo')
   const roots = list(workRepo.roots)
   const excludes = list(workRepo.exclude)
+  const excludeSegments = list(workRepo.excludeSegments)
   const allowFiles = list(workRepo.allowFiles).map(f => f.toLowerCase())
   const docExt = compile(list(workRepo.extensions))
   const generic = section(config, 'generic')
@@ -283,8 +380,8 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
 
   const secretVerdict = (text: string): Verdict | null => {
     for (const re of secretPatterns) {
-      const m = re.exec(text)
-      if (m && !secretAllow.some(a => a.test(m[0]))) {
+      for (const m of text.matchAll(re)) {
+        if (secretAllow.some(a => a.test(m[0]))) continue
         return { decision: 'deny', rule: 'secret', reason: msg('secret', 'Secret-like value in file content. Use an environment variable and a placeholder.') }
       }
     }
@@ -293,8 +390,11 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
 
   const bashRules = (event: Extract<RuleEvent, { type: 'tool' }>, command: string): Verdict[] => {
     const out: Verdict[] = []
-    const segments = shellSplit(command)
+    const segments = expandSegments(shellSplit(command))
     const commits = segments.some(s => gitCall(s)?.sub === 'commit')
+    if (commits && event.unreadable?.length) {
+      out.push({ decision: 'deny', rule: 'commit-attribution', reason: `Commit message file could not be read (${event.unreadable.join(', ')}); blocked.` })
+    }
     if (commits) {
       try {
         const text = [command, ...Object.values(event.files ?? {})].join('\n')
@@ -308,7 +408,7 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
     try {
       if (segments.some(isRmRf)) out.push({ decision: 'ask', rule: 'rm-rf', reason: msg('rmrf', 'Recursive forced delete needs confirmation.') })
       for (const seg of segments) {
-        const why = pushReason(seg, protectedBranches)
+        const why = pushReason(seg, protectedBranches, event.branch)
         if (why) {
           out.push({ decision: 'ask', rule: 'git-push', reason: `${why}: confirm before running.` })
           break
@@ -331,12 +431,17 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
     try {
     for (const path of writtenPaths(event.tool, event.input)) {
       const abs = absolute(path, event.cwd, event.home)
+      const real = event.realPaths?.[path]
+      const candidates = real === undefined ? [abs] : [abs, real]
       const base = abs.split('/').pop()!
       const isDoc = docExt.length > 0 ? docExt.some(re => re.test(base)) : /\.md$/i.test(base)
       if (isDoc && !allowFiles.includes(base.toLowerCase())) {
-        const inRoot = roots.some(r => under(abs, absolute(r, event.cwd, event.home)))
-        const excluded = excludes.some(r => under(abs, absolute(r, event.cwd, event.home)))
-        if (inRoot && !excluded) {
+        const inWork = candidates.some(c => {
+          const inRoot = roots.some(r => under(c, absolute(r, event.cwd, event.home)))
+          const excluded = excludes.some(r => under(c, absolute(r, event.cwd, event.home))) || c.split('/').some(part => excludeSegments.includes(part))
+          return inRoot && !excluded
+        })
+        if (inWork) {
           out.push({ decision: 'deny', rule: 'work-repo-doc', reason: msg('doc', 'No new or edited docs in a work repo (README.md is the exception). Put it in the notes vault.') })
         }
       }
@@ -346,6 +451,7 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
     }
     } catch (error) {
       log(`rules evaluator error: ${error instanceof Error ? error.message : String(error)}`)
+      out.push({ decision: 'deny', rule: 'evaluator-error', reason: 'Rule check failed on a file write; blocked.' })
     }
     return out
   }
@@ -372,7 +478,7 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
       }
     } catch (error) {
       log(`rules evaluator error: ${error instanceof Error ? error.message : String(error)}`)
-      return { decision: 'allow' }
+      return failureVerdict(event)
     }
     let best: Verdict = { decision: 'allow' }
     for (const v of found) {
