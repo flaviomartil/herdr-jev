@@ -86,6 +86,12 @@
       "description": "Registers the judge agent types, batch harness_delegate with harness_wait, and enforces tiers on Agent tool spawns: Sonnet implements, Opus reviews, Haiku explores, and every brief gets the skills step.",
       "default": false
     },
+    "proxies": {
+      "type": "boolean",
+      "title": "Proxy supervision",
+      "description": "Checks the proxies in ~/.config/jev/proxies.local.yml every 30 s, restarts a live but unresponsive user unit once per 10 min, and toasts the result.",
+      "default": false
+    },
     "rules": {
       "type": "boolean",
       "title": "Enforce shared rules",

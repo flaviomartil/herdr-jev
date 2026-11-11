@@ -67,6 +67,7 @@ import {
   registerJudgeAgents,
   spawnWithTier,
 } from './delegation'
+import { proxyNote, startProxies } from './proxies'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
 import type { ConsultTarget, Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
@@ -1773,6 +1774,7 @@ export const register: Register = (on, options) => {
         })
       }
     }
+    await attempt('start proxies', $, () => startProxies($, options, e.cwd, e.isInteractive))
     await attempt('read session model', $, async () => {
       const model = await $.session.model()
       await update($, advisorModelAtom, () => model)
@@ -2133,7 +2135,7 @@ export const register: Register = (on, options) => {
     const needsCount = Math.max(asks.length, counts.needsYou)
 
     const failedTitle = state.failed === undefined || state.failed.id === shown?.id ? null : state.failed.title
-    const note = bandNote(state.word, failedTitle, isReviewing, phase(lastReview))
+    const note = [bandNote(state.word, failedTitle, isReviewing, phase(lastReview)), proxyNote()].filter(one => one !== '').join(' · ')
     const elapsed = shown === undefined || state.word === 'all verified' ? '' : elapsedOf(shown, workers, now)
     const title = state.word === 'all verified' ? 'Done' : (shown?.title ?? '')
     const titleWidth = title.length === 0 ? 0 : Math.min(title.length, Math.max(MIN_TITLE, Math.floor(columns * 0.3)))
