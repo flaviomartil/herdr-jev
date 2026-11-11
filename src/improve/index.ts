@@ -155,6 +155,11 @@ export function ruleFor(group: readonly Observation[]): { section: string; key: 
   return hit ? { section: "commit", key: "forbidden", value: hit.value } : null;
 }
 
+export function meaningfulTokens(pattern: string): number {
+  const msg = pattern.slice(pattern.indexOf(":") + 1);
+  return msg.replace(/<[a-z]>/g, " ").split(/[^a-z]+/).filter((w) => w.length > 1 && w !== "exit" && w !== "code").length;
+}
+
 function inferKind(group: Observation[]): Kind {
   const first = group[0]!;
   if (first.tool === "Agent" || first.tool === "Task") return "agent";
@@ -246,6 +251,7 @@ export function mine(
   for (const [pattern, group] of groups) {
     const sessions = new Set(group.map((o) => o.session)).size;
     if (group.length < limits.count || sessions < limits.sessions) continue;
+    if (group[0]!.source === "failed-attempts" && meaningfulTokens(pattern) < 3) continue;
     const id = proposalId(pattern);
     if (known.has(id)) continue;
     const kind = inferKind(group);

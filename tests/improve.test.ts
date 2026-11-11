@@ -170,3 +170,10 @@ test("rtk case: different cd dirs and one cause give exactly one clean proposal"
   expect(p.count).toBe(3);
   expect(p.sessions).toBe(3);
 });
+
+test("generic exit code groups are dropped", () => {
+  const generic = [0, 1, 2].map((i) => JSON.stringify({ ts: String(1_700_000_000 + i * DAY), tool: "Bash", input: "{}", error: `Exit code ${i + 1}`, project: "p", cwd: `/c${i}` })).join("\n");
+  expect(mine(parseFailedAttempts(generic), new Set(), w, 1)).toEqual([]);
+  const same = [0, 1, 2].map((i) => JSON.stringify({ ts: String(1_700_000_000 + i * DAY), tool: "Bash", input: "{}", error: "Exit code 1", project: "p", cwd: `/c${i}` })).join("\n");
+  expect(mine(parseFailedAttempts(same), new Set(), w, 1)).toEqual([]);
+});
