@@ -104,6 +104,12 @@
       "description": "Checks the proxies in ~/.config/jev/proxies.local.yml every 30 s, restarts a live but unresponsive user unit once per 10 min, and toasts the result.",
       "default": false
     },
+    "odd": {
+      "type": "boolean",
+      "title": "Lean ODD feature documents",
+      "description": "Adds /harness feature, harness_task_done with verified evidence, a feature progress bar and resume on session start. Off keeps the default small path with no question, file or block.",
+      "default": false
+    },
     "rules": {
       "type": "boolean",
       "title": "Enforce shared rules",

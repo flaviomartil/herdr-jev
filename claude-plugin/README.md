@@ -282,3 +282,4 @@ Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuá
 - O spawn de um plugin sempre roda em background; não existe campo `background` em `$.agent.spawn`, nem `effort`: o effort vai no tipo registrado.
 - O review do harness é manual (`Refresh review`) a menos que `autoReview` esteja ligado.
 - Smoke test do harness mod: `claude plugin validate` e `claude plugin test` cobrem comportamento de plano, spawn, reviewer e restauração; validação local é pré-requisito para mudanças.
+- Com a opção `odd` ligada (padrão desligado): `/harness feature <nome> <pedido>` cria o documento da feature fora do repo, `harness_task_add` e `harness_task_done` o editam e a tarefa só fica verde com evidência conferida (commit existente, comando com saída 0 registrada ou reexecutada, arquivos alterados no git). O pane mostra a barra feito/total e o selo de etapa. Sem feature aberta, o `tool.call` só passa adiante.

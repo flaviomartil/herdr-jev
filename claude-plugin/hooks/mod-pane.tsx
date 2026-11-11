@@ -1,6 +1,6 @@
 import { atom, read } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
-import type { DelegationRow, HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
+import type { OddView, DelegationRow, HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
 import { CLI_THEME, avatar, avatarRuns, cliKind, nameFor, parseRosterFile } from './identity-core'
 import type { Avatar, CliKind } from './identity-core'
 import { noteAgents } from './jev-state'
@@ -35,6 +35,7 @@ const needsYouAtom = atom({ plugin: 'harness', key: 'needsYou' } as const, [])
 const externalAtom = atom({ plugin: 'harness', key: 'external' } as const, {})
 const delegationsAtom = atom({ plugin: 'harness', key: 'delegations' } as const, [], { shape: 'delegations-1' })
 const rosterIdsAtom = atom({ plugin: 'harness', key: 'rosterIds' } as const, {}, { shape: 'roster-1' })
+const oddAtom = atom({ plugin: 'harness', key: 'odd' } as const, { repo: '', current: null, features: [], phase: null } as OddView, { shape: 'odd-1' })
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 
 const WORKER_CLI = { 'claude-subagent': 'claude', codex: 'codex', agy: 'agy' } as const
@@ -126,6 +127,7 @@ async function personalNames($: EngineInterface): Promise<string[]> {
   return rosterNames
 }
 
+const PHASE_WORD = { explore: 'explorando', implement: 'implementando', verify: 'verificando' } as const
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
 const limitLabel = (kind: string): string => LIMIT_LABEL[kind] ?? kind.replace(/_/g, ' ')
 
@@ -185,6 +187,7 @@ export function registerModPane(on: On): void {
       external: await read($, externalAtom),
       usage: await read($, usageAtom),
     }
+    const odd = await read($, oddAtom)
     const rows = agentRows(data)
     const share = featureShare(data.plan)
     const needs = needsRows(data, rows)
@@ -213,6 +216,14 @@ export function registerModPane(on: On): void {
               <Text dimColor>{`${share.done}/${share.total}`}</Text>
             </Box>
           )}
+          {odd.features.map(f => (
+            <Box key={`odd-${f.name}`} flexDirection="row" columnGap={1}>
+              <Text wrap="truncate-end">{f.name}</Text>
+              {bar(kit, `odd-bar-${f.name}`, f.percent, 'success')}
+              <Text dimColor>{`${f.done}/${f.total}`}</Text>
+              {odd.current === f.name && odd.phase !== null && <Text dimColor>{PHASE_WORD[odd.phase]}</Text>}
+            </Box>
+          ))}
           {rows.length === 0
             ? empty('work-0', 'Nenhum agente ativo.')
             : rows.map((row, at) => {

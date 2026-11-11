@@ -72,6 +72,7 @@ import {
   spawnWithTier,
 } from './delegation'
 import { registerModPane } from './mod-pane'
+import { oddAfterPlan, oddCommand, oddStart, oddToolCall, registerOdd } from './odd'
 import { proxyNote, startProxies } from './proxies'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
@@ -1714,9 +1715,11 @@ export const register: Register = (on, options) => {
   registerRules(on, options)
   registerDelegationHooks(on, options)
   registerModPane(on)
+  registerOdd(on, options)
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
+    await attempt('odd start', $, () => oddStart($, options))
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -1872,6 +1875,8 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'harness' }, async ($, e) => {
+    const oddText = await oddCommand($, options, e.args)
+    if (oddText !== null) return { text: oddText }
     const paneCmd = parsePaneCommand(e.args.replace(/\s+--yes\b/, ''))
     if (paneCmd !== null) return { text: await paneCommand($, options, paneCmd.verb, paneCmd.argv, /\s--yes\b/.test(` ${e.args}`)) }
     if (e.args.trim() === 'scope') {
@@ -1994,7 +1999,7 @@ export const register: Register = (on, options) => {
       return { result: `harness_plan: ${busy} worker${busy === 1 ? ' is' : 's are'} still running; wait for them before replacing the plan.` }
     }
     reviewed.clear()
-    return { result: await createPlan($, options, gate, runtime, parsed) }
+    return { result: (await createPlan($, options, gate, runtime, parsed)) + (await oddAfterPlan($, options, parsed.tasks.length)) }
   }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_plan: failed, see the debug log.' }))
 
   on('tool.call', { tool: TOOL_RUN }, async ($, e) => {
@@ -2062,7 +2067,7 @@ export const register: Register = (on, options) => {
         noteToolCall($, agentId, describeTool(String(e.tool), e as unknown as Record<string, unknown>)),
       )
     }
-    return next(e)
+    return oddToolCall($, options, e, next)
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
