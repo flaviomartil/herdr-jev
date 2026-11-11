@@ -280,3 +280,15 @@ test('odd: tool.call with ODD on and no open feature adds at most 1 ms', ON, asy
   timings.on = await timeBash($)
   expect(timings.on - (timings.off ?? 0)).toBeLessThanOrEqual(1)
 })
+
+test('odd: a multi-line Bash command is never recorded as evidence', ON, async ($, on) => {
+  reset()
+  const w = world(on)
+  w.ok.add('bun test\ntrue')
+  await start($)
+  await cmd($, 'feature login build login')
+  await tool($, ADD, { title: 'a', spec: 'S1' })
+  await tool($, 'Bash', { command: 'bun test\ntrue' })
+  const out = await tool($, DONE, { task: 'T1', evidence: { type: 'test', value: 'bun test true' } })
+  expect(String(out.result)).toContain('stays open')
+})

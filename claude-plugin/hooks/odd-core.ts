@@ -170,7 +170,7 @@ export async function verifyEvidence(ev: Evidence, ports: EvidencePorts, created
       : { ok: false, line: "", note: "none of the cited files changed in git after the feature was opened" };
   }
   const cmd = normalizeCommand(ev.value);
-  if (!isTestCommand(cmd)) return { ok: false, line: "", note: "only test, typecheck, lint or validate commands count as evidence" };
+  if (!isTestCommand(ev.value)) return { ok: false, line: "", note: "only test, typecheck, lint or validate commands count as evidence" };
   return ports.ranOk(cmd)
     ? { ok: true, line: `${ev.type} ${cmd} exit 0`, note: "exit 0 recorded this session" }
     : { ok: false, line: "", note: "no observed run of this command with exit 0 in this session" };
@@ -182,7 +182,19 @@ const TEST_START = new RegExp(String.raw`^(?:[A-Za-z_]\w*=\S+\s+)*(?:cd\s+\S+\s*
 const EXPLORE_TOOLS = new Set(["Read", "Grep", "Glob", "LS", "NotebookRead"]);
 const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 
-export const isTestCommand = (command: string): boolean => TEST_START.test(command) && !/[;|&`]|\$\(/.test(command.replace(/^cd\s+\S+\s*&&\s*/, ""));
+const ENV_ALLOWED = new Set(["CI", "NODE_ENV", "FORCE_COLOR"]);
+export function isTestCommand(command: string): boolean {
+  if (/[\r\n]/.test(command)) return false;
+  let rest = command.trim().replace(/^cd\s+\S+\s*&&\s*/, "");
+  for (;;) {
+    const m = rest.match(/^([A-Za-z_]\w*)=\S*\s+/);
+    if (m === null) break;
+    if (!ENV_ALLOWED.has(m[1] as string)) return false;
+    rest = rest.slice(m[0].length);
+  }
+  if (/[;|&`<>]|\$\(/.test(rest) || /(^|\s)(--help|--version|-h|-v|-V)(\s|$)/.test(rest)) return false;
+  return new RegExp(String.raw`^(?:${TEST_BODY})(\s|$)`).test(rest);
+}
 
 export function inferPhase(tool: string, command?: string): Phase | undefined {
   if (EXPLORE_TOOLS.has(tool)) return "explore";

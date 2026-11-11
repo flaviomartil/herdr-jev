@@ -48,6 +48,10 @@ test("evidence needs a positive observed check", async () => {
   expect((await v({ type: "command", value: "true" }, ports({ ranOk: () => true }))).ok).toBe(false);
   expect((await v({ type: "command", value: "echo bun test" }, ports({ ranOk: () => true }))).ok).toBe(false);
   expect((await v({ type: "command", value: "bun test || true" }, ports({ ranOk: () => true }))).ok).toBe(false);
+  for (const bad of ["bun test\ntrue", "bun test --help", "bun test -h", "bun test --version", "bun test -v", "PATH=/x bun test", "CI=1 PATH=/x bun test"]) {
+    expect((await v({ type: "test", value: bad }, ports({ ranOk: () => true }))).ok).toBe(false);
+  }
+  expect((await v({ type: "test", value: "CI=1 NODE_ENV=test bun test" }, ports({ ranOk: () => true }))).ok).toBe(true);
   expect((await v({ type: "diff", value: "a.ts b.ts" }, ports({ changed: async (f, t) => f.length === 2 && t === 1000 }))).ok).toBe(true);
 });
 

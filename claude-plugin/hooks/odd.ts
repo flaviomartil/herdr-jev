@@ -319,7 +319,7 @@ export async function oddToolCall($: EngineInterface, options: PluginOptions, e:
     if (warn !== null) $.ui.toast(warn)
   }
   const out = await next(e)
-  if (command !== undefined && out.deny === undefined) {
+  if (command !== undefined && out.deny === undefined && !/[\r\n]/.test(command)) {
     if (ran.size >= RAN_CAP) ran.delete(ran.keys().next().value as string)
     ran.set(normalizeCommand(command), out.isError !== true)
   }
