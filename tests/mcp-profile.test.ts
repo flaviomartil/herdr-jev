@@ -19,7 +19,7 @@ describe("mcp-profile capability tags", () => {
 
   it("maps task keywords to tags, ignoring case and accents", () => {
     expect(keywordCapabilityTags("Pesquise a documentação do Playwright e gere screenshot da tela de login"))
-      .toEqual(["context", "docs", "design", "browser"]);
+      .toEqual(["docs", "design", "browser"]);
     expect(keywordCapabilityTags("DASHBOARD de KPI e métricas")).toEqual(["bi"]);
     expect(keywordCapabilityTags("Treinar LoRA em GPU")).toEqual(["cloud-gpu"]);
     expect(keywordCapabilityTags("Lembrar a decisão de arquitetura da sessão anterior")).toEqual(["memory", "context"]);
@@ -28,6 +28,29 @@ describe("mcp-profile capability tags", () => {
 
   it("returns no tags for a plain edit", () => {
     expect(keywordCapabilityTags("Ajuste o typo no README da pasta")).toEqual([]);
+  });
+
+  it("does not tag generic words that only share a stem with a capability", () => {
+    expect(keywordCapabilityTags("fix error message in the parser")).toEqual([]);
+    expect(keywordCapabilityTags("Fix the repo bug in the parser")).toEqual([]);
+    expect(keywordCapabilityTags("Change the interface copy of the form")).toEqual([]);
+    expect(keywordCapabilityTags("Run the desktop build script")).toEqual([]);
+    expect(keywordCapabilityTags("Use the memory profiler on the build")).toEqual([]);
+    expect(keywordCapabilityTags("Plot a graph of the sales results")).toEqual([]);
+    expect(keywordCapabilityTags("Check the sequential execution order")).toEqual([]);
+    expect(keywordCapabilityTags("Remove the social login button")).toEqual([]);
+    expect(keywordCapabilityTags("Fix the candidate selection algorithm")).toEqual([]);
+    expect(keywordCapabilityTags("Add a media query for mobile")).toEqual([]);
+    expect(keywordCapabilityTags("Explain the security error message to the user")).toEqual([]);
+  });
+
+  it("tags the phrases that carry a capability", () => {
+    expect(keywordCapabilityTags("Enviar e-mail de confirmação ao cliente")).toEqual(["messaging"]);
+    expect(keywordCapabilityTags("Montar design system do app")).toEqual(["design"]);
+    expect(keywordCapabilityTags("Avaliação do modelo com o conjunto de testes")).toEqual(["evaluation"]);
+    expect(keywordCapabilityTags("Explore o codebase e mapeie a arquitetura")).toEqual(["context"]);
+    expect(keywordCapabilityTags("Run the sequential thinking plan step by step")).toEqual(["reasoning"]);
+    expect(keywordCapabilityTags("Open the Windows PowerShell console")).toEqual(["windows"]);
   });
 
   it("derives tags from triage research and effort", () => {

@@ -26,20 +26,20 @@ export interface CapabilityDecision {
 }
 
 const TASK_PATTERNS: Record<CapabilityTag, RegExp> = {
-  memory: /\b(memor(ia|ias|y|ies)|lembr\w*|remind\w*|recall|remember)\b/,
-  context: /\b(contexto|context|codebase|repos?|reposit\w*|arquitetur\w*|architect\w*|grafo|graph|explor\w*|pesquis\w*|research\w*|investig\w*)\b/,
+  memory: /\b(memoria (de |do |da )?(sessao|sessoes|projeto|projetos)|session memory|project memory|lembr\w* (a |o |da |do )?(decisao|decisoes|sessao|sessoes|preferencia|preferencias)|recall)\b/,
+  context: /\b(codebase|arquitetur\w*|architect\w*|grafo (de |do )?(codigo|dependencias)|code graph|knowledge graph|pesquis\w* (no|na|em) (o |a )?(codigo|codebase|projeto)|explor\w* (o |a )?(codebase|projeto|project))\b/,
   docs: /\b(docs?|documentac\w*|documentation|manual|bibliotec\w*|library|sdk)\b/,
-  design: /\b(design|mockups?|prototip\w*|layout|interface|tela|telas|screens?|css|visual|ui|ux)\b/,
-  browser: /\b(browser|navegador\w*|playwright|cypress|e2e|scrap\w*|crawl\w*|screenshots?|pagina\w*|web ?page)\b/,
-  bi: /\b(bi|dashboards?|dax|kpi\w*|metric\w*|metrica\w*|relatorios?)\b/,
-  windows: /\b(windows|powershell|wsl|desktop)\b/,
-  messaging: /\b(mensagens?|message\w*|messaging|chats?|e-?mails?|sms|slack|telegram|inbox)\b/,
-  media: /\b(imagens?|images?|videos?|audios?|midia|media|gif|ffmpeg)\b/,
+  design: /\b(design system|design visual|design de (tela|telas|interface)|mockups?|prototip\w*|wireframes?|layout|css|ux|telas?|screens?)\b/,
+  browser: /\b(browser|navegador\w*|playwright|cypress|e2e|scrap\w*|crawl\w*|screenshots?|pagina web|web ?page)\b/,
+  bi: /\b(bi|dashboards?|dax|kpis?|metricas? de negocio|business metrics)\b/,
+  windows: /\b(windows|powershell|wsl)\b/,
+  messaging: /\b((enviar|envie|enviando|send|sending|reply|responder)\s+(\w+\s+){0,3}(mensagem|mensagens|messages?|e-?mails?|sms|chats?)|slack|telegram|sms)\b/,
+  media: /\b(imagem|imagens|images?|videos?|audios?|midia|gif|ffmpeg)\b/,
   "cloud-gpu": /\b(gpus?|cuda|vram|fine-?tun\w*|lora|treino\w*|training|inferenc\w*)\b/,
-  reasoning: /\b(passo a passo|step by step|sequential|raciocin\w*|think through)\b/,
-  orchestration: /\b(herdr|orquestr\w*|orchestrat\w*|subagent\w*|subagente\w*|delegat\w*|triad\w*)\b/,
-  evaluation: /\b(evaluat\w*|avalia\w*|avaliac\w*|benchmarks?|judge)\b/,
-  social: /\b(vagas?|candidat\w*|recrut\w*|jobs?|networking|rede profissional|social)\b/,
+  reasoning: /\b(passo a passo|step by step|sequential thinking|pensamento sequencial|raciocin\w*|think through)\b/,
+  orchestration: /\b(herdr|orquestr\w*|orchestrat\w*|subagent\w*|subagente\w*|triad\w*|delegat\w* (a|to|para) (um |uma |an? )?(sub)?agent\w*)\b/,
+  evaluation: /\b(avaliac\w* do modelo|avalia\w* (o |a )?(modelo|modelos|model|respostas?)|model evaluation|model benchmarks?)\b/,
+  social: /\b(vagas?|recrut\w*|rede profissional|networking|job (search|board|posting)s?)\b/,
 };
 
 const CWD_PATTERNS: Array<[CapabilityTag, RegExp]> = [

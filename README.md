@@ -318,7 +318,7 @@ Tag vocabulary, in output order: `memory`, `context`, `docs`, `design`, `browser
 
 | Source | Rule |
 |---|---|
-| Task keywords | Word patterns per tag, case and accent insensitive (for example `documentação` gives `docs`, `screenshot` gives `browser`). |
+| Task keywords | Phrase or word patterns per tag, case and accent insensitive (for example `documentação` gives `docs`, `screenshot` gives `browser`, `enviar mensagem` gives `messaging`). Generic words that only share a stem do not match: `error message`, `repo`, `interface`, `desktop`, `memory`, `graph`, `candidate`. |
 | Jev triage | The existing `triage` decision: `needsResearch` gives `context`; effort `high` or `xhigh` gives `reasoning`. With `--offline` the deterministic fallback is used. |
 | Working directory | Top-level markers only: `playwright.config.*` or `cypress.config.*` gives `browser`; `*.pbix` or `*.pbit` gives `bi`; `components.json` or `.storybook` gives `design`. |
 
