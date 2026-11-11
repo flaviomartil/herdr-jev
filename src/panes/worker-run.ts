@@ -1,11 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AGY_AUTH_EARLY } from "../failover/outcome/agy.js";
 import { redactSecrets } from "../herdr/pane-text.js";
 import { parseModelOverrides } from "../judge/index.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, runDir } from "./events.js";
 
 export type WorkerCli = "codex" | "agy" | "claude";
 
@@ -19,6 +19,7 @@ export interface InvocationInput {
   model: string;
   effort?: string;
   prompt: string;
+  resultFile?: string;
 }
 
 export interface InvocationDeps {
@@ -65,7 +66,8 @@ export function buildInvocation(input: InvocationInput, deps: InvocationDeps = {
     const target = codexTarget(input.model, deps);
     return {
       argv: ["codex", "exec", ...(target.profile ? ["-p", target.profile] : ["--model", target.model!]),
-        ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : []), "-"],
+        ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : []),
+        ...(input.resultFile ? ["--output-last-message", input.resultFile] : []), "-"],
       stdin: input.prompt,
     };
   }
@@ -96,12 +98,30 @@ export interface WorkerReport {
   code: number;
   outcome: "done" | "failed" | "timeout" | "interrupted";
   output: string;
+  result: string;
 }
 
 const MAX_OUT_EVENTS = 5000;
 const MAX_LINE = 600;
 const TAIL_LINES = 40;
 const TAIL_CHARS = 4000;
+const RESULT_CHARS = 8000;
+const RAW_LINES = 2000;
+
+export function cleanAnswer(lines: string[]): string {
+  const kept = lines.filter((l) => !/^hook: /.test(l));
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
+  const last = kept[kept.length - 1]?.trim() ?? "";
+  const prev = kept[kept.length - 2]?.trim() ?? "";
+  if (/^tokens used$/i.test(prev) && /^[\d.,]+$/.test(last)) kept.splice(-2);
+  else if (/^tokens?( used)?\s*[:=]/i.test(last)) kept.pop();
+  while (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
+  return kept.join("\n").trim();
+}
+
+export function boundResult(text: string): string {
+  return text.length > RESULT_CHARS ? text.slice(0, RESULT_CHARS) : text;
+}
 
 export function killGroup(pgid: number, signal: NodeJS.Signals): boolean {
   try {
@@ -122,6 +142,32 @@ function reportHerdr(env: NodeJS.ProcessEnv, cli: string, state: string, message
   }
 }
 
+function resetResult(file: string): void {
+  try {
+    writeFileSync(file, "", { mode: 0o600 });
+  } catch {
+    void 0;
+  }
+}
+
+function collectResult(resultFile: string, raw: string[]): string {
+  let fromFile = "";
+  try {
+    fromFile = readFileSync(resultFile, "utf8").trim();
+  } catch {
+    void 0;
+  }
+  const text = fromFile || cleanAnswer(raw);
+  if (text !== fromFile) {
+    try {
+      writeFileSync(resultFile, `${text}\n`, { mode: 0o600 });
+    } catch {
+      void 0;
+    }
+  }
+  return text;
+}
+
 export async function runWorker(opts: WorkerOptions): Promise<number> {
   return (await runWorkerDetailed(opts)).code;
 }
@@ -131,13 +177,16 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
   const echo = opts.echo ?? ((line: string) => process.stdout.write(`${line}\n`));
   const prompt = readFileSync(opts.promptFile, "utf8");
   let invocation: Invocation;
+  const resultFile = join(runDir(opts.runId, env), "result.txt");
   try {
-    invocation = buildInvocation({ cli: opts.cli, model: opts.model, effort: opts.effort, prompt }, { codexMap: opts.cli === "codex" ? loadCodexMap(env.HOME || homedir()) : undefined, codexProfileExists: (n) => codexProfileExists(n, env.HOME || homedir()) });
+    mkdirSync(runDir(opts.runId, env), { recursive: true, mode: 0o700 });
+    resetResult(resultFile);
+    invocation = buildInvocation({ cli: opts.cli, model: opts.model, effort: opts.effort, prompt, resultFile }, { codexMap: opts.cli === "codex" ? loadCodexMap(env.HOME || homedir()) : undefined, codexProfileExists: (n) => codexProfileExists(n, env.HOME || homedir()) });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     echo(message);
     if (opts.finalExit !== false) appendEvent(opts.runId, { type: "exit", code: 2, outcome: "failed", tail: message }, env);
-    return { code: 2, outcome: "failed", output: message };
+    return { code: 2, outcome: "failed", output: message, result: "" };
   }
   const [bin, ...args] = invocation.argv as [string, ...string[]];
   const shownArgs = args.map((a) => (a.startsWith("-p=") ? "-p=<prompt>" : a));
@@ -153,6 +202,7 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
     let outcome: "done" | "failed" | "timeout" | "interrupted" = "failed";
     let outCount = 0;
     const tail: string[] = [];
+    const raw: string[] = [];
 
     appendEvent(opts.runId, { type: "start", pid, pgid: pid, wrapperPid: process.pid, cli: opts.cli, model: opts.model, effort: opts.effort ?? null, argv: [bin, ...shownArgs], cwd: opts.cwd ?? process.cwd() }, env);
     reportHerdr(env, opts.cli, "working", `${opts.cli} ${opts.model}`);
@@ -188,9 +238,13 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
     };
     arm();
 
-    const line = (raw: string) => {
-      const text = redactSecrets(raw).slice(0, MAX_LINE);
+    const line = (rawLine: string, fromStdout = false) => {
+      const text = redactSecrets(rawLine).slice(0, MAX_LINE);
       echo(text);
+      if (fromStdout) {
+        raw.push(redactSecrets(rawLine));
+        if (raw.length > RAW_LINES) raw.shift();
+      }
       tail.push(text);
       if (opts.cli === "agy" && !authKilled && AGY_AUTH_EARLY.test(text)) stop("auth");
       if (tail.length > TAIL_LINES) tail.shift();
@@ -199,25 +253,25 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
         appendEvent(opts.runId, { type: "out", line: text }, env);
       }
     };
-    const splitter = () => {
+    const splitter = (fromStdout: boolean) => {
       let buf = "";
       return (chunk: Buffer) => {
         arm();
         buf += chunk.toString("utf8");
         let at = buf.indexOf("\n");
         while (at >= 0) {
-          line(buf.slice(0, at).replace(/\r$/, ""));
+          line(buf.slice(0, at).replace(/\r$/, ""), fromStdout);
           buf = buf.slice(at + 1);
           at = buf.indexOf("\n");
         }
         if (buf.length > 8192) {
-          line(buf);
+          line(buf, fromStdout);
           buf = "";
         }
       };
     };
-    child.stdout.on("data", splitter());
-    child.stderr.on("data", splitter());
+    child.stdout.on("data", splitter(true));
+    child.stderr.on("data", splitter(false));
 
     const onSignal = (sig: NodeJS.Signals) => {
       appendEvent(opts.runId, { type: "interrupted", signal: sig }, env);
@@ -237,11 +291,12 @@ export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerRepo
       if (outcome === "failed" && code === 0) outcome = "done";
       const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : authKilled ? 1 : code ?? 1;
       const joined = tail.join("\n");
+      const result = outcome === "done" ? boundResult(collectResult(resultFile, raw)) : "";
       if (opts.finalExit !== false) {
-        appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined }, env);
+        appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined, ...(result ? { result } : {}) }, env);
         reportHerdr(env, opts.cli, outcome === "done" ? "done" : "blocked", `${outcome} (${exitCode})`);
       }
-      resolve({ code: exitCode, outcome, output: joined });
+      resolve({ code: exitCode, outcome, output: joined, result });
     };
     child.on("error", (error) => {
       line(`spawn failed: ${error.message}`);

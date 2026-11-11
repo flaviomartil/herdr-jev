@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import { resetDelegation } from '../hooks/delegation'
+import { resetDelegation, waitWindowMs } from '../hooks/delegation'
 import { parsePaneCommand, summarizeEvents } from '../hooks/panes-core'
 import { wire } from './support'
 
@@ -81,6 +81,41 @@ test('panes: harness_wait reads events.jsonl and settles done and failed runs', 
   const done = JSON.parse(String((await call($, 'harness_wait', { runIds: [id] })).result)) as { results: { state: string; result: string }[]; pending: string[] }
   expect(done.results[0]).toMatchObject({ state: 'done', result: 'found it' })
   expect(done.pending).toEqual([])
+})
+
+test('panes: harness_wait with several ids returns both as pending when none finishes', on_, async ($, on) => {
+  const { seen } = setup(on)
+  await start($)
+  const out = await call($, 'harness_delegate', { tasks: [{ task: 'one', prefer: 'codex' }, { task: 'two', prefer: 'codex' }] })
+  const ids = (JSON.parse(String(out.result)) as { runs: { runId: string }[] }).runs.map(r => r.runId)
+  expect(ids).toHaveLength(2)
+  const waiting = call($, 'harness_wait', { runIds: ids, timeoutMs: 3000 })
+  await seen.clock.advance(4000)
+  const body = JSON.parse(String((await waiting).result)) as { results: { state: string }[]; pending: string[] }
+  expect(body.results.map(r => r.state)).toEqual(['running', 'running'])
+  expect(body.pending).toEqual(ids)
+})
+
+test('waitWindowMs keeps the wait inside the hook budget', () => {
+  expect(waitWindowMs(120_000, 10_000)).toBe(7_500)
+  expect(waitWindowMs(3_000, 10_000)).toBe(3_000)
+  expect(waitWindowMs(120_000, 1_000)).toBe(0)
+  expect(waitWindowMs(120_000, Number.POSITIVE_INFINITY)).toBe(120_000)
+})
+
+test('summarizeEvents prefers the exit result over the tail', () => {
+  const line = JSON.stringify({ t: 1, type: 'exit', code: 0, outcome: 'done', tail: 'noise', result: 'the answer' })
+  expect(summarizeEvents(line)).toMatchObject({ state: 'done', tail: 'noise', result: 'the answer' })
+})
+
+test('panes: harness_wait returns the exit result and not the tail', on_, async ($, on) => {
+  const { files } = setup(on)
+  await start($)
+  const out = await call($, 'harness_delegate', { tasks: [{ task: 'Find the config', prefer: 'codex' }] })
+  const id = (JSON.parse(String(out.result)) as { runs: { runId: string }[] }).runs[0]!.runId
+  files.set(EVENTS, `${JSON.stringify({ t: 1, type: 'exit', code: 0, outcome: 'done', tail: '', result: 'final answer' })}\n`)
+  const done = JSON.parse(String((await call($, 'harness_wait', { runIds: [id] })).result)) as { results: { result: string }[] }
+  expect(done.results[0]!.result).toBe('final answer')
 })
 
 test('panes: a timed out external run comes back failed with its outcome', on_, async ($, on) => {

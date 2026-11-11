@@ -25,6 +25,7 @@ const MAX_RUNS = 200
 const MAX_QUEUE = 100
 const WAIT_DEFAULT_MS = 120_000
 const EXT_POLL_MS = 1000
+const WAIT_MARGIN_MS = 2500
 const MODELS_FILE = '.config/jev/models.local.yml'
 const CLASSES: readonly string[] = ['explore', 'search', 'summary', 'mechanical', 'feature', 'fix', 'review', 'architecture']
 const WORKERS: readonly string[] = ['claude-subagent', 'codex', 'agy']
@@ -198,7 +199,7 @@ export async function registerDelegationTools($: EngineInterface, options: Plugi
   if (!delegationEnabled(options)) return
   await $.tool.register({
     name: 'harness_wait',
-    description: 'Wait for runs started by harness_delegate. Takes runIds, mode all or first, timeoutMs. Returns state and result per run.',
+    description: 'Wait for runs started by harness_delegate. Takes runIds, mode all or first, timeoutMs. Returns state and result per run; when it returns with a non-empty pending list, call it again with those runIds.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -353,7 +354,7 @@ async function refreshExternal($: EngineInterface, run: Run, options: PluginOpti
   }
   const sum = summarizeEvents(text)
   if (sum.state === 'running') return
-  if (sum.state === 'done') settle(run, 'done', sum.tail)
+  if (sum.state === 'done') settle(run, 'done', sum.result ?? sum.tail)
   else if (options.failover === true && sum.outcome !== 'interrupted' && !requestError(text) && (run.used += Math.max(1, attemptsIn(text)), true) && await advanceRun($, run, options, `${sum.outcome} ${sum.tail.slice(0, 80)}`)) return
   else settle(run, 'failed', `${sum.outcome}${sum.exitCode === null ? '' : ` (exit ${sum.exitCode})`}: ${sum.tail}`.slice(0, 4000))
   void publish($)
@@ -585,12 +586,17 @@ export async function noteTurnComplete($: EngineInterface, e: { agentId?: string
   await pump($, options).catch(() => undefined)
 }
 
-async function waitRuns($: EngineInterface, input: Record<string, unknown>, options: PluginOptions): Promise<string> {
+export function waitWindowMs(asked: number, budgetMs: number): number {
+  return Number.isFinite(budgetMs) ? Math.max(0, Math.min(asked, budgetMs - WAIT_MARGIN_MS)) : asked
+}
+
+async function waitRuns($: EngineInterface, input: Record<string, unknown>, options: PluginOptions, budgetMs = Infinity): Promise<string> {
   const ids = Array.isArray(input.runIds) ? input.runIds.filter((x): x is string => typeof x === 'string') : []
   if (ids.length === 0) return 'harness_wait: runIds must be a non-empty array.'
   const lost = ids.filter(id => !runs.has(id)).map(id => ({ runId: id, state: 'lost', result: 'run perdido (reload ou expirado)' }))
   const picked = ids.map(id => runs.get(id)).filter((r): r is Run => r !== undefined)
-  const timeout = typeof input.timeoutMs === 'number' && input.timeoutMs > 0 ? input.timeoutMs : WAIT_DEFAULT_MS
+  const asked = typeof input.timeoutMs === 'number' && input.timeoutMs > 0 ? input.timeoutMs : WAIT_DEFAULT_MS
+  const timeout = waitWindowMs(asked, budgetMs)
   const pending = picked.map(r => r.done)
   const joined = input.mode === 'first' ? Promise.race(pending) : Promise.all(pending).then(() => undefined)
   if (picked.some(r => r.ext !== undefined && !finished(r))) {
@@ -612,7 +618,7 @@ export function registerDelegationHooks(on: On, options: PluginOptions): void {
   on('tool.call', { tool: TOOL_WAIT }, async ($, e, next) => {
     if (e.agentId !== undefined) return { result: 'harness_wait: main session only.' }
     if (!delegationEnabled(options)) return { result: 'harness_wait: delegation is off (userConfig delegation).' }
-    return { result: await waitRuns($, e as unknown as Record<string, unknown>, options) }
+    return { result: await waitRuns($, e as unknown as Record<string, unknown>, options, next.budget.remainingMs) }
   }).catch(($, e, next) => (next.called ? next(e) : { result: 'harness_wait failed, see the debug log.' }))
 }
 

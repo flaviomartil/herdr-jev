@@ -2,8 +2,8 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createTestStateDir } from "../helpers";
-import { readEvents, summarize } from "../../src/panes/events";
-import { buildInvocation, runWorker } from "../../src/panes/worker-run";
+import { readEvents, runDir, summarize } from "../../src/panes/events";
+import { boundResult, buildInvocation, cleanAnswer, runWorker, runWorkerDetailed } from "../../src/panes/worker-run";
 import { makeFakes, mkTmp, waitFor } from "./fakes";
 
 const fakes = makeFakes();
@@ -116,4 +116,25 @@ test("grandchildren that ignore SIGTERM are SIGKILLed before the wrapper returns
   expect(code).toBe(124);
   const child = Number(readFileSync(pidFile, "utf8").trim());
   expect(await waitFor(() => { try { process.kill(child, 0); return false; } catch { return true; } }, 3000)).toBe(true);
+});
+
+test("codex gets --output-last-message when a result file is given", () => {
+  const inv = buildInvocation({ cli: "codex", model: "gpt-5-5", prompt: "p", resultFile: "/r/result.txt" }, { codexProfileExists: () => false });
+  expect(inv.argv).toEqual(["codex", "exec", "--model", "gpt-5-5", "--output-last-message", "/r/result.txt", "-"]);
+});
+
+test("cleanAnswer drops hook lines and the token footer", () => {
+  expect(cleanAnswer(["hook: Stop", "the answer", "line 2", "", "hook: Stop Completed", "tokens used", "20,404"])).toBe("the answer\nline 2");
+  expect(cleanAnswer(["only", "Tokens: 12"])).toBe("only");
+  expect(cleanAnswer(["hook: x"])).toBe("");
+  expect(boundResult("x".repeat(9000)).length).toBe(8000);
+});
+
+test("a successful worker carries its answer in the exit event and result.txt", async () => {
+  const env = fakes.env({ HERDR_JEV_STATE_DIR: state.stateDir });
+  const report = await runWorkerDetailed({ runId: "r-result", cli: "claude", model: "claude-haiku-5-5", promptFile, cwd: work, env, echo: () => undefined });
+  expect(report.result).toBe("out from claude");
+  const sum = summarize("r-result", readEvents("r-result", env));
+  expect(sum.result).toBe("out from claude");
+  expect(readFileSync(join(runDir("r-result", env), "result.txt"), "utf8").trim()).toBe("out from claude");
 });

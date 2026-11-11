@@ -17,6 +17,7 @@ export interface RunSummary {
   pgid: number | null;
   exitCode: number | null;
   tail: string;
+  result: string;
   detached: boolean;
   startedAt: number | null;
   endedAt: number | null;
@@ -76,6 +77,7 @@ export function summarize(runId: string, events: RunEvent[]): RunSummary {
     pgid: typeof start?.pgid === "number" ? start.pgid : null,
     exitCode: typeof exit?.code === "number" ? exit.code : null,
     tail,
+    result: typeof exit?.result === "string" ? exit.result : "",
     detached: events.some((e) => e.type === "detached"),
     startedAt: start?.t ?? null,
     endedAt: exit?.t ?? interrupted?.t ?? null,

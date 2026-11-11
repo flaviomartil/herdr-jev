@@ -1,5 +1,5 @@
 export type ExtState = 'running' | 'done' | 'failed'
-export type ExtSummary = { state: ExtState; outcome: string; exitCode: number | null; tail: string }
+export type ExtSummary = { state: ExtState; outcome: string; exitCode: number | null; tail: string; result?: string }
 
 export function summarizeEvents(text: string): ExtSummary {
   let exit: Record<string, unknown> | undefined
@@ -18,11 +18,12 @@ export function summarizeEvents(text: string): ExtSummary {
     else if (ev.type === 'out' && typeof ev.line === 'string') out.push(ev.line)
   }
   const tail = typeof exit?.tail === 'string' ? exit.tail : out.slice(-30).join('\n')
+  const result = typeof exit?.result === 'string' && exit.result !== '' ? exit.result : undefined
   const code = typeof exit?.code === 'number' ? exit.code : null
   if (interrupted) return { state: 'failed', outcome: 'interrupted', exitCode: code, tail }
   if (exit === undefined) return { state: 'running', outcome: 'running', exitCode: null, tail }
   const outcome = typeof exit.outcome === 'string' ? exit.outcome : code === 0 ? 'done' : 'failed'
-  return { state: outcome === 'done' ? 'done' : 'failed', outcome, exitCode: code, tail }
+  return { state: outcome === 'done' ? 'done' : 'failed', outcome, exitCode: code, tail, ...(result === undefined ? {} : { result }) }
 }
 
 export type PaneCommand = { verb: string; argv: string[] }
