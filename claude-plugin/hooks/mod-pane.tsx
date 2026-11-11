@@ -11,7 +11,7 @@ import type { Activity } from '../types'
 import { roleMarkOf } from './art-core'
 import type { RoleMark } from './art-core'
 import { Art } from './pane-art'
-import { currentTick, emptyCrew, reducedMotion, resetCrew } from './pane-crew'
+import { currentTick, emptyCrew, reducedMotion, resetCrew, syncFrames } from './pane-crew'
 import { buildCrew, headerText, reportLines } from './pane-rows'
 import type { CrewInput, CrewModel } from './pane-rows'
 
@@ -50,7 +50,7 @@ const delegationsAtom = atom({ plugin: 'harness', key: 'delegations' } as const,
 const rosterIdsAtom = atom({ plugin: 'harness', key: 'rosterIds' } as const, {}, { shape: 'roster-1' })
 const oddAtom = atom({ plugin: 'harness', key: 'odd' } as const, { repo: '', current: null, features: [], phase: null } as OddView, { shape: 'odd-1' })
 const proposalsAtom = atom({ plugin: 'harness', key: 'proposals' } as const, [], { shape: 'proposals-1' })
-const expandedAtom = atom({ plugin: 'harness', key: 'proposalExpanded' } as const, '')
+const proposalExpandedAtom = atom({ plugin: 'harness', key: 'proposalExpanded' } as const, '')
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 
 const activityAtom = atom({ plugin: 'harness', key: 'activity' } as const, {}, { shape: 'activity-1' })
@@ -254,7 +254,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
     const columns = Math.max(24, e.props.bodyColumns)
     const withFace = columns >= 44
     const data = await readModData($)
-    const expanded = await read($, expandedAtom)
+    const openProposal = await read($, proposalExpandedAtom)
     const now = await $.clock.now()
     const odd = await read($, oddAtom)
     const proposals = visibleProposals(await read($, proposalsAtom))
@@ -271,6 +271,13 @@ export function registerModPane(on: On, options: PluginOptions): void {
     )
     const isTerminal = e.surface === 'terminal'
     const artKit = { Box, Text, Raster: isTerminal ? table.Raster : undefined, Svg: isTerminal ? undefined : table.Svg }
+    const drawnArt =
+      isTerminal && withFace
+        ? model.pageRows
+            .filter(v => v.signal !== 'done' && v.signal !== 'failed')
+            .map(v => ({ key: `av-${v.id}`, spec: { kind: v.kind, state: v.artState, role: v.role, lead: v.isLead, animate: v.signal === 'running' && byId.get(v.id)?.state !== 'queued' } }))
+        : []
+    syncFrames($, options, MOD_PANE_ID, drawnArt)
     const share = featureShare(data.plan)
     const needs = needsRows(data, rows)
     const limits = data.usage?.limits ?? []
@@ -372,7 +379,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
                 const doing = act !== null && act.line !== '' ? act.line : row.detail
                 return (
                   <Box key={row.id} flexDirection="row" columnGap={1} marginTop={1} paddingLeft={view.depth * 2}>
-                    {withFace && Art(artKit, { key: `av-${row.id}`, kind: row.kind, state: view.artState, role: row.role, lead: view.isLead, ageMs: view.ageMs, tick: currentTick(), reducedMotion: reducedMotion(options), fallback: avatar(row.kind, row.id) })}
+                    {withFace && Art(artKit, { key: `av-${row.id}`, kind: row.kind, state: view.artState, role: row.role, lead: view.isLead, ageMs: view.ageMs, animate: view.signal === 'running' && row.state !== 'queued', tick: currentTick(), reducedMotion: reducedMotion(options), fallback: avatar(row.kind, row.id) })}
                     <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                       <Box flexDirection="row" columnGap={1}>
                         {toggle}
@@ -430,7 +437,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
                 <Button key={`no-${p.id}`} label="Reject" onPress={() => void proposalAction($, 'reject', p.id)} />
                 <Button key={`df-${p.id}`} plain dimColor label="View diff" onPress={() => void toggleDiff($, p.id)} />
               </Box>
-              {expanded === p.id && p.diff.split('\n').slice(0, 14).map((line, i) => <Text key={`d${p.id}-${i}`} dimColor wrap="truncate-end">{line}</Text>)}
+              {openProposal === p.id && p.diff.split('\n').slice(0, 14).map((line, i) => <Text key={`d${p.id}-${i}`} dimColor wrap="truncate-end">{line}</Text>)}
             </Box>
           ))}
           {proposals.hidden > 0 && empty('prop-more', `+${proposals.hidden} mais`)}

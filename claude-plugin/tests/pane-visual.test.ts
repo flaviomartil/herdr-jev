@@ -227,29 +227,78 @@ const shot = async ($: Engine) => {
   return cells
 }
 
-test('motion: the frame ticks only while an agent runs and reduced motion is static', live, async ($, on) => {
+type Blit = { requestId: string; key: string; cells: string }
+const watchBlits = (on: Parameters<typeof wire>[0]) => {
+  const blits: Blit[] = []
+  on('ui.blit', (_$, e) => {
+    blits.push(e as unknown as Blit)
+    return { value: {} } as never
+  })
+  return blits
+}
+
+test('frames blit the keyed raster of a running agent at 8 fps, without redrawing', live, async ($, on) => {
   const seen = setup(on)
+  const blits = watchBlits(on)
   await start($)
   await seed($, 1)
   await seen.clock.advance(300)
-  const first = await shot($)
+  const ui = await jevUi($)
+  const before = blits.length
   await seen.clock.advance(125)
-  const second = await shot($)
-  expect(second).not.toBe(first)
   await seen.clock.advance(125)
-  expect(await shot($)).toBe(first)
+  await seen.clock.advance(125)
+  const frames = blits.slice(before)
+  expect(frames).toHaveLength(3)
+  expect(frames.every(b => b.requestId === 'jev' && b.key === 'av-sub-0')).toBe(true)
+  expect(frames[0]?.cells).not.toBe(frames[1]?.cells)
+  expect(frames[0]?.cells).toBe(frames[2]?.cells)
+  await ui.unmount()
 })
 
-test('reduced motion keeps every frame identical', { options: { delegation: true, reducedMotion: true } }, async ($, on) => {
+test('frames stop when no drawn agent is running and nothing animates for slow agents', live, async ($, on) => {
   const seen = setup(on)
+  const blits = watchBlits(on)
+  await start($)
+  await seed($, 1)
+  await seen.clock.advance(300)
+  const ui = await jevUi($)
+  await seen.clock.advance(250)
+  expect(blits.length).toBeGreaterThan(0)
+  await seen.clock.advance(35_000)
+  const settled = blits.length
+  await seen.clock.advance(2000)
+  expect(blits.length).toBe(settled)
+  await ui.unmount()
+})
+
+test('a waiting agent does not animate', live, async ($, on) => {
+  const seen = setup(on)
+  const blits = watchBlits(on)
+  on('tool.check', { tool: 'Write' }, () => ({ decision: 'ask' }) as never)
+  await start($)
+  await $.tool.call({ tool: 'Read', tool_use_id: 'r', file_path: '/a', agentId: 'sub-0' } as never)
+  await $.tool.check({ tool: 'Write', tool_use_id: 'w', file_path: '/a', agentId: 'sub-0' } as never)
+  await seen.clock.advance(300)
+  const ui = await jevUi($)
+  const base = blits.length
+  await seen.clock.advance(1000)
+  expect(blits.length).toBe(base)
+  await ui.unmount()
+})
+
+test('reduced motion never blits and keeps the frame static', { options: { delegation: true, reducedMotion: true } }, async ($, on) => {
+  const seen = setup(on)
+  const blits = watchBlits(on)
   await start($)
   await seed($, 1)
   await seen.clock.advance(300)
   const first = await shot($)
-  for (let i = 0; i < 5; i += 1) {
-    await seen.clock.advance(125)
-    expect(await shot($)).toBe(first)
-  }
+  const ui = await jevUi($)
+  await seen.clock.advance(1000)
+  expect(blits).toHaveLength(0)
+  await ui.unmount()
+  expect(await shot($)).toBe(first)
 })
 
 test('a waiting approval shows the bang and a toast, and clears on the next tool call', live, async ($, on) => {

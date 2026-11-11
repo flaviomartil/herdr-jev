@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { CANVAS_HEIGHT, CANVAS_WIDTH, composeGrid, frameFor, greyOut, packCells, paletteFor, quadrantCell, rasterOf, rasterRows, roleMarkOf, svgOf } from "../src/identity/art";
+import { CANVAS_HEIGHT, artCacheSize, cachedArt, CANVAS_WIDTH, composeGrid, frameFor, greyOut, packCells, paletteFor, quadrantCell, rasterOf, rasterRows, roleMarkOf, svgOf } from "../src/identity/art";
 import type { ArtKind, ArtState } from "../src/identity/art";
 
 const rows = (kind: ArtKind, state: ArtState, extra: { frame?: number; role?: "explore" | "implement" | "review" | "mechanical"; lead?: boolean; ageMs?: number } = {}) => {
@@ -101,4 +101,16 @@ test("art: svg is crisp, merges runs and is sized from the grid", () => {
 
 test("art: the plugin copy is byte-identical to the source", () => {
   expect(readFileSync("claude-plugin/hooks/art-core.ts", "utf8")).toBe(readFileSync("src/identity/art.ts", "utf8"));
+});
+
+test("art: cached art is reused per kind, state, role, lead, frame and sparkle", () => {
+  const spec = { kind: "haiku", state: "running", frame: 1, role: "explore", lead: true } as const;
+  const first = cachedArt(spec);
+  const size = artCacheSize();
+  expect(cachedArt({ ...spec, frame: 3 })).toBe(first);
+  expect(cachedArt({ ...spec, ageMs: 10 })).toBe(first);
+  expect(artCacheSize()).toBe(size);
+  expect(cachedArt({ ...spec, frame: 0 })).not.toBe(first);
+  expect(first.packed).toBe(packCells(rasterOf(composeGrid(spec)).cells));
+  expect(cachedArt({ kind: "claude", state: "done", ageMs: 10 })).not.toBe(cachedArt({ kind: "claude", state: "done", ageMs: 9000 }));
 });

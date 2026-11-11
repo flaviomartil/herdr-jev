@@ -122,6 +122,7 @@ export type ArtSpec = {
   role?: RoleMark | null;
   lead?: boolean;
   ageMs?: number;
+  animate?: boolean;
 };
 
 export function emptyGrid(): PixelGrid {
@@ -301,3 +302,26 @@ export function roleMarkOf(judgeClass: string | null | undefined): RoleMark | nu
 export function frameFor(tick: number, reducedMotion: boolean): number {
   return reducedMotion ? 0 : tick % 2;
 }
+
+export type CachedArt = { columns: number; rows: number; packed: string; svg: string };
+
+const artCache = new Map<string, CachedArt>();
+
+export function artKey(spec: ArtSpec): string {
+  const sparkle = spec.state === "done" && (spec.ageMs ?? Number.POSITIVE_INFINITY) < SPARKLE_MS;
+  return [spec.kind, spec.state, spec.role ?? "-", spec.lead ? "L" : "-", (spec.frame ?? 0) % 2, sparkle ? "S" : "-"].join("|");
+}
+
+export function cachedArt(spec: ArtSpec): CachedArt {
+  const key = artKey(spec);
+  let hit = artCache.get(key);
+  if (hit === undefined) {
+    const grid = composeGrid(spec);
+    const { columns, rows, cells } = rasterOf(grid);
+    hit = { columns, rows, packed: packCells(cells), svg: svgOf(grid, 4) };
+    artCache.set(key, hit);
+  }
+  return hit;
+}
+
+export const artCacheSize = (): number => artCache.size;

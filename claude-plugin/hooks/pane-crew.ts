@@ -1,6 +1,8 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Timer } from 'claude-code'
 import { snapshotActivity } from './activity'
+import { cachedArt, frameFor } from './art-core'
+import type { ArtSpec } from './art-core'
 import { SIGNAL_VIEW } from './pane-signal'
 import type { CrewState, FlowProgressState } from '../types'
 
@@ -29,6 +31,7 @@ export function resetCrew(): void {
   crew = emptyCrew()
   misses = new Map()
   tick = 0
+  drawn = []
   frameTimer?.cancel()
   frameTimer = null
   reconcileTimer?.cancel()
@@ -116,30 +119,45 @@ export async function reconcileNow($: EngineInterface): Promise<void> {
   }
 }
 
-export function ensureCrewTimers($: EngineInterface, options: PluginOptions): void {
-  if (!reducedMotion(options) && frameTimer === null) {
-    frameTimer = $.clock.every(FRAME_MS, () => {
-      if (liveIds().length === 0) {
-        frameTimer?.cancel()
-        frameTimer = null
-        return
-      }
-      tick += 1
-      try {
-        $.ui.invalidate('ui.render')
-      } catch {
-        return
-      }
-    })
+export type DrawnArt = { key: string; spec: ArtSpec }
+
+let drawn: DrawnArt[] = []
+let drawnPane = ''
+
+const animated = (): DrawnArt[] => drawn.filter(d => d.spec.state === 'running' && d.spec.animate === true)
+
+export function syncFrames($: EngineInterface, options: PluginOptions, paneId: string, entries: DrawnArt[]): void {
+  drawn = entries
+  drawnPane = paneId
+  if (reducedMotion(options) || animated().length === 0) {
+    frameTimer?.cancel()
+    frameTimer = null
+    return
   }
-  if (reconcileTimer === null) {
-    reconcileTimer = $.clock.every(RECONCILE_MS, () => {
-      if (liveIds().length === 0) {
-        reconcileTimer?.cancel()
-        reconcileTimer = null
-        return
-      }
-      void reconcileNow($)
-    })
-  }
+  if (frameTimer !== null) return
+  frameTimer = $.clock.every(FRAME_MS, () => {
+    const running = animated()
+    if (running.length === 0) {
+      frameTimer?.cancel()
+      frameTimer = null
+      return
+    }
+    tick += 1
+    for (const entry of running) {
+      const art = cachedArt({ ...entry.spec, frame: frameFor(tick, false) })
+      void $.ui.blit({ requestId: drawnPane, key: entry.key, cells: art.packed, columns: art.columns, rows: art.rows }).catch(() => undefined)
+    }
+  })
+}
+
+export function ensureCrewTimers($: EngineInterface, _options: PluginOptions): void {
+  if (reconcileTimer !== null) return
+  reconcileTimer = $.clock.every(RECONCILE_MS, () => {
+    if (liveIds().length === 0) {
+      reconcileTimer?.cancel()
+      reconcileTimer = null
+      return
+    }
+    void reconcileNow($)
+  })
 }

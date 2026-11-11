@@ -1,5 +1,5 @@
 import type { ArtSpec } from './art-core'
-import { composeGrid, frameFor, packCells, rasterOf, svgOf } from './art-core'
+import { cachedArt, frameFor } from './art-core'
 import type { Avatar } from './identity-core'
 import { avatarRuns } from './identity-core'
 
@@ -11,8 +11,9 @@ export const ART_COLUMNS = 7
 export const ART_ROWS = 5
 
 export function artFrame(request: ArtRequest): ArtSpec {
-  const { kind, state, role, lead, ageMs } = request
-  return { kind, state, role, lead, ageMs, frame: frameFor(request.tick, request.reducedMotion) }
+  const { kind, state, role, lead, ageMs, animate } = request
+  const frame = state === 'running' ? frameFor(request.tick, request.reducedMotion) : 0
+  return { kind, state, role, lead, ageMs, animate, frame }
 }
 
 export function Art(kit: ArtKit, request: ArtRequest) {
@@ -20,12 +21,11 @@ export function Art(kit: ArtKit, request: ArtRequest) {
   const spec = artFrame(request)
   const alt = `${spec.kind} agent, ${spec.state}`
   if (Raster !== undefined) {
-    const grid = composeGrid(spec)
-    const { columns, rows, cells } = rasterOf(grid)
-    return <Raster key={request.key} columns={columns} rows={rows} cells={packCells(cells)} />
+    const art = cachedArt(spec)
+    return <Raster key={request.key} columns={art.columns} rows={art.rows} cells={art.packed} />
   }
   if (Svg !== undefined) {
-    return <Svg key={request.key} source={svgOf(composeGrid(spec), 4)} alt={alt} width={56} height={40} />
+    return <Svg key={request.key} source={cachedArt(spec).svg} alt={alt} width={56} height={40} />
   }
   return (
     <Box key={request.key} flexDirection="column" width={6} flexShrink={0}>
