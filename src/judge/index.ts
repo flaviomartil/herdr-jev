@@ -62,13 +62,14 @@ const TIERS: Record<Level, { claude: ClaudeTier; codex: keyof Models["codex"]; a
   top: { claude: "fable", codex: "astra", agy: "pro" },
 };
 const RULES: { cls: JudgeClass; re: RegExp }[] = [
-  { cls: "review", re: /\b(review|reviewing|revis[aã]o|revisar|audit|auditar|code review)\b/i },
-  { cls: "fix", re: /\b(fix|bug|broken|regression|corrig\w*|conserta\w*|crash)\b/i },
-  { cls: "feature", re: /\b(implement\w*|add|create|build|refactor\w*|feature|write|cria\w*|adiciona\w*|escrev\w*|migrat\w*)\b/i },
-  { cls: "mechanical", re: /\b(rename|renomea\w*|bulk|convert\w*|format|reformat\w*|scaffold\w*|replace all|mechanical|boilerplate)\b/i },
-  { cls: "summary", re: /\b(summari[sz]e|summary|tl;?dr|resum\w*|digest)\b/i },
-  { cls: "search", re: /\b(search|grep|find|locate|list|where|procura\w*|busca\w*|encontra\w*|onde)\b/i },
-  { cls: "explore", re: /\b(explore|investigate|inspect|read|understand|explora\w*|entend\w*|le[ir]\b)/i },
+  { cls: "review", re: /\b(?:review|revis|audit|code review)/i },
+  { cls: "summary", re: /\b(?:summari[sz]|summary|tl;?dr|resum|sumariz|sintetiz|digest)/i },
+  { cls: "fix", re: /\b(?:fix|corrig|conserta|resolv|regression|broken|hotfix)/i },
+  { cls: "feature", re: /\b(?:implement|refactor|refator|migrate\b|migrar\b|feature|funcionalidade|desenvolv|develop)/i },
+  { cls: "mechanical", re: /\b(?:rename|renomea|bulk|convert|format|reformat|scaffold|replace all|mechanical|boilerplate|substitu)/i },
+  { cls: "feature", re: /\b(?:add|create|write|cria|adicion|escrev|escrit|insert|inclu)/i },
+  { cls: "search", re: /\b(?:search|grep|find|locate|list|where|procur|busc|encontr|onde|lista|liste)/i },
+  { cls: "explore", re: /\b(?:explor|investig|inspect|read\b|understand|entend|explain|expli|analy|an[aá]lis|analis|verif|valid|check|confirm|crash|le[ia]\b|descobr|mapeie|map\b)/i },
 ];
 const EXPLICIT_TOP = /\b(use|usa|usar|com|with)\s+(fable|astra)\b|\bT0\b|\bdecis[aã]o (de )?arquitetura\b|\barchitecture (decision|review from scratch)\b/i;
 const LARGE = /\b(entire|whole|across the (repo|codebase)|todo o (repo|c[oó]digo)|codebase inteir[ao])\b/i;
@@ -152,6 +153,10 @@ export function mergeModels(base: Models, over: ReturnType<typeof parseModelOver
     return next as T;
   };
   return { claude: pick(base.claude, over.claude), codex: pick(base.codex, over.codex), agy: pick(base.agy, over.agy) };
+}
+
+export function isRegisteredType(name: string | undefined): boolean {
+  return REGISTERED_PAIRS.some(pair => agentTypeFor(pair.tier, pair.effort) === name);
 }
 
 const TYPE_RE = /^harness:(haiku|sonnet|opus|fable)-(low|medium|high)$/;

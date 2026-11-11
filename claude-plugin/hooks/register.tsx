@@ -1747,7 +1747,7 @@ export const register: Register = (on, options) => {
       inputSchema: { type: 'object', properties: { verify: { type: 'boolean', description: 'Resume the original unclaimed implementation, which may launch its worker, or verify returned work.' } } } }))
     await attempt('register harness_delegate', $, () => $.tool.register({ name: 'harness_delegate',
       description: 'After reading a completed automatic consult in harness_status, accept its recommendation and start the shared execution plan, or pass accept=false to decline and continue directly. Main session only.',
-      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' }, tasks: { type: 'array', description: 'Batch: tasks to route through the judge and run in parallel. Returns runIds at once; read them with harness_wait.', items: { type: 'object', properties: { task: { type: 'string' }, class: { type: 'string' }, size: { type: 'string' }, prefer: { type: 'string' }, cwd: { type: 'string' } }, required: ['task'] } } } } }))
+      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' }, ...(options.delegation !== true ? {} : { tasks: { type: 'array', description: 'Batch: tasks to route through the judge and run in parallel. Returns runIds at once; read them with harness_wait.', items: { type: 'object', properties: { task: { type: 'string' }, class: { type: 'string' }, size: { type: 'string' }, prefer: { type: 'string' }, cwd: { type: 'string' } }, required: ['task'] } } }) } } }))
 
     await attempt('reset automatic session state', $, async () => {
       await update($, automaticAtom, () => null)
@@ -2054,7 +2054,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
-    noteTurnComplete($, e, options)
+    await attempt('delegation turn complete', $, () => noteTurnComplete($, e, options))
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('automatic consult complete', $, async () => {

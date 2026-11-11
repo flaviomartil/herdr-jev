@@ -4,6 +4,7 @@ import {
   REGISTERED_PAIRS,
   agentTypeFor,
   enforceSpawn,
+  isRegisteredType,
   judge,
   mergeModels,
   parseModelOverrides,
@@ -13,12 +14,14 @@ import type { Decision, Hints, JudgeClass, Models, Worker } from './judge-core'
 
 const TOOL_WAIT = /^mcp__harness__harness_wait$/
 const HARD_CAP = 20
+const MAX_RUNS = 200
+const MAX_QUEUE = 100
 const WAIT_DEFAULT_MS = 120_000
 const MODELS_FILE = '.config/jev/models.local.yml'
 const CLASSES: readonly string[] = ['explore', 'search', 'summary', 'mechanical', 'feature', 'fix', 'review', 'architecture']
 const WORKERS: readonly string[] = ['claude-subagent', 'codex', 'agy']
 
-type RunState = 'queued' | 'running' | 'done' | 'failed'
+type RunState = 'queued' | 'running' | 'done' | 'failed' | 'skipped'
 type Run = {
   id: string
   task: string
@@ -36,6 +39,7 @@ type TaskInput = { task: string; class?: string; size?: string; prefer?: string;
 
 const runs = new Map<string, Run>()
 const byAgent = new Map<string, string>()
+const ownPrompts = new Map<string, number>()
 const queue: string[] = []
 let counter = 0
 let modelsLoaded: Promise<Models> | null = null
@@ -46,6 +50,7 @@ export const delegationEnabled = (options: PluginOptions): boolean => options.de
 export function resetDelegation(): void {
   runs.clear()
   byAgent.clear()
+  ownPrompts.clear()
   queue.length = 0
   counter = 0
   modelsLoaded = null
@@ -139,21 +144,33 @@ function newRun(task: TaskInput, decision: Decision): Run {
   })
   const run: Run = { id: `run-${counter}`, task: task.task, cwd: task.cwd, decision, state: 'queued', done, finish }
   runs.set(run.id, run)
+  evict()
   return run
 }
 
-function settle(run: Run, state: 'done' | 'failed', result: string, extra: Partial<Run> = {}): void {
+function evict(): void {
+  for (const [id, run] of runs) {
+    if (runs.size <= MAX_RUNS) return
+    if (run.state === 'queued' || run.state === 'running') continue
+    runs.delete(id)
+    if (run.agentId !== undefined) byAgent.delete(run.agentId)
+  }
+}
+
+function settle(run: Run, state: 'done' | 'failed' | 'skipped', result: string, extra: Partial<Run> = {}): void {
   Object.assign(run, extra, { state, result })
   run.finish()
 }
 
 async function startClaude($: EngineInterface, run: Run): Promise<void> {
   run.state = 'running'
+  const prompt = withPasso0(run.task)
+  ownPrompts.set(prompt, (ownPrompts.get(prompt) ?? 0) + 1)
   try {
     const spawned = await $.agent.spawn({
       subagentType: run.decision.agentType,
       model: run.decision.model,
-      prompt: withPasso0(run.task),
+      prompt,
       description: run.task.replace(/\s+/g, ' ').slice(0, 60),
       ...(run.cwd === undefined ? {} : { cwd: run.cwd }),
     })
@@ -167,7 +184,7 @@ async function startClaude($: EngineInterface, run: Run): Promise<void> {
 }
 
 function runExternalStub(run: Run): void {
-  settle(run, 'done', `STUB: ${run.decision.worker} ${run.decision.tier} decision recorded, no worker started (worker-run arrives in P3).`, {
+  settle(run, 'skipped', `STUB: ${run.decision.worker} ${run.decision.tier} decision recorded, no worker started (worker-run arrives in P3).`, {
     stub: true,
     note: run.decision.reason,
   })
@@ -199,6 +216,7 @@ function view(run: Run) {
 export async function delegateBatch($: EngineInterface, input: Record<string, unknown>, options: PluginOptions): Promise<string> {
   if (!delegationEnabled(options)) return 'harness_delegate batch: delegation is off (userConfig delegation).'
   const tasks = parseTasks(input.tasks)
+  if (tasks.length > 0 && queue.length + tasks.length > MAX_QUEUE) return `harness_delegate batch: queue is full (${MAX_QUEUE}); wait for runs to finish.`
   if (tasks.length === 0) return 'harness_delegate batch: tasks must be a non-empty array of { task }.'
   if (tasks.length > HARD_CAP) return `harness_delegate batch: at most ${HARD_CAP} tasks per call.`
   const [models, available] = await Promise.all([loadModels($), loadAvailable($)])
@@ -219,7 +237,7 @@ export async function delegateBatch($: EngineInterface, input: Record<string, un
   return JSON.stringify({ runs: created.map(view) })
 }
 
-export function noteTurnComplete($: EngineInterface, e: { agentId?: string; answer: string; reason: string }, options: PluginOptions): void {
+export async function noteTurnComplete($: EngineInterface, e: { agentId?: string; answer: string; reason: string }, options: PluginOptions): Promise<void> {
   if (e.agentId === undefined) return
   const id = byAgent.get(e.agentId)
   const run = id === undefined ? undefined : runs.get(id)
@@ -227,22 +245,21 @@ export function noteTurnComplete($: EngineInterface, e: { agentId?: string; answ
   byAgent.delete(e.agentId)
   if (e.reason === 'answer') settle(run, 'done', e.answer)
   else settle(run, 'failed', `worker turn ended: ${e.reason}`)
-  void pump($, options)
+  await pump($, options).catch(() => undefined)
 }
 
 async function waitRuns($: EngineInterface, input: Record<string, unknown>): Promise<string> {
   const ids = Array.isArray(input.runIds) ? input.runIds.filter((x): x is string => typeof x === 'string') : []
   if (ids.length === 0) return 'harness_wait: runIds must be a non-empty array.'
-  const unknown = ids.filter(id => !runs.has(id))
+  const lost = ids.filter(id => !runs.has(id)).map(id => ({ runId: id, state: 'lost', result: 'run perdido (reload ou expirado)' }))
   const picked = ids.map(id => runs.get(id)).filter((r): r is Run => r !== undefined)
   const timeout = typeof input.timeoutMs === 'number' && input.timeoutMs > 0 ? input.timeoutMs : WAIT_DEFAULT_MS
   const pending = picked.map(r => r.done)
   const joined = input.mode === 'first' ? Promise.race(pending) : Promise.all(pending).then(() => undefined)
   if (pending.length > 0) await Promise.race([joined, $.clock.sleep(timeout)])
   return JSON.stringify({
-    results: picked.map(view),
+    results: [...picked.map(view), ...lost],
     pending: picked.filter(r => r.state === 'queued' || r.state === 'running').map(r => r.id),
-    ...(unknown.length > 0 ? { unknown } : {}),
   })
 }
 
@@ -263,12 +280,17 @@ export async function spawnWithTier<E extends SpawnE, R>(
   options: PluginOptions,
 ): Promise<R> {
   if (!delegationEnabled(options)) return next(e)
+  const own = ownPrompts.get(e.prompt)
+  if (own !== undefined) {
+    if (own <= 1) ownPrompts.delete(e.prompt)
+    else ownPrompts.set(e.prompt, own - 1)
+    return next(e)
+  }
   const models = await loadModels($)
   const fix = enforceSpawn(e, models)
   if (!fix.changed) return next(e)
-  try {
-    return await next({ ...e, prompt: fix.prompt, subagentType: fix.subagentType, model: fix.model })
-  } catch {
-    return { deny: `harness delegation: ${fix.notes.join('; ') || 'tier rule'}. Use harness_delegate.` } as unknown as R
+  if (fix.subagentType !== e.subagentType && (!isRegisteredType(fix.subagentType) || fix.model === undefined)) {
+    return { deny: `harness delegation: ${fix.notes.join('; ') || 'tier rule'} has no registered type. Use harness_delegate.` } as unknown as R
   }
+  return next({ ...e, prompt: fix.prompt, subagentType: fix.subagentType, model: fix.model })
 }

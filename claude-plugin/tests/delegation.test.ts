@@ -82,6 +82,39 @@ test('delegation: an external worker run is a recorded stub, not a started proce
   await start($)
   const out = await call($, 'harness_delegate', { tasks: [{ task: 'Find the config', prefer: 'codex' }] })
   const run = (JSON.parse(String(out.result)) as { runs: { runId: string; worker: string; stub?: boolean; state: string }[] }).runs[0]!
-  expect([run.worker, run.stub, run.state]).toEqual(['codex', true, 'done'])
+  expect([run.worker, run.stub, run.state]).toEqual(['codex', true, 'skipped'])
   expect(seen.spawns).toHaveLength(0)
+})
+
+test('delegation: the mod own spawn keeps the judge hints and is not reclassified', opts, async ($, on) => {
+  const seen = setup(on)
+  await start($)
+  await call($, 'harness_delegate', { tasks: [{ task: 'Review the retry flow and report', class: 'explore' }] })
+  expect(seen.spawns[0]!.subagentType).toBe('harness:haiku-low')
+})
+
+test('delegation: a spawn error is not turned into a tier deny', opts, async ($, on) => {
+  const seen = setup(on)
+  await start($)
+  seen.throwSpawn = 'engine down'
+  await expect($.agent.spawn({ model: 'opus', prompt: 'Implement the endpoint', description: 'implement' } as never)).rejects.toThrow()
+})
+
+test('delegation: harness_wait names a lost run instead of hanging', opts, async ($, on) => {
+  setup(on)
+  await start($)
+  const out = await call($, 'harness_wait', { runIds: ['run-999'] })
+  const body = JSON.parse(String(out.result)) as { results: { state: string; result: string }[] }
+  expect(body.results[0]).toMatchObject({ state: 'lost' })
+  expect(body.results[0]!.result).toContain('perdido')
+})
+
+test('delegation: the runs table is bounded', opts, async ($, on) => {
+  setup(on)
+  await start($)
+  for (let i = 0; i < 12; i += 1) {
+    await call($, 'harness_delegate', { tasks: Array.from({ length: 20 }, (_v, k) => ({ task: `Find item ${i}-${k}`, prefer: 'codex' })) })
+  }
+  const first = await call($, 'harness_wait', { runIds: ['run-1'] })
+  expect(String(first.result)).toContain('perdido')
 })

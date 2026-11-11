@@ -40,6 +40,49 @@ describe("judge table", () => {
   test("agent type matches the pair", () => expect(judge("fix the bug").agentType).toBe("harness:sonnet-medium"));
 });
 
+
+const real: [string, string][] = [
+  ["Revisa o diff da branch", "review"],
+  ["Review the changes in PR 42", "review"],
+  ["Faça uma revisão do módulo de pagamentos", "review"],
+  ["Audit the auth middleware", "review"],
+  ["Verifique se o build passa", "explore"],
+  ["Check whether the migration ran", "explore"],
+  ["Valide o schema do payload", "explore"],
+  ["Explique como funciona o cache", "explore"],
+  ["Explain the retry flow", "explore"],
+  ["Analisar o fluxo de login", "explore"],
+  ["Análise do consumo de memória", "explore"],
+  ["Investigate why the login crashes", "explore"],
+  ["Investigue por que o worker trava", "explore"],
+  ["Refatorar o serviço de notificações", "feature"],
+  ["Refactor the billing module", "feature"],
+  ["Implementa o endpoint de exportação", "feature"],
+  ["Write a summary of the last release", "summary"],
+  ["Escreva um resumo dos commits da semana", "summary"],
+  ["Resuma o log de deploy", "summary"],
+  ["Summarize the incident thread", "summary"],
+  ["Corrigir o erro de timeout no upload", "fix"],
+  ["Fix the off-by-one in pagination", "fix"],
+  ["Conserta o teste que está falhando", "fix"],
+  ["Add a retry option to the http client", "feature"],
+  ["Adicione validação no formulário de cadastro", "feature"],
+  ["Create a new endpoint for invoices", "feature"],
+  ["Find where the invoice total is computed", "search"],
+  ["Onde fica a configuração de CORS?", "search"],
+  ["Procura todos os usos de getUser", "search"],
+  ["Liste os arquivos que importam o logger", "search"],
+  ["Rename getUser to fetchUser", "mechanical"],
+  ["Renomear a variável tmp em todo o arquivo", "mechanical"],
+  ["Convert the config files from json to yaml", "mechanical"],
+  ["Scaffold a new service folder", "mechanical"],
+  ["Explore the payments module", "explore"],
+];
+
+describe("realistic task texts", () => {
+  for (const [text, cls] of real) test(text, () => expect(judge(text).class).toBe(cls));
+});
+
 describe("model overrides", () => {
   test("local yaml replaces ids and ignores junk", () => {
     const over = parseModelOverrides("claude:\n  haiku: my-haiku # note\ncodex:\n  luna: 'x y'\nagy:\n  flash: flash-9\n");
