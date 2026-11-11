@@ -1,4 +1,6 @@
-import type { EngineInterface, On, PluginOptions } from 'claude-code'
+import type { EngineInterface, On, PluginOptions, Timer } from 'claude-code'
+import { applyTail, cursorOf, isEnded, parseTail, publishActivity, setCursor } from './activity'
+import { maybeAutoOpen } from './activity-hooks'
 import {
   DEFAULT_MODELS,
   REGISTERED_PAIRS,
@@ -62,6 +64,7 @@ const herdrJevBin = (options: PluginOptions): string =>
   typeof options.herdrJevBin === 'string' && options.herdrJevBin.trim() !== '' ? options.herdrJevBin.trim() : 'herdr-jev'
 
 export function resetDelegation(): void {
+  tailTimer = null
   runs.clear()
   byAgent.clear()
   ownPrompts.clear()
@@ -202,6 +205,7 @@ async function startClaude($: EngineInterface, run: Run, options: PluginOptions)
     if (spawned.agentId === undefined) return settle(run, 'failed', 'spawn returned no agent id')
     run.agentId = spawned.agentId
     byAgent.set(spawned.agentId, run.id)
+    void publish($)
     await watchClaude($, run, options)
   } catch (error) {
     settle(run, 'failed', `spawn failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
@@ -231,6 +235,7 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
       return settle(run, 'failed', `worker-run not started: ${body.reason ?? body.error ?? (out.stderr.slice(0, 160) || 'unknown error')}`)
     }
     run.ext = { id, file: body.eventsFile ?? null, name, host: body.host, paneId: body.paneId }
+    ensureTail($)
     run.note = body.status === 'queued' ? `queued behind ${maxWorkers(options)} visible workers` : `${body.host ?? 'background'} pane ${body.paneId ?? ''}`.trim()
   } catch (error) {
     settle(run, 'failed', `worker-run failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
@@ -335,6 +340,43 @@ async function pump($: EngineInterface, options: PluginOptions): Promise<void> {
   }
 }
 
+let tailTimer: Timer | null = null
+
+async function tailExternal($: EngineInterface, run: Run): Promise<void> {
+  const file = run.ext?.file
+  const id = run.ext?.id
+  if (file == null || id === undefined) return
+  let size: number
+  try {
+    size = (await $.fs.stat(file)).size
+  } catch {
+    return
+  }
+  const at = cursorOf(id)
+  if (size <= at) return
+  const out = await $.process.run(['tail', '-c', `+${at + 1}`, file], { timeoutMs: 5000 })
+  if (out.exitCode !== 0) return
+  const cut = out.stdout.lastIndexOf('\n')
+  if (cut < 0) return
+  const chunk = out.stdout.slice(0, cut + 1)
+  setCursor(id, at + new TextEncoder().encode(chunk).length)
+  applyTail(id, await $.clock.now(), parseTail(chunk))
+  await publishActivity($)
+}
+
+function ensureTail($: EngineInterface): void {
+  if (tailTimer !== null) return
+  tailTimer = $.clock.every(1000, () => {
+    const live = [...runs.values()].filter(r => r.ext?.file != null && !isEnded(r.ext.id))
+    if (live.length === 0) {
+      tailTimer?.cancel()
+      tailTimer = null
+      return
+    }
+    void Promise.all(live.map(r => tailExternal($, r).catch(() => undefined)))
+  })
+}
+
 function view(run: Run) {
   return {
     runId: run.id,
@@ -360,6 +402,7 @@ function snapshot() {
     class: run.decision.class,
     state: run.state,
     task: run.task.slice(0, 80),
+    ...(run.agentId ?? run.ext?.id ? { act: run.agentId ?? run.ext?.id } : {}),
   }))
 }
 function publish($: EngineInterface): Promise<void> {
@@ -384,6 +427,7 @@ export async function delegateBatch($: EngineInterface, input: Record<string, un
   if (tasks.length > 0 && queue.length + tasks.length > MAX_QUEUE) return `harness_delegate batch: queue is full (${MAX_QUEUE}); wait for runs to finish.`
   if (tasks.length === 0) return 'harness_delegate batch: tasks must be a non-empty array of { task }.'
   if (tasks.length > HARD_CAP) return `harness_delegate batch: at most ${HARD_CAP} tasks per call.`
+  void maybeAutoOpen($, options)
   const [models, available] = await Promise.all([loadModels($), loadAvailable($)])
   const created: Run[] = []
   for (const task of tasks) {

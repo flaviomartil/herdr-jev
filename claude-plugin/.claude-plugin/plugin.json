@@ -98,6 +98,12 @@
       "description": "Registers the judge agent types, batch harness_delegate with harness_wait, and enforces tiers on Agent tool spawns: Sonnet implements, Opus reviews, Haiku explores, and every brief gets the skills step.",
       "default": false
     },
+    "autoOpenPane": {
+      "type": "boolean",
+      "title": "Open the Jev pane when a delegation starts",
+      "description": "With delegation or panes on, opens the /jev pane (live activity and progress per agent) when a delegation or Agent spawn starts and the pane is closed. If the terminal is too narrow it shows a /jev hint in the band instead.",
+      "default": true
+    },
     "proxies": {
       "type": "boolean",
       "title": "Proxy supervision",

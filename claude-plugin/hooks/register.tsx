@@ -72,6 +72,8 @@ import {
   spawnWithTier,
 } from './delegation'
 import { registerModPane } from './mod-pane'
+import { liveStep, liveToolCall, liveTurnComplete, registerActivity, registerStepTool } from './activity-hooks'
+import { STEP_BRIEF, liveEnabled } from './activity'
 import { oddAfterPlan, oddCommand, oddStart, oddToolCall, registerOdd } from './odd'
 import { proxyNote, startProxies } from './proxies'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
@@ -136,6 +138,7 @@ const workersAtom = atom({ plugin: 'harness', key: 'workers' } as const, {})
 const needsYouAtom = atom({ plugin: 'harness', key: 'needsYou' } as const, [])
 const staleAtom = atom({ plugin: 'harness', key: 'stale' } as const, false)
 const staleNoteAtom = atom({ plugin: 'harness', key: 'staleNote' } as const, null)
+const jevHintAtom = atom({ plugin: 'harness', key: 'jevHint' } as const, '')
 const isHiddenAtom = atom({ plugin: 'harness', key: 'isHidden' } as const, false)
 const advisorModelAtom = atom({ plugin: 'harness', key: 'advisorModel' } as const, '')
 const reviewAtom = atom({ plugin: 'harness', key: 'review' } as const, null)
@@ -1715,11 +1718,13 @@ export const register: Register = (on, options) => {
   registerRules(on, options)
   registerDelegationHooks(on, options)
   registerModPane(on)
+  registerActivity(on, options)
   registerOdd(on, options)
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
     await attempt('odd start', $, () => oddStart($, options))
+    await attempt('register harness_step', $, () => registerStepTool($, options))
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -1828,7 +1833,8 @@ export const register: Register = (on, options) => {
   on('agent.spawn', async ($, e, next) => {
     const denial = spawnDenial(e, options.codex === true)
     if (denial !== null) return { deny: denial }
-    const started = await spawnWithTier($, e, next, options)
+    const briefed = <T extends { prompt: string; subagentType?: string }>(x: T): T => liveEnabled(options) && x.subagentType !== 'harness:codex' && !x.prompt.includes('harness_step') ? { ...x, prompt: x.prompt + STEP_BRIEF } : x
+    const started = await spawnWithTier($, e, x => next(briefed(x)), options)
     await attempt('note codex spawn', $, () => noteSpawn(externalPorts($), e.subagentType, e.prompt, e.cwd, started.agentId))
     return started
   })
@@ -1841,7 +1847,7 @@ export const register: Register = (on, options) => {
     const source = isExternal
       ? externalStep(ports, external, e, agentId, next.signal, () => next.budget.remainingMs)
       : next(e)
-    return yield* watchStep($, agentId, isExternal ? ports : null, source)
+    return yield* liveStep($, options, agentId, watchStep($, agentId, isExternal ? ports : null, source))
   }).catch(async function* ($, e, next) {
     if (next.called || e.agentId === undefined || options.codex !== true) return yield* next(e)
     if ((await externalRole(externalPorts($), external, e.agentId)) === 'other') return yield* next(e)
@@ -2061,6 +2067,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('tool.call', async ($, e, next) => {
+    await attempt('live tool call', $, () => liveToolCall($, options, e))
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('note tool call', $, () =>
@@ -2072,6 +2079,7 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     await attempt('delegation turn complete', $, () => noteTurnComplete($, e, options))
+    await attempt('live turn complete', $, () => liveTurnComplete($, options, e))
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('automatic consult complete', $, async () => {
@@ -2150,7 +2158,8 @@ export const register: Register = (on, options) => {
     const needsCount = Math.max(asks.length, counts.needsYou)
 
     const failedTitle = state.failed === undefined || state.failed.id === shown?.id ? null : state.failed.title
-    const note = [bandNote(state.word, failedTitle, isReviewing, phase(lastReview)), proxyNote()].filter(one => one !== '').join(' · ')
+    const jevHint = await read($, jevHintAtom)
+    const note = [bandNote(state.word, failedTitle, isReviewing, phase(lastReview)), proxyNote(), jevHint].filter(one => one !== '').join(' · ')
     const elapsed = shown === undefined || state.word === 'all verified' ? '' : elapsedOf(shown, workers, now)
     const title = state.word === 'all verified' ? 'Done' : (shown?.title ?? '')
     const titleWidth = title.length === 0 ? 0 : Math.min(title.length, Math.max(MIN_TITLE, Math.floor(columns * 0.3)))

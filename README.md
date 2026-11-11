@@ -745,6 +745,14 @@ Jev analyzes naming patterns and provider conventions to determine:
 
 `/jev` in the Claude Code mod opens a four-section pane (needs you, working agents, models and proxies, proposals). Agent identity (stable names, per-CLI avatars) lives in `src/identity/`. Details in `claude-plugin/README.md`.
 
+### Live activity in the pane
+
+Each agent row shows avatar, name, CLI, `model·effort`, phase, a progress indicator, the current activity line, elapsed time and the last output snippet. Claude subagents are followed through `turn.step`, `tool.call` and `turn.complete` filtered by `agentId` (any subagent, not only the ones the mod spawned): `Read foo.ts`, `Bash: bun test`, `pensando…`, step count, tools used, tokens as the engine reports them (no price table). Codex and agy workers are followed by reading new bytes of `events.jsonl` (stat size as cursor, `tail -c +N`, only whole lines) for output tail, attempt and phase.
+
+The bar shows a percent only when it is real: a worker calls `harness_step(done, total, note)` (the mod appends one line asking subagents to do so), or a worker-run event `{"type":"progress","percent":N}`. Otherwise the row shows a spinner and a step count (`7 passos`), never an invented percent. Finished agents collapse to one line with the result; the arrow button expands the last 8 activity lines. A `lento` or `quieto` badge appears after 30 s or 2 min without activity.
+
+When a delegation (`harness_delegate`) or an `Agent` spawn starts and the pane is closed, the mod opens it (option `autoOpenPane`, default on, needs `delegation` or `panes`). If the terminal is too narrow to place it, the band shows `/jev para acompanhar`. Closing the pane with its close button stops auto-opening for the session; `/jev` reopens it. Redraws are throttled to 4 per second, a 1 s tick runs only while an agent is running, and each agent keeps a 12-line ring buffer (200 agents max).
+
 ## Worker panes (`worker-run`, `panes`)
 
 `herdr-jev worker-run --cli codex|agy|claude --model M [--effort E] --prompt-file F --run-id R [--cwd D] [--timeout S] [--inactivity S]` runs one external worker in its own process group and appends `start`, `out` and `exit` events to `<state>/runs/<R>/events.jsonl`. Timeouts kill the whole group.

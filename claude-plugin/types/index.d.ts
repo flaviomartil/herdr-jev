@@ -197,6 +197,26 @@ export type DelegationRow = {
   class: string
   state: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
   task: string
+  act?: string
+}
+export type Activity = {
+  id: string
+  startedAt: number
+  updatedAt: number
+  endedAt: number | null
+  steps: number
+  toolCount: number
+  tools: Record<string, number>
+  line: string
+  snippet: string
+  log: string[]
+  percent: number | null
+  stepDone: number | null
+  stepTotal: number | null
+  tokens: number
+  attempt: number | null
+  phase: string | null
+  end: 'done' | 'failed' | null
 }
 export type OddFeatureRow = { name: string; path: string; done: number; total: number; percent: number }
 export type OddView = { repo: string; current: string | null; features: OddFeatureRow[]; phase: 'explore' | 'implement' | 'verify' | null }
@@ -225,6 +245,9 @@ declare module 'claude-code' {
       external: Record<string, HarnessExternalRow>
       costs: Record<string, HarnessCost>
       delegations: Shaped<DelegationRow[]>
+      activity: Shaped<Record<string, Activity>>
+      jevHint: string
+      expandedAgents: Record<string, boolean>
       rosterIds: Shaped<Record<string, number>>
       odd: Shaped<OddView>
     }

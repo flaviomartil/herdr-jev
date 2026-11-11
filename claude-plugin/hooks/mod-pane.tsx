@@ -1,9 +1,12 @@
-import { atom, read } from 'claude-code'
+import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 import type { OddView, DelegationRow, HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
 import { CLI_THEME, avatar, avatarRuns, cliKind, nameFor, parseRosterFile } from './identity-core'
 import type { Avatar, CliKind } from './identity-core'
 import { noteAgents } from './jev-state'
+import { elapsedWord, percentOf, resetActivity, signalOf, spinnerFrame, tokenWord } from './activity'
+import { markUserClosed, paneWanted, resetAutoOpen } from './activity-hooks'
+import type { Activity } from '../types'
 
 export const MOD_PANE_ID = 'jev'
 const ROSTER_FILE = '.config/jev/roster.json'
@@ -19,6 +22,7 @@ export type AgentRow = {
   state: AgentState
   percent: number | null
   detail: string
+  act: Activity | null
 }
 export type ModData = {
   delegations: DelegationRow[]
@@ -28,6 +32,7 @@ export type ModData = {
   workers: Record<string, HarnessWorkerRow>
   external: Record<string, HarnessExternalRow>
   usage: HarnessUsage | null
+  activity?: Record<string, Activity>
 }
 const planAtom = atom({ plugin: 'harness', key: 'plan' } as const, null)
 const workersAtom = atom({ plugin: 'harness', key: 'workers' } as const, {})
@@ -38,6 +43,8 @@ const rosterIdsAtom = atom({ plugin: 'harness', key: 'rosterIds' } as const, {},
 const oddAtom = atom({ plugin: 'harness', key: 'odd' } as const, { repo: '', current: null, features: [], phase: null } as OddView, { shape: 'odd-1' })
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 
+const activityAtom = atom({ plugin: 'harness', key: 'activity' } as const, {}, { shape: 'activity-1' })
+const expandedAtom = atom({ plugin: 'harness', key: 'expandedAgents' } as const, {})
 const WORKER_CLI = { 'claude-subagent': 'claude', codex: 'codex', agy: 'agy' } as const
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
@@ -58,8 +65,9 @@ export function agentRows(data: ModData): AgentRow[] {
       effort: run.effort,
       phase: run.class,
       state,
-      percent: null,
+      percent: percentOf(data.activity?.[run.act ?? '']),
       detail: clip(run.task, 60),
+      act: data.activity?.[run.act ?? ''] ?? null,
     })
   }
   for (const worker of Object.values(data.workers)) {
@@ -72,8 +80,9 @@ export function agentRows(data: ModData): AgentRow[] {
       effort: task?.effort ?? null,
       phase: task?.state ?? 'running',
       state: task?.state === 'failed' ? 'failed' : task?.state === 'done' ? 'done' : 'working',
-      percent: null,
+      percent: percentOf(data.activity?.[worker.agentId]),
       detail: worker.lastTool ?? clip(task?.title ?? '', 60),
+      act: data.activity?.[worker.agentId] ?? null,
     })
   }
   for (const ext of Object.values(data.external)) {
@@ -85,8 +94,25 @@ export function agentRows(data: ModData): AgentRow[] {
       effort: null,
       phase: ext.status,
       state: ext.status === 'running' ? 'working' : ext.status === 'done' ? 'done' : 'failed',
-      percent: null,
+      percent: percentOf(data.activity?.[ext.agentId]),
       detail: clip(ext.lastLine, 60),
+      act: data.activity?.[ext.agentId] ?? null,
+    })
+  }
+  const claimed = new Set([...rows.values()].map(r => r.act?.id).filter((id): id is string => id !== undefined))
+  for (const act of Object.values(data.activity ?? {})) {
+    if (claimed.has(act.id)) continue
+    rows.set(`act-${act.id}`, {
+      id: act.id,
+      kind: cliKind('claude', null),
+      cli: 'claude',
+      model: '?',
+      effort: null,
+      phase: 'subagente',
+      state: act.end === 'done' ? 'done' : act.end === 'failed' ? 'failed' : 'working',
+      percent: percentOf(act),
+      detail: clip(act.line, 60),
+      act,
     })
   }
   return [...rows.values()]
@@ -114,6 +140,8 @@ const STATE_WORD: Record<AgentState, string> = { working: 'trabalhando', queued:
 let rosterNames: string[] | null = null
 export function resetModPane(): void {
   rosterNames = null
+  resetActivity()
+  resetAutoOpen()
 }
 
 async function personalNames($: EngineInterface): Promise<string[]> {
@@ -128,6 +156,7 @@ async function personalNames($: EngineInterface): Promise<string[]> {
 }
 
 const PHASE_WORD = { explore: 'explorando', implement: 'implementando', verify: 'verificando' } as const
+const EXPAND_LINES = 8
 const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
 const limitLabel = (kind: string): string => LIMIT_LABEL[kind] ?? kind.replace(/_/g, ' ')
 
@@ -169,6 +198,7 @@ export function registerModPane(on: On): void {
     return done
   })
   on('command.run', { command: 'jev' }, async $ => {
+    paneWanted()
     await $.ui.open({ id: MOD_PANE_ID, title: 'Jev', closeOnEscape: true })
     return { text: 'Jev pane opened.' }
   })
@@ -186,7 +216,10 @@ export function registerModPane(on: On): void {
       workers: await read($, workersAtom),
       external: await read($, externalAtom),
       usage: await read($, usageAtom),
+      activity: await read($, activityAtom),
     }
+    const expanded = await read($, expandedAtom)
+    const now = await $.clock.now()
     const odd = await read($, oddAtom)
     const rows = agentRows(data)
     const share = featureShare(data.plan)
@@ -201,7 +234,10 @@ export function registerModPane(on: On): void {
         <Box flexDirection="row" alignItems="center">
           <Text bold>Jev</Text>
           <Box flexGrow={1} />
-          <Button key="close" plain dimColor label="✕" onPress={() => $.ui.close({ id: MOD_PANE_ID })} />
+          <Button key="close" plain dimColor label="✕" onPress={() => {
+            markUserClosed()
+            return $.ui.close({ id: MOD_PANE_ID })
+          }} />
         </Box>
         <Box key="needs" flexDirection="column">
           {head('needs-h', 'Precisa de voce')}
@@ -231,21 +267,81 @@ export function registerModPane(on: On): void {
                 const name = nameFor(data.roster, row.id, unknown, names.length > 0 ? names : undefined)
                 const color = CLI_THEME[row.kind]
                 const chip = row.effort === null ? row.model : `${row.model}·${row.effort}`
+                const act = row.act
+                const isFinished = row.state === 'done' || row.state === 'failed'
+                const isOpen = expanded[row.id] === true
+                const elapsed = act === null ? '' : elapsedWord((act.endedAt ?? now) - act.startedAt)
+                const toggle = (
+                  <Button
+                    key={`tg-${row.id}`}
+                    plain
+                    dimColor
+                    label={isOpen ? '▾' : '▸'}
+                    onPress={() => update($, expandedAtom, cur => ({ ...cur, [row.id]: !cur[row.id] }))}
+                  />
+                )
+                const tail = isOpen && act !== null && act.log.length > 0 && (
+                  <Box key={`log-${row.id}`} flexDirection="column" paddingLeft={2}>
+                    {act.log.slice(-EXPAND_LINES).map((line, i) => (
+                      <Text key={`${row.id}-l${i}`} dimColor wrap="truncate-end">{line}</Text>
+                    ))}
+                  </Box>
+                )
+                if (isFinished) {
+                  const mark = row.state === 'done' ? '✓' : '✗'
+                  const result = clip(act?.snippet ?? row.detail, Math.max(10, columns - 34))
+                  return (
+                    <Box key={row.id} flexDirection="column">
+                      <Box flexDirection="row" columnGap={1}>
+                        {toggle}
+                        <Text bold color={color}>{name}</Text>
+                        <Text dimColor>{row.cli}</Text>
+                        <Text color={STATE_COLOR[row.state]}>{`${mark} ${STATE_WORD[row.state]}`}</Text>
+                        <Text dimColor wrap="truncate-end">{result}</Text>
+                        {elapsed !== '' && <Text dimColor>{elapsed}</Text>}
+                      </Box>
+                      {tail}
+                    </Box>
+                  )
+                }
+                const steps = act === null ? 0 : act.steps
+                const progress =
+                  realPercent(row.percent) !== null ? (
+                    <Box key={`pr-${row.id}`} flexDirection="row" columnGap={1}>
+                      {bar(kit, `pb-${row.id}`, row.percent as number, color)}
+                      {act?.stepTotal != null && <Text dimColor>{`passo ${act.stepDone ?? 0}/${act.stepTotal}`}</Text>}
+                    </Box>
+                  ) : row.state === 'queued' ? null : (
+                    <Box key={`pr-${row.id}`} flexDirection="row" columnGap={1}>
+                      <Text color={color}>{spinnerFrame(now)}</Text>
+                      <Text dimColor>{steps > 0 ? `${steps} passos` : 'iniciando'}</Text>
+                      {act !== null && act.tokens > 0 && <Text dimColor>{tokenWord(act.tokens)}</Text>}
+                    </Box>
+                  )
+                const doing = act !== null && act.line !== '' ? act.line : row.detail
                 return (
                   <Box key={row.id} flexDirection="row" columnGap={1} marginTop={1}>
                     {withFace && Face(kit, avatar(row.kind, row.id), `av-${row.id}`)}
                     <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                       <Box flexDirection="row" columnGap={1}>
+                        {toggle}
                         <Text bold color={color}>{name}</Text>
                         <Text dimColor>{row.cli}</Text>
                         <Text color={color}>{`[${chip}]`}</Text>
                         <Text color={STATE_COLOR[row.state]}>{STATE_WORD[row.state]}</Text>
+                        <Box flexGrow={1} />
+                        {elapsed !== '' && <Text dimColor>{elapsed}</Text>}
                       </Box>
                       <Box flexDirection="row" columnGap={1}>
-                        <Text dimColor>{row.phase}</Text>
-                        {realPercent(row.percent) !== null && bar(kit, `pb-${row.id}`, row.percent as number, color)}
-                        <Text dimColor wrap="truncate-end">{clip(row.detail, Math.max(10, columns - (withFace ? 40 : 30)))}</Text>
+                        <Text dimColor>{act?.phase ?? row.phase}</Text>
+                        {act?.attempt != null && act.attempt > 1 && <Text dimColor>{`tentativa ${act.attempt}`}</Text>}
+                        {progress}
+                        {act !== null && signalOf(act, now) === 'slow' && <Text color="warning">lento</Text>}
+                        {act !== null && signalOf(act, now) === 'quiet' && <Text color="warning">quieto</Text>}
                       </Box>
+                      <Text dimColor wrap="truncate-end">{clip(doing, Math.max(10, columns - (withFace ? 12 : 4)))}</Text>
+                      {act !== null && act.snippet !== '' && <Text dimColor wrap="truncate-end">{`» ${clip(act.snippet, Math.max(10, columns - (withFace ? 14 : 6)))}`}</Text>}
+                      {tail}
                     </Box>
                   </Box>
                 )

@@ -64,6 +64,7 @@ export type Seen = {
   gitStat: string
   failGit: boolean
   state: Map<string, unknown>
+  sets: Record<string, number>
   saved: Map<string, unknown>
   clock: MockClock
   turnIds: string[]
@@ -144,7 +145,7 @@ export function pendingReport(): Record<string, unknown> {
 
 export function wire(on: On, extra: { model?: string; session?: string; store?: Record<string, unknown> } = {}): Seen {
   const clock = mock.clock(on, { now: 1_000_000 })
-  const seen: Seen = { spawns: [], runs: [], toasts: [], submitted: [], promptContext: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, runHook: null, statusBody: { status: 'ready' }, statusRaw: null, statusExit: 0, failStatus: false, inits: [], toplevel: null, remotes: '', failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [], usage: { context: {}, rateLimits: [] }, usageCalls: [] }
+  const seen: Seen = { spawns: [], runs: [], toasts: [], submitted: [], promptContext: [], logs: [], opened: [], closed: [], skillSelect: { selected: [{ name: 'tdd' }], cliSelected: [{ name: 'git-insight-mcp' }], totalEligible: 74 }, failSelect: false, routeSkill: null, skills: [], failUsage: false, surfaces: ['terminal'], alive: [], registered: [], specs: [], failCli: false, sessionId: extra.session ?? 'sess-1', failModels: false, failList: false, denySpawn: [], throwSpawn: null, models: modelsFixture(), reviewExit: 0, reviewBody: readyReport(), reviewGate: null, runHook: null, statusBody: { status: 'ready' }, statusRaw: null, statusExit: 0, failStatus: false, inits: [], toplevel: null, remotes: '', failRegister: false, descriptions: new Map(), gitDiff: '', gitStat: '', failGit: false, state: new Map(), sets: {}, saved: new Map(Object.entries(extra.store ?? {})), clock, turnIds: [], usage: { context: {}, rateLimits: [] }, usageCalls: [] }
 
   on('store.get', (_$, e) => ({ value: seen.saved.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -158,6 +159,7 @@ export function wire(on: On, extra: { model?: string; session?: string; store?: 
   on('store.keys', () => ({ value: [...seen.saved.keys()] }))
   on('state.set', async (_$, e, next) => {
     seen.state.set(`${e.plugin}.${e.key}`, e.value)
+    seen.sets[`${e.plugin}.${e.key}`] = (seen.sets[`${e.plugin}.${e.key}`] ?? 0) + 1
     return next(e)
   })
   on('session.start', (_$, e) => {
