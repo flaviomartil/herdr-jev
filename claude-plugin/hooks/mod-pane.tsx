@@ -1,10 +1,9 @@
 import { atom, read } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
-import type { HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
-import { Roster, avatar, cliKind, parseRosterFile } from './identity-core'
+import type { DelegationRow, HarnessExternalRow, HarnessHumanAsk, HarnessPlan, HarnessUsage, HarnessWorkerRow } from '../types'
+import { CLI_THEME, avatar, avatarRuns, cliKind, nameFor, parseRosterFile } from './identity-core'
 import type { Avatar, CliKind } from './identity-core'
-import { CLI_COLORS } from './identity-core'
-import { delegationRuns } from './delegation'
+import { noteAgents } from './jev-state'
 
 export const MOD_PANE_ID = 'jev'
 const ROSTER_FILE = '.config/jev/roster.json'
@@ -22,6 +21,8 @@ export type AgentRow = {
   detail: string
 }
 export type ModData = {
+  delegations: DelegationRow[]
+  roster: Record<string, number>
   plan: HarnessPlan | null
   asks: HarnessHumanAsk[]
   workers: Record<string, HarnessWorkerRow>
@@ -32,6 +33,8 @@ const planAtom = atom({ plugin: 'harness', key: 'plan' } as const, null)
 const workersAtom = atom({ plugin: 'harness', key: 'workers' } as const, {})
 const needsYouAtom = atom({ plugin: 'harness', key: 'needsYou' } as const, [])
 const externalAtom = atom({ plugin: 'harness', key: 'external' } as const, {})
+const delegationsAtom = atom({ plugin: 'harness', key: 'delegations' } as const, [], { shape: 'delegations-1' })
+const rosterIdsAtom = atom({ plugin: 'harness', key: 'rosterIds' } as const, {}, { shape: 'roster-1' })
 const usageAtom = atom({ plugin: 'harness', key: 'usage' } as const, null)
 
 const WORKER_CLI = { 'claude-subagent': 'claude', codex: 'codex', agy: 'agy' } as const
@@ -42,12 +45,12 @@ const realPercent = (value: unknown): number | null =>
 
 export function agentRows(data: ModData): AgentRow[] {
   const rows = new Map<string, AgentRow>()
-  for (const run of delegationRuns()) {
+  for (const run of data.delegations) {
     const cli = WORKER_CLI[run.worker as keyof typeof WORKER_CLI] ?? run.worker
     const state: AgentState =
       run.state === 'running' ? 'working' : run.state === 'queued' ? 'queued' : run.state === 'done' ? 'done' : 'failed'
-    rows.set(run.agentId ?? run.runId, {
-      id: run.agentId ?? run.runId,
+    rows.set(run.id, {
+      id: run.id,
       kind: cliKind(cli, run.model),
       cli,
       model: run.model,
@@ -107,10 +110,8 @@ export function needsRows(data: ModData, rows: AgentRow[]): string[] {
 const STATE_COLOR: Record<AgentState, string> = { working: 'success', queued: 'inactive', done: 'success', failed: 'error' }
 const STATE_WORD: Record<AgentState, string> = { working: 'trabalhando', queued: 'na fila', done: 'pronto', failed: 'falhou' }
 
-let roster = new Roster()
 let rosterNames: string[] | null = null
 export function resetModPane(): void {
-  roster = new Roster()
   rosterNames = null
 }
 
@@ -122,18 +123,20 @@ async function personalNames($: EngineInterface): Promise<string[]> {
   } catch {
     rosterNames = []
   }
-  if (rosterNames.length > 0) roster = new Roster(rosterNames)
   return rosterNames
 }
+
+const LIMIT_LABEL: Record<string, string> = { five_hour: '5h', seven_day: '7d' }
+const limitLabel = (kind: string): string => LIMIT_LABEL[kind] ?? kind.replace(/_/g, ' ')
 
 function Face({ Box, Text }: { Box: any; Text: any }, av: Avatar, key: string) {
   return (
     <Box key={key} flexDirection="column" width={6} flexShrink={0}>
-      {av.rows.map((row, y) => (
+      {avatarRuns(av).map((row, y) => (
         <Box key={`${key}-${y}`} flexDirection="row">
-          {row.map((cell, x) => (
-            <Text key={`${key}-${y}-${x}`} color={cell.fg} backgroundColor={cell.bg}>
-              {cell.ch}
+          {row.map((run, x) => (
+            <Text key={`${key}-${y}-${x}`} color={run.fg} backgroundColor={run.bg}>
+              {run.text}
             </Text>
           ))}
         </Box>
@@ -155,6 +158,14 @@ function bar(kit: { Box: any; Text: any }, key: string, percent: number, color: 
 }
 
 export function registerModPane(on: On): void {
+  on('state.set', async ($, e, next) => {
+    const done = await next(e)
+    if (e.plugin === 'harness' && (e.key === 'external' || e.key === 'workers')) {
+      const value = (e as { value?: unknown }).value
+      if (typeof value === 'object' && value !== null) await noteAgents($, Object.values(value as Record<string, { agentId?: string }>).map(r => r.agentId ?? '').filter(id => id !== ''))
+    }
+    return done
+  })
   on('command.run', { command: 'jev' }, async $ => {
     await $.ui.open({ id: MOD_PANE_ID, title: 'Jev', closeOnEscape: true })
     return { text: 'Jev pane opened.' }
@@ -162,8 +173,12 @@ export function registerModPane(on: On): void {
   on('ui.render', { component: 'Pane', requestId: MOD_PANE_ID }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     const kit = { Box, Text }
-    await personalNames($)
+    const names = await personalNames($)
+    const columns = Math.max(24, e.props.bodyColumns)
+    const withFace = columns >= 44
     const data: ModData = {
+      delegations: await read($, delegationsAtom),
+      roster: await read($, rosterIdsAtom),
       plan: await read($, planAtom),
       asks: await read($, needsYouAtom),
       workers: await read($, workersAtom),
@@ -200,13 +215,14 @@ export function registerModPane(on: On): void {
           )}
           {rows.length === 0
             ? empty('work-0', 'Nenhum agente ativo.')
-            : rows.map(row => {
-                const name = roster.name(row.id)
-                const color = CLI_COLORS[row.kind]
+            : rows.map((row, at) => {
+                const unknown = rows.slice(0, at).filter(r => data.roster[r.id] === undefined).length
+                const name = nameFor(data.roster, row.id, unknown, names.length > 0 ? names : undefined)
+                const color = CLI_THEME[row.kind]
                 const chip = row.effort === null ? row.model : `${row.model}·${row.effort}`
                 return (
                   <Box key={row.id} flexDirection="row" columnGap={1} marginTop={1}>
-                    {Face(kit, avatar(row.kind, row.id), `av-${row.id}`)}
+                    {withFace && Face(kit, avatar(row.kind, row.id), `av-${row.id}`)}
                     <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                       <Box flexDirection="row" columnGap={1}>
                         <Text bold color={color}>{name}</Text>
@@ -217,7 +233,7 @@ export function registerModPane(on: On): void {
                       <Box flexDirection="row" columnGap={1}>
                         <Text dimColor>{row.phase}</Text>
                         {realPercent(row.percent) !== null && bar(kit, `pb-${row.id}`, row.percent as number, color)}
-                        <Text dimColor wrap="truncate-end">{row.detail}</Text>
+                        <Text dimColor wrap="truncate-end">{clip(row.detail, Math.max(10, columns - (withFace ? 40 : 30)))}</Text>
                       </Box>
                     </Box>
                   </Box>
@@ -228,7 +244,7 @@ export function registerModPane(on: On): void {
           {head('models-h', 'Modelos e proxies')}
           {limits.map(limit => (
             <Box key={limit.kind} flexDirection="row" columnGap={1}>
-              <Text>{limit.kind === 'five_hour' ? '5h' : '7d'}</Text>
+              <Text>{limitLabel(limit.kind)}</Text>
               {bar(kit, `lim-${limit.kind}`, Math.max(0, Math.min(100, Math.round(limit.percentUsed))), limit.percentUsed >= 90 ? 'error' : 'success')}
             </Box>
           ))}

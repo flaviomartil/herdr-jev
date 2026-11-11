@@ -8,6 +8,16 @@ export const CLI_COLORS: Record<CliKind, string> = {
   other: "#868e96",
 };
 
+export const CLI_THEME: Record<CliKind, string> = {
+  claude: "claude",
+  codex: "suggestion",
+  agy: "success",
+  haiku: "remember",
+  other: "subtle",
+};
+
+const TILE_BG = "#212529";
+
 export const NAMES: readonly string[] = [
   "Ada", "Bo", "Cass", "Dev", "Ede", "Fen", "Gus", "Hana", "Ines", "Jo",
   "Kit", "Lex", "Mo", "Nils", "Oona", "Pim", "Quinn", "Rae", "Sol", "Tao",
@@ -38,6 +48,11 @@ export function nickname(index: number, names: readonly string[] = NAMES): strin
   const list = names.length > 0 ? names : NAMES;
   const lap = Math.floor(index / list.length);
   return list[index % list.length] + (lap ? String(lap + 1) : "");
+}
+
+export function nameFor(order: Record<string, number>, agentId: string, pending: number, names: readonly string[] = NAMES): string {
+  const index = order[agentId];
+  return nickname(index ?? Object.keys(order).length + pending, names);
 }
 
 export class Roster {
@@ -96,9 +111,9 @@ export function avatar(kind: CliKind, agentId: string): Avatar {
       grid[base].map((top, x) => {
         const bottom = grid[base + 1][x];
         if (top && bottom) return { ch: "▀", fg: top, bg: bottom };
-        if (top) return { ch: "▀", fg: top };
-        if (bottom) return { ch: "▄", fg: bottom };
-        return { ch: " " };
+        if (top) return { ch: "▀", fg: top, bg: TILE_BG };
+        if (bottom) return { ch: "▄", fg: bottom, bg: TILE_BG };
+        return { ch: " ", bg: TILE_BG };
       }),
     );
   }
@@ -111,4 +126,18 @@ export function avatarText(av: Avatar): string[] {
 
 export function avatarSignature(av: Avatar): string {
   return av.rows.map((r) => r.map((c) => `${c.ch}${c.fg ?? ""}${c.bg ?? ""}`).join("")).join("|");
+}
+
+export type Run = { text: string; fg?: string; bg?: string };
+
+export function avatarRuns(av: Avatar): Run[][] {
+  return av.rows.map((row) => {
+    const out: Run[] = [];
+    for (const cell of row) {
+      const last = out[out.length - 1];
+      if (last && last.fg === cell.fg && last.bg === cell.bg) last.text += cell.ch;
+      else out.push({ text: cell.ch, fg: cell.fg, bg: cell.bg });
+    }
+    return out;
+  });
 }

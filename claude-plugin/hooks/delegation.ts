@@ -10,6 +10,7 @@ import {
   parseModelOverrides,
   withPasso0,
 } from './judge-core'
+import { publishDelegations } from './jev-state'
 import type { Decision, Hints, JudgeClass, Models, Worker } from './judge-core'
 import { summarizeEvents } from './panes-core'
 
@@ -179,6 +180,7 @@ function settle(run: Run, state: 'done' | 'failed' | 'skipped', result: string, 
 
 async function startClaude($: EngineInterface, run: Run, options: PluginOptions): Promise<void> {
   run.state = 'running'
+  await publish($)
   const prompt = withPasso0(run.task)
   ownPrompts.set(prompt, (ownPrompts.get(prompt) ?? 0) + 1)
   try {
@@ -198,11 +200,13 @@ async function startClaude($: EngineInterface, run: Run, options: PluginOptions)
     settle(run, 'failed', `spawn failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
   } finally {
     releaseOwn(prompt)
+    await publish($)
   }
 }
 
 async function startExternal($: EngineInterface, run: Run, options: PluginOptions): Promise<void> {
   run.state = 'running'
+  await publish($)
   const id = `x${Date.now().toString(36)}-${run.id.replace(/\D/g, '')}`
   const name = `${run.decision.class}-${run.id.replace(/\D/g, '')}`
   const cwd = run.cwd
@@ -223,6 +227,8 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
     run.note = body.status === 'queued' ? `queued behind ${maxWorkers(options)} visible workers` : `${body.host ?? 'background'} pane ${body.paneId ?? ''}`.trim()
   } catch (error) {
     settle(run, 'failed', `worker-run failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
+  } finally {
+    await publish($)
   }
 }
 
@@ -240,6 +246,7 @@ async function refreshExternal($: EngineInterface, run: Run): Promise<void> {
   if (sum.state === 'running') return
   if (sum.state === 'done') settle(run, 'done', sum.tail)
   else settle(run, 'failed', `${sum.outcome}${sum.exitCode === null ? '' : ` (exit ${sum.exitCode})`}: ${sum.tail}`.slice(0, 4000))
+  await publish($)
 }
 
 async function pumpPanes($: EngineInterface, options: PluginOptions): Promise<void> {
@@ -337,8 +344,17 @@ function view(run: Run) {
   }
 }
 
-export function delegationRuns() {
-  return [...runs.values()].map(run => ({ ...view(run), agentId: run.agentId, task: run.task }))
+function publish($: EngineInterface): Promise<void> {
+  const rows = [...runs.values()].map(run => ({
+    id: run.id,
+    worker: run.decision.worker,
+    model: run.decision.model,
+    effort: run.decision.effort,
+    class: run.decision.class,
+    state: run.state,
+    task: run.task.slice(0, 80),
+  }))
+  return publishDelegations($, rows.slice(-50)).catch(() => undefined)
 }
 
 export async function delegateBatch($: EngineInterface, input: Record<string, unknown>, options: PluginOptions): Promise<string> {
@@ -361,6 +377,7 @@ export async function delegateBatch($: EngineInterface, input: Record<string, un
     if (run.decision.worker === 'claude-subagent') queue.push(run.id)
     else await startExternal($, run, options)
   }
+  await publish($)
   await pump($, options)
   return JSON.stringify({ runs: created.map(view) })
 }
@@ -376,6 +393,7 @@ export async function noteTurnComplete($: EngineInterface, e: { agentId?: string
   byAgent.delete(e.agentId)
   if (e.reason === 'answer') settle(run, 'done', e.answer)
   else settle(run, 'failed', `worker turn ended: ${e.reason}`)
+  await publish($)
   await watchClaudeEnd($, run, options, e.reason === 'answer', e.reason === 'answer' ? e.answer : e.reason)
   await pump($, options).catch(() => undefined)
 }

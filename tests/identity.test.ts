@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { NAMES, Roster, avatar, avatarSignature, avatarText, cliKind, nickname, parseRosterFile } from "../src/identity/index.js";
+import { NAMES, avatarRuns, nameFor, Roster, avatar, avatarSignature, avatarText, cliKind, nickname, parseRosterFile } from "../src/identity/index.js";
 import { readFileSync } from "node:fs";
 
 test("names are assigned by arrival order and stay stable", () => {
@@ -35,4 +35,17 @@ test("avatars differ per CLI, stay stable per id and vary by hash", () => {
 
 test("plugin copy of identity stays in sync with src", () => {
   expect(readFileSync("claude-plugin/hooks/identity-core.ts", "utf8")).toBe(readFileSync("src/identity/index.ts", "utf8"));
+});
+
+test("avatar cells always carry a background and runs merge", () => {
+  const av = avatar("codex", "z");
+  for (const row of av.rows) for (const c of row) expect(c.bg).toBeDefined();
+  const runs = avatarRuns(av);
+  expect(runs[0].length).toBeLessThan(6);
+  expect(runs[0].map((r) => r.text).join("")).toBe(avatarText(av)[0]);
+});
+
+test("nameFor follows stored order and falls back after it", () => {
+  expect(nameFor({ a: 2 }, "a", 0)).toBe("Cass");
+  expect(nameFor({ a: 0 }, "new", 1)).toBe("Cass");
 });

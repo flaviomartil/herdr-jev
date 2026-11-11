@@ -189,6 +189,15 @@ export type Automatic = {
   pending?: { turn: string; task: string; cwd?: string; model?: string }[]
 }
 
+export type DelegationRow = {
+  id: string
+  worker: string
+  model: string
+  effort: string
+  class: string
+  state: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
+  task: string
+}
 declare module 'claude-code' {
   interface PluginState {
     harness: {
@@ -213,6 +222,8 @@ declare module 'claude-code' {
       usage: HarnessUsage | null
       external: Record<string, HarnessExternalRow>
       costs: Record<string, HarnessCost>
+      delegations: Shaped<DelegationRow[]>
+      rosterIds: Shaped<Record<string, number>>
     }
   }
 }
