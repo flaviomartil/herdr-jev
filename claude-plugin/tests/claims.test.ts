@@ -723,7 +723,7 @@ async function warnings($: Engine, surface: (typeof SURFACES)[number] = 'termina
   return found.map(one => one.text)
 }
 
-const OPTIONS = { options: { autoRun: false } }
+const OPTIONS = { options: { autoRun: false, rules: false } }
 
 test('a claim with no check after the last edit warns on every surface and the engine band still renders', OPTIONS, async ($, on) => {
   world(on)

@@ -58,6 +58,7 @@ import {
   summarize,
 } from './plan'
 import { registerPrGate } from './pr-gate'
+import { registerRules, rulesPromptContext } from './rules'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
 import type { ConsultTarget, Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
@@ -1696,6 +1697,7 @@ export const register: Register = (on, options) => {
   let automaticRuntime: AutomaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
 
   registerPrGate(on, options)
+  registerRules(on, options)
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
@@ -1923,7 +1925,9 @@ export const register: Register = (on, options) => {
       && !e.attachments?.length && e.text.trim().length > 0 && e.text.length <= 16384 && !e.text.trim().startsWith('/')
     if (eligible) eligible = (await $.env.get('HERDR_JEV_MOD_WORKER')) !== '1'
     await attempt('queue automatic origin', $, () => update($, automaticPromptsAtom, rows => [...rows.slice(-31), { text: e.text, eligible }]))
-    const result = await next(eligible ? { ...e, context: [...(e.context ?? []), AUTOMATIC_CONTEXT] } : e)
+    const reminder = await rulesPromptContext($, e.origin?.kind, options)
+    const context = [...(e.context ?? []), ...(eligible ? [AUTOMATIC_CONTEXT] : []), ...reminder]
+    const result = await next(context.length === (e.context ?? []).length ? e : { ...e, context })
     if (scopeMode(options) === 'off' || e.origin?.kind === 'plugin') return result
     const text = e.text
     const name = invokedSkill(text)

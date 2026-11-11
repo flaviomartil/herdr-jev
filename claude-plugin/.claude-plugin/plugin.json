@@ -79,6 +79,12 @@
       "title": "harness:codex max minutes",
       "description": "Longest a Codex run may last before it is killed.",
       "default": 30
+    },
+    "rules": {
+      "type": "boolean",
+      "title": "Enforce shared rules",
+      "description": "Blocks commit attribution lines, secrets in files and docs in work repos, asks before rm -rf and risky git push, and reminds about skills once per session. Rules live in rules/jev-rules.yml plus ~/.config/jev/rules.local.yml.",
+      "default": true
     }
   }
 }
