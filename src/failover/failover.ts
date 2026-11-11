@@ -99,8 +99,8 @@ export async function runChain(chain: Target[], deps: ChainDeps): Promise<number
     return !signal.aborted;
   };
 
-  const finish = (code: number): number => {
-    emit({ type: "failover-end", code, attempts });
+  const finish = (code: number, request = false): number => {
+    emit({ type: "failover-end", code, attempts, ...(request ? { request: true } : {}) });
     return code;
   };
 
@@ -153,7 +153,7 @@ export async function runChain(chain: Target[], deps: ChainDeps): Promise<number
     }
     if (outcome.kind === "Failed" && outcome.request) {
       echo("[failover] request error, returning to the hub");
-      return finish(lastCode);
+      return finish(lastCode, true);
     }
 
     const advance = () => {

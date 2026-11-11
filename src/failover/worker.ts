@@ -31,6 +31,7 @@ export async function runWorkerFailover(opts: FailoverWorkerOptions): Promise<nu
   const health = opts.health ?? new Health({ env });
   const primary: Target = { cli: opts.cli, model: opts.model, ...(opts.effort ? { effort: opts.effort } : {}) };
   const chain = [primary, ...(opts.chain ?? []).filter((t) => t.cli !== primary.cli || t.model !== primary.model)];
+  let lastOutput = "";
   const controller = new AbortController();
   const onSignal = () => controller.abort();
   const signals = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
@@ -47,10 +48,11 @@ export async function runWorkerFailover(opts: FailoverWorkerOptions): Promise<nu
       emit: (event) => appendEvent(opts.runId, event, env),
       runAttempt: async (target) => {
         const report = await runWorkerDetailed({ ...opts, cli: target.cli, model: target.model, effort: target.effort ?? opts.effort, finalExit: false });
+        lastOutput = report.output;
         return report;
       },
     });
-    const tail = code === 0 ? "" : `failover ended with ${code}`;
+    const tail = code === 0 ? "" : lastOutput.slice(-4000) || `failover ended with ${code}`;
     appendEvent(opts.runId, { type: "exit", code, outcome: code === 0 ? "done" : code === 124 ? "timeout" : code === 130 ? "interrupted" : "failed", tail }, env);
     return code;
   } finally {

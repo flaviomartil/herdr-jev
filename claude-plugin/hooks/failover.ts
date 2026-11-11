@@ -35,12 +35,11 @@ export function isEmptyStep(result: TurnStepResult): boolean {
 export async function* failoverStep(options: PluginOptions, e: TurnStepInput, next: StepNext): AsyncGenerator<TurnStepChunk, TurnStepResult> {
   const first = yield* next(e)
   if (!failoverEnabled(options)) return first
-  turnModels.set(e.turnId, e.model)
+  if (!turnModels.has(e.turnId)) turnModels.set(e.turnId, e.model)
   if (!isEmptyStep(first) || swapped.has(e.turnId) || next.signal.aborted || next.budget.remainingMs <= 0) return first
   const to = tierBelow(e.model)
   if (to === null) return first
   swapped.add(e.turnId)
-  turnModels.set(e.turnId, to)
   return yield* next({ ...e, model: to })
 }
 
