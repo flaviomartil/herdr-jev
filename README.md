@@ -862,6 +862,10 @@ bun run smoke
 
 ---
 
+## Privacy scanning
+
+`scripts/privacy-scan.sh` runs as a pre-commit hook (wire it with `bash scripts/install-hooks.sh`). It checks staged additions against the regexes in `~/.config/jev/private-terms.txt` (one regex per line, kept outside the repo) and runs `gitleaks protect --staged`. The terms file is private, so CI cannot read it: the `privacy` workflow only runs gitleaks over the full history. The private-terms check therefore exists only on machines that have the file. Fixture secrets used by redaction tests are allowlisted in `.gitleaks.toml`.
+
 ## Review council
 
 `src/council` reviews one diff with several external CLIs (codex, kimi, agy) in parallel. Each member runs in its own review directory under `<state dir>/council`, never in your working tree.

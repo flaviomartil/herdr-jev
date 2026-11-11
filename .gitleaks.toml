@@ -1,0 +1,13 @@
+title = "herdr-jev"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic secrets used as redaction fixtures"
+paths = [
+  '''tests/council-synth-.*\.test\.ts''',
+  '''tests/review[0-9a-z-]*\.test\.ts''',
+  '''tests/daily\.test\.ts''',
+  '''tests/launch-.*\.test\.ts''',
+]
