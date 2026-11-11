@@ -295,6 +295,41 @@ herdr-jev calibrate -s 15 -w
 
 ---
 
+## MCP capability tags (`mcp-profile`)
+
+`herdr-jev mcp-profile` turns a task and a working directory into abstract MCP capability tags. It prints tag names only. The AI Harness launcher maps tags to its own server names, so this repository holds no server names, hosts or paths from a private configuration.
+
+```bash
+herdr-jev mcp-profile --task "<task text>" --cwd <dir> --json
+herdr-jev mcp-profile --task "<task text>" --cwd <dir>             # comma-separated tags on one line
+herdr-jev mcp-profile --task "<task text>" --offline               # no Jev call, deterministic triage fallback
+herdr-jev mcp-profile --cwd <dir>                                  # cwd markers only
+```
+
+`--json` output:
+
+```json
+{"tags":["context","docs"],"triage":{"complexity":"routine","effort":"standard","needsResearch":true,"fallback":false}}
+```
+
+`triage` is `null` when no task is given. Empty output means no capability was detected.
+
+Tag vocabulary, in output order: `memory`, `context`, `docs`, `design`, `browser`, `bi`, `windows`, `messaging`, `media`, `cloud-gpu`, `reasoning`, `orchestration`, `evaluation`, `social`.
+
+| Source | Rule |
+|---|---|
+| Task keywords | Word patterns per tag, case and accent insensitive (for example `documentação` gives `docs`, `screenshot` gives `browser`). |
+| Jev triage | The existing `triage` decision: `needsResearch` gives `context`; effort `high` or `xhigh` gives `reasoning`. With `--offline` the deterministic fallback is used. |
+| Working directory | Top-level markers only: `playwright.config.*` or `cypress.config.*` gives `browser`; `*.pbix` or `*.pbit` gives `bi`; `components.json` or `.storybook` gives `design`. |
+
+```text
+task text ----> keyword rules ----------+
+triage (Jev) -> needsResearch, effort --+--> union in vocabulary order --> tags
+cwd markers ----------------------------+
+```
+
+The Jev key comes from `TYPESAFE_API_KEY` or the vault lookup already used by `triage`. The command never prints it. Tests: `bun test tests/mcp-profile.test.ts`.
+
 ## Command Reference
 
 `herdr-jev --help` lists every command and `herdr-jev <command> --help` lists its options. Commands that classify with Jev (`triage`, `plan`, `route`, `subagent`, `route-turn`, `classify-pane`, `models classify`, `prewarm`, `calibrate` and the MCP tools) use the TypeSafe API when a key is available and the deterministic local heuristic otherwise.
