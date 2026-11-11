@@ -3,7 +3,7 @@ import type { Engine } from 'claude-code/testing'
 import { resetDelegation } from '../hooks/delegation'
 import { resetModPane } from '../hooks/mod-pane'
 import type { Activity } from '../types'
-import { RING, applyTail, parseTail, percentOf, resetActivity, snapshotActivity } from '../hooks/activity'
+import { MAX_AGENTS, RING, applyTail, cursorOf, noteEnd, noteStep, parseTail, percentOf, resetActivity, setCursor, snapshotActivity } from '../hooks/activity'
 import { toolLine } from '../hooks/activity-hooks'
 import { CWD, PANE_PROPS, wire } from './support'
 
@@ -157,4 +157,60 @@ test('activity: finished agent collapses to one line and expands on press', live
   expect(await ui.find({ type: 'Text', text: 'Read foo.ts' })).toBeUndefined()
   await ui.press({ key: 'tg-sub-2' })
   expect(await ui.find({ type: 'Text', text: 'Read foo.ts' })).toBeDefined()
+})
+
+const EXT_FILE = '/state/runs/x/events.jsonl'
+
+function externalTail(seen: ReturnType<typeof setup>, on: Parameters<typeof wire>[0], body: () => string, gate?: () => Promise<void>) {
+  const tails: string[] = []
+  seen.runHook = async (argv) => {
+    if (argv[0] === 'tail') {
+      tails.push(argv[2] as string)
+      if (gate !== undefined) await gate()
+      return { exitCode: 0, stdout: body().slice(Number(argv[2]?.slice(1)) - 1), stderr: '' }
+    }
+    if (argv.includes('panes')) return { exitCode: 0, stdout: JSON.stringify({ status: 'started', eventsFile: EXT_FILE, host: 'background' }), stderr: '' }
+    return { exitCode: 0, stdout: '/bin/x', stderr: '' }
+  }
+  on('fs.stat', () => ({ value: { kind: 'file', size: new TextEncoder().encode(body()).length, mtimeMs: 0, isLink: false } }))
+  return tails
+}
+
+test('activity: a slow tail read is not applied twice by overlapping ticks', { options: { delegation: true } }, async ($, on) => {
+  const seen = setup(on)
+  const body = `${JSON.stringify({ type: 'out', line: 'one' })}\n`
+  let release: () => void = () => undefined
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  const tails = externalTail(seen, on, () => body, () => held)
+  await start($)
+  await $.tool.call({ tool: 'mcp__harness__harness_delegate', tool_use_id: 'd', tasks: [{ task: 'Find a', prefer: 'codex' }] } as never)
+  await seen.clock.advance(3500)
+  expect(tails).toHaveLength(1)
+  release()
+  await seen.clock.advance(1100)
+  await flush(seen)
+  const act = Object.values(acts(seen)).find(a => a.line === 'one')
+  expect(act?.log.filter(line => line === 'one')).toHaveLength(1)
+})
+
+test('activity: a huge chunk without a newline advances the cursor', { options: { delegation: true } }, async ($, on) => {
+  const seen = setup(on)
+  const body = 'x'.repeat(300_000)
+  const tails = externalTail(seen, on, () => body)
+  await start($)
+  await $.tool.call({ tool: 'mcp__harness__harness_delegate', tool_use_id: 'd', tasks: [{ task: 'Find a', prefer: 'codex' }] } as never)
+  await seen.clock.advance(3500)
+  expect(tails).toHaveLength(1)
+  expect(tails[0]).toBe('+37857')
+})
+
+test('activity: evicting an agent drops its cursor', async () => {
+  resetActivity()
+  noteStep('old', 1)
+  setCursor('old', 50)
+  noteEnd('old', 2, true, 'ok')
+  for (let i = 0; i < MAX_AGENTS; i += 1) noteStep(`n${i}`, 3 + i)
+  expect(cursorOf('old')).toBe(0)
 })
