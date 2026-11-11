@@ -66,6 +66,7 @@ import {
   registerDelegationHooks,
   registerDelegationTools,
   abortPanes,
+  detachPanes,
   paneCommand,
   registerJudgeAgents,
   spawnWithTier,
@@ -1860,6 +1861,7 @@ export const register: Register = (on, options) => {
         await update($, usageAtom, () => null)
       })
     }
+    await attempt('visible panes detach', $, () => detachPanes($, options))
     await attempt('background panes end', $, () => abortPanes($, options, true))
     if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
     return next(e)

@@ -128,4 +128,5 @@ test('panes: aborting a turn kills the session external runs, and session end in
   expect(cli.some(c => c.argv[2] === 'abort' && c.argv.includes('--session') && !c.argv.includes('--background-only'))).toBe(true)
   await $.session.end({ reason: 'exit', sessionId: 'sess-1' } as never)
   expect(cli.some(c => c.argv[2] === 'abort' && c.argv.includes('--background-only'))).toBe(true)
+  expect(cli.some(c => c.argv[2] === 'detach' && c.argv.includes('--session'))).toBe(true)
 })

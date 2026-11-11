@@ -136,6 +136,9 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         out(result);
         return result.ok ? 0 : 1;
       }
+      case "detach":
+        out({ detached: await manager.detach(ctx, str(opts.session)) });
+        return 0;
       case "abort":
         out({ aborted: await manager.abort(ctx, { session: str(opts.session), backgroundOnly: opts["background-only"] === true }) });
         return 0;

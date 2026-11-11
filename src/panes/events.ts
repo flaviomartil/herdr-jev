@@ -6,7 +6,7 @@ export type RunOutcome = "queued" | "running" | "done" | "failed" | "timeout" | 
 
 export interface RunEvent {
   t: number;
-  type: "queued" | "start" | "out" | "timeout" | "interrupted" | "exit";
+  type: "queued" | "start" | "out" | "timeout" | "interrupted" | "detached" | "exit";
   [key: string]: unknown;
 }
 
@@ -17,6 +17,7 @@ export interface RunSummary {
   pgid: number | null;
   exitCode: number | null;
   tail: string;
+  detached: boolean;
   startedAt: number | null;
   endedAt: number | null;
 }
@@ -75,6 +76,7 @@ export function summarize(runId: string, events: RunEvent[]): RunSummary {
     pgid: typeof start?.pgid === "number" ? start.pgid : null,
     exitCode: typeof exit?.code === "number" ? exit.code : null,
     tail,
+    detached: events.some((e) => e.type === "detached"),
     startedAt: start?.t ?? null,
     endedAt: exit?.t ?? interrupted?.t ?? null,
   };

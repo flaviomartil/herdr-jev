@@ -288,6 +288,15 @@ export async function abortPanes($: EngineInterface, options: PluginOptions, bac
   }
 }
 
+export async function detachPanes($: EngineInterface, options: PluginOptions): Promise<void> {
+  if (!delegationEnabled(options)) return
+  try {
+    await paneCli($, options, ['detach', '--session', await $.session.id()])
+  } catch {
+    return
+  }
+}
+
 export async function paneCommand($: EngineInterface, options: PluginOptions, verb: string, argv: string[], yes: boolean): Promise<string> {
   if (!panesEnabled(options)) return 'Panes are off. Enable the panes option of the harness mod.'
   const cwd = await $.session.cwd()

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { redactSecrets } from "../herdr/pane-text.js";
+import { parseModelOverrides } from "../judge/index.js";
 import { appendEvent } from "./events.js";
 
 export type WorkerCli = "codex" | "agy" | "claude";
@@ -21,6 +22,31 @@ export interface InvocationInput {
 
 export interface InvocationDeps {
   codexProfileExists?: (name: string) => boolean;
+  codexMap?: Record<string, string | undefined>;
+}
+
+const CODEX_TIER_ALIASES = ["luna", "terra", "sol", "astra"];
+const MODELS_FILE = [".config", "jev", "models.local.yml"];
+
+export function loadCodexMap(home = homedir()): Record<string, string | undefined> {
+  try {
+    return parseModelOverrides(readFileSync(join(home, ...MODELS_FILE), "utf8")).codex ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function codexTarget(model: string, deps: InvocationDeps): { profile?: string; model?: string } {
+  const exists = deps.codexProfileExists ?? ((n: string) => codexProfileExists(n));
+  const mapped = deps.codexMap?.[model] ?? model;
+  if (mapped.startsWith("profile:")) {
+    const profile = mapped.slice(8);
+    if (!exists(profile)) throw new Error(`codex profile ${profile} ausente`);
+    return { profile };
+  }
+  if (exists(mapped)) return { profile: mapped };
+  if (CODEX_TIER_ALIASES.includes(mapped)) throw new Error(`codex profile ${mapped} ausente`);
+  return { model: mapped };
 }
 
 const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/\-[\]]{0,80}$/;
@@ -35,9 +61,9 @@ export function buildInvocation(input: InvocationInput, deps: InvocationDeps = {
   if (input.effort !== undefined && !EFFORT.test(input.effort)) throw new Error(`invalid effort: ${input.effort}`);
   const effort = input.effort;
   if (input.cli === "codex") {
-    const hasProfile = (deps.codexProfileExists ?? codexProfileExists)(input.model);
+    const target = codexTarget(input.model, deps);
     return {
-      argv: ["codex", "exec", ...(hasProfile ? ["-p", input.model] : ["--model", input.model]),
+      argv: ["codex", "exec", ...(target.profile ? ["-p", target.profile] : ["--model", target.model!]),
         ...(effort ? ["-c", `model_reasoning_effort="${effort}"`] : []), "-"],
       stdin: input.prompt,
     };
@@ -92,7 +118,15 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
   const env = opts.env ?? process.env;
   const echo = opts.echo ?? ((line: string) => process.stdout.write(`${line}\n`));
   const prompt = readFileSync(opts.promptFile, "utf8");
-  const invocation = buildInvocation({ cli: opts.cli, model: opts.model, effort: opts.effort, prompt });
+  let invocation: Invocation;
+  try {
+    invocation = buildInvocation({ cli: opts.cli, model: opts.model, effort: opts.effort, prompt }, { codexMap: opts.cli === "codex" ? loadCodexMap(env.HOME || homedir()) : undefined, codexProfileExists: (n) => codexProfileExists(n, env.HOME || homedir()) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    echo(message);
+    appendEvent(opts.runId, { type: "exit", code: 2, outcome: "failed", tail: message }, env);
+    return 2;
+  }
   const [bin, ...args] = invocation.argv as [string, ...string[]];
   const shownArgs = args.map((a) => (a.startsWith("-p=") ? "-p=<prompt>" : a));
   const timeoutMs = opts.timeoutMs ?? 1_800_000;
@@ -103,6 +137,7 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
     const child = spawn(bin, args, { cwd: opts.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env });
     const pid = child.pid ?? 0;
     let finished = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     let outcome: "done" | "failed" | "timeout" | "interrupted" = "failed";
     let outCount = 0;
     const tail: string[] = [];
@@ -115,7 +150,7 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
       outcome = kind;
       if (kind === "timeout") appendEvent(opts.runId, { type: "timeout", kind: stopKind }, env);
       killGroup(pid, "SIGTERM");
-      setTimeout(() => killGroup(pid, "SIGKILL"), grace).unref();
+      killTimer = setTimeout(() => killGroup(pid, "SIGKILL"), grace);
     };
     let stopKind = "absolute";
 
@@ -175,6 +210,8 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
       finished = true;
       clearTimeout(absolute);
       clearTimeout(idle);
+      clearTimeout(killTimer);
+      killGroup(pid, "SIGKILL");
       for (const [s, h] of handlers) process.off(s, h);
       if (outcome === "failed" && code === 0) outcome = "done";
       const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : code ?? 1;
