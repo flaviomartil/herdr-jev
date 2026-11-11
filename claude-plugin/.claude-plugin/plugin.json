@@ -8,6 +8,18 @@
   "description": "Shows and drives Herdr-Jev role plans inside Claude Code: the advisor is the session, and the implementer, reviewer and reader models come from herdr-jev models list.",
   "types": "./types/index.d.ts",
   "userConfig": {
+    "panes": {
+      "type": "boolean",
+      "title": "Terminal panes for external workers",
+      "description": "Opens each codex or agy delegation in a pane of the current herdr or tmux tab (at most 3 visible, the rest queue). Off runs the same workers in the background without panes. Needs delegation.",
+      "default": false
+    },
+    "watchClaudeAgents": {
+      "type": "boolean",
+      "title": "Watch pane for Claude subagents",
+      "description": "With panes on, opens a read-only pane that follows each delegated Claude subagent.",
+      "default": false
+    },
     "autoDelegate": {
       "type": "boolean",
       "title": "Automatic shared delegation",

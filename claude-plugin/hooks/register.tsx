@@ -57,6 +57,7 @@ import {
   shortModel,
   summarize,
 } from './plan'
+import { parsePaneCommand } from './panes-core'
 import { registerPrGate } from './pr-gate'
 import { registerRules, rulesPromptContext } from './rules'
 import {
@@ -64,6 +65,8 @@ import {
   noteTurnComplete,
   registerDelegationHooks,
   registerDelegationTools,
+  abortPanes,
+  paneCommand,
   registerJudgeAgents,
   spawnWithTier,
 } from './delegation'
@@ -1747,7 +1750,7 @@ export const register: Register = (on, options) => {
       inputSchema: { type: 'object', properties: { verify: { type: 'boolean', description: 'Resume the original unclaimed implementation, which may launch its worker, or verify returned work.' } } } }))
     await attempt('register harness_delegate', $, () => $.tool.register({ name: 'harness_delegate',
       description: 'After reading a completed automatic consult in harness_status, accept its recommendation and start the shared execution plan, or pass accept=false to decline and continue directly. Main session only.',
-      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' }, ...(options.delegation !== true ? {} : { tasks: { type: 'array', description: 'Batch: tasks to route through the judge and run in parallel. Returns runIds at once; read them with harness_wait.', items: { type: 'object', properties: { task: { type: 'string' }, class: { type: 'string' }, size: { type: 'string' }, prefer: { type: 'string' }, cwd: { type: 'string' } }, required: ['task'] } } }) } } }))
+      inputSchema: { type: 'object', properties: { accept: { type: 'boolean' }, ...(options.delegation !== true ? {} : { tasks: { type: 'array', description: 'Batch: tasks to route through the judge and run in parallel. Returns runIds at once; read them with harness_wait.', items: { type: 'object', properties: { task: { type: 'string' }, class: { type: 'string' }, size: { type: 'string' }, prefer: { type: 'string' }, cwd: { type: 'string' }, tab: { type: 'string' } }, required: ['task'] } } }) } } }))
 
     await attempt('reset automatic session state', $, async () => {
       await update($, automaticAtom, () => null)
@@ -1857,11 +1860,14 @@ export const register: Register = (on, options) => {
         await update($, usageAtom, () => null)
       })
     }
+    await attempt('background panes end', $, () => abortPanes($, options, true))
     if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
     return next(e)
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'harness' }, async ($, e) => {
+    const paneCmd = parsePaneCommand(e.args.replace(/\s+--yes\b/, ''))
+    if (paneCmd !== null) return { text: await paneCommand($, options, paneCmd.verb, paneCmd.argv, /\s--yes\b/.test(` ${e.args}`)) }
     if (e.args.trim() === 'scope') {
       const text = receiptText(scopeMode(options), await read($, scopeAtom), runtime.receipt)
       let hasScreen = true

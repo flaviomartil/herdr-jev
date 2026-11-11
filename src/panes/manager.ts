@@ -32,6 +32,7 @@ export interface Entry {
 }
 
 interface Registry {
+  max?: number;
   entries: Record<string, Entry>;
   tabs: Record<string, { host: HostKind; tabId: string; paneId: string }>;
 }
@@ -49,7 +50,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function readRegistry(ctx: Ctx): Registry {
   try {
     const parsed = JSON.parse(readFileSync(registryFile(ctx), "utf8"));
-    return { entries: parsed.entries ?? {}, tabs: parsed.tabs ?? {} };
+    return { max: typeof parsed.max === "number" ? parsed.max : undefined, entries: parsed.entries ?? {}, tabs: parsed.tabs ?? {} };
   } catch {
     return { entries: {}, tabs: {} };
   }
@@ -156,7 +157,7 @@ async function launch(ctx: Ctx, reg: Registry, entry: Entry): Promise<boolean> {
 
 async function pumpLocked(ctx: Ctx, reg: Registry): Promise<string[]> {
   const started: string[] = [];
-  const max = ctx.max ?? MAX_VISIBLE;
+  const max = ctx.max ?? reg.max ?? MAX_VISIBLE;
   const queued = Object.values(reg.entries).filter((e) => e.status === "queued").sort((a, b) => a.createdAt - b.createdAt);
   for (const entry of queued) {
     const live = Object.values(reg.entries).filter((e) => isLive(ctx, e)).length;
@@ -187,6 +188,7 @@ export async function start(ctx: Ctx, input: StartInput): Promise<StartResult> {
   };
   return withLock(ctx, async () => {
     const reg = readRegistry(ctx);
+    if (ctx.max) reg.max = ctx.max;
     reg.entries[runId] = entry;
     appendEvent(runId, { type: "queued", cli: entry.cli, model: entry.model, host: entry.host, name: entry.name }, ctx.env);
     await pumpLocked(ctx, reg);
@@ -194,6 +196,19 @@ export async function start(ctx: Ctx, input: StartInput): Promise<StartResult> {
     const status = entry.status === "active" ? "started" : entry.status === "queued" ? "queued" : "failed";
     return { runId, status, host: entry.host, paneId: entry.paneId, title: titleOf(entry), ...(status === "failed" ? { reason: "pane host could not start the worker" } : {}) };
   });
+}
+
+export async function openWatch(ctx: Ctx, runId: string, name: string, cwd: string, kind?: HostKind): Promise<Outcome> {
+  const host = createHost(kind ?? detectHost(ctx.env), ctx.env, ctx.cmd);
+  if (host.kind === "background") return { ok: false, message: "no terminal to watch in" };
+  const line = `${shq(workerBin(ctx))} panes watch ${shq(safeRunId(runId))}; sleep 10`;
+  const placed = await host.split(line, cwd, `${name} · claude`, { direction: "down" });
+  return { ok: placed !== null, message: placed ? `watching ${name}` : "could not open a watch pane" };
+}
+
+export function recordEvent(ctx: Ctx, runId: string, type: string, extra: Record<string, unknown>): void {
+  if (!["start", "out", "exit", "queued"].includes(type)) throw new Error(`invalid event type: ${type}`);
+  appendEvent(runId, { type: type as "start", ...extra }, ctx.env);
 }
 
 export async function pump(ctx: Ctx): Promise<string[]> {

@@ -172,9 +172,21 @@ Ids de modelo vêm de uma tabela genérica pública, sobrescrita por `~/.config/
 
 Com a opção ligada:
 - `session.start` registra um tipo por par modelo e effort: `harness:haiku-low`, `harness:haiku-high`, `harness:sonnet-medium`, `harness:opus-high`, `harness:fable-high`.
-- `harness_delegate` aceita `tasks: [{ task, class?, size?, prefer?, cwd? }]` (sem `tasks` mantém o comportamento antigo de aceitar a consulta). Devolve os `runId` na hora, até `maxWorkers` rodando e o resto na fila. `harness_wait({ runIds, mode?, timeoutMs? })` devolve o estado e o resultado de cada um.
-- Runs de `codex` e `agy` são STUB nesta fase: registram a decisão e terminam sem iniciar processo. O runner real vem na P3.
+- `harness_delegate` aceita `tasks: [{ task, class?, size?, prefer?, cwd?, tab? }]` (sem `tasks` mantém o comportamento antigo de aceitar a consulta). Devolve os `runId` na hora, até `maxWorkers` rodando e o resto na fila. `harness_wait({ runIds, mode?, timeoutMs? })` devolve o estado e o resultado de cada um.
+- Runs de `codex` e `agy` rodam de verdade pelo wrapper `herdr-jev worker-run` (ver Panes). O `runId` volta na hora e `harness_wait` lê o `events.jsonl` do run.
 - O hook `agent.spawn` corrige chamadas diretas da Agent tool: implementar com Opus vira Sonnet, review vira Opus, explorar vira Haiku, effort errado vira o tipo certo. Nunca sobe de tier para implementar. Todo brief ganha o prefixo "Passo 0: localizar e seguir as skills que cobrem a tarefa; reportar quais usou." Se a reescrita falhar, nega com a instrução de usar `harness_delegate`.
+
+## Panes (opção `panes`, desligada por padrão)
+
+Precisa de `delegation`. Cada delegação a `codex` ou `agy` roda sob `herdr-jev worker-run`, que grava `~/.local/state/herdr-jev/runs/<run>/events.jsonl` (`start` com `pid` e `pgid`, `out` por linha, `exit` com código e cauda da saída). Com `panes` desligada o mesmo wrapper roda em segundo plano, sem pane. Ligada, o worker ganha um pane na mesma aba, com título `<nome> · <cli>`.
+
+- Detecção do host: ambiente herdr (`HERDR_PANE_ID`), depois `$TMUX`, depois Ghostty no macOS (AppleScript, sem teste em terminal real), depois segundo plano. `HERDR_JEV_PANE_HOST` força um deles.
+- No máximo 3 panes visíveis (`maxWorkers`). O 4º entra na fila e abre quando um termina. Sucesso fecha o pane após 30 s; erro deixa o pane aberto.
+- Worker: `codex exec -p <perfil>` (perfil em `~/.codex/<nome>.config.toml`, senão `--model`) com o prompt no stdin, `agy --model M --effort E --dangerously-skip-permissions -p=<prompt>`, `claude -p --model M --effort E` com o prompt no stdin. Timeout absoluto de 30 min e de inatividade de 5 min matam o grupo de processos inteiro.
+- Esc no turno principal ou `/harness close` mandam SIGTERM ao `pgid` gravado. O fim da sessão marca os runs em segundo plano como `interrupted`.
+- Comandos: `/harness tab <feature>`, `focus <nome>`, `close <nome>`, `restart <nome>`, `send <nome> <texto>`, `layout save` e `layout restore`. `close` e `restart` de worker em execução pedem `--yes`. `layout restore` reabre runs terminados com `watch` e só oferece `restart` para os interrompidos, nunca reexecuta.
+- `watchClaudeAgents` (padrão `false`): com `panes` ligada, abre um pane só de leitura para cada subagente Claude delegado.
+- Falha de worker sem fallback: a cadeia de failover entra na P6.
 
 ## Modelos
 
@@ -259,6 +271,7 @@ Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuá
 - `autoReview` (padrão `false`): dispara o review do harness uma vez quando tudo está `done` ou `approved` e há ao menos uma `approved`.
 - `prGateAsk` (padrão `false`): ver PR gate.
 - `delegation` (padrão `false`): ver Juiz e delegação.
+- `panes` (padrão `false`) e `watchClaudeAgents` (padrão `false`): ver Panes.
 - `codex` (padrão `false`): registra e oferece o agente `harness:codex`. `codexMaxMinutes` (padrão `30`): tempo máximo de uma execução do Codex.
 
 ## Limites conhecidos

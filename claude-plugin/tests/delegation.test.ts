@@ -76,16 +76,6 @@ test('delegation: a batch of 3 returns 3 runIds without waiting, and harness_wai
   expect(done.pending).toEqual([])
 })
 
-test('delegation: an external worker run is a recorded stub, not a started process', opts, async ($, on) => {
-  const seen = setup(on)
-  seen.runHook = async () => ({ exitCode: 0, stdout: '/bin/codex', stderr: '' })
-  await start($)
-  const out = await call($, 'harness_delegate', { tasks: [{ task: 'Find the config', prefer: 'codex' }] })
-  const run = (JSON.parse(String(out.result)) as { runs: { runId: string; worker: string; stub?: boolean; state: string }[] }).runs[0]!
-  expect([run.worker, run.stub, run.state]).toEqual(['codex', true, 'skipped'])
-  expect(seen.spawns).toHaveLength(0)
-})
-
 test('delegation: the mod own spawn keeps the judge hints and is not reclassified', opts, async ($, on) => {
   const seen = setup(on)
   await start($)

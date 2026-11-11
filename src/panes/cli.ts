@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { redactSecrets } from "../herdr/pane-text.js";
+import { eventsFile } from "./events.js";
 import * as manager from "./manager.js";
 import type { Ctx } from "./manager.js";
 import { processCmd } from "./host.js";
@@ -69,11 +71,29 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
           return 2;
         }
         const prompt = opts["stdin-prompt"] ? readFileSync(0, "utf8") : undefined;
-        out(await manager.start(ctx, {
+        const started = await manager.start(ctx, {
           runId: str(opts.run)!, name: str(opts.name), cli: cli as WorkerCli, model: str(opts.model)!, effort: str(opts.effort),
           prompt, promptFile: str(opts["prompt-file"]), cwd, host: str(opts.host) as HostKind | undefined, tab: str(opts.tab),
           session: str(opts.session), lingerSec: num(opts.linger), timeoutSec: num(opts.timeout), inactivitySec: num(opts.inactivity),
-        }));
+        });
+        out({ ...started, eventsFile: eventsFile(started.runId, env) });
+        return 0;
+      }
+      case "watch-open": {
+        const result = await manager.openWatch(ctx, str(opts.run) ?? "", str(opts.name) ?? "agent", cwd);
+        out(result);
+        return result.ok ? 0 : 1;
+      }
+      case "event": {
+        const type = str(opts.type) ?? "";
+        const line = str(opts.line) === undefined ? undefined : redactSecrets(str(opts.line)!).slice(0, 4000);
+        const outcome = str(opts.outcome);
+        manager.recordEvent(ctx, str(opts.run) ?? "", type, {
+          ...(type === "out" ? { line: line ?? "" } : {}),
+          ...(type === "exit" ? { code: outcome === "done" ? 0 : 1, outcome: outcome ?? "failed", tail: line ?? "" } : {}),
+          ...(type === "start" ? { pid: 0, pgid: 0, agent: "claude-subagent" } : {}),
+        });
+        out({ ok: true });
         return 0;
       }
       case "pump":
