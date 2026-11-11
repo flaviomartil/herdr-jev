@@ -198,6 +198,8 @@ export type DelegationRow = {
   state: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
   task: string
 }
+export type OddFeatureRow = { name: string; path: string; done: number; total: number; percent: number }
+export type OddView = { repo: string; current: string | null; features: OddFeatureRow[]; phase: 'explore' | 'implement' | 'verify' | null }
 declare module 'claude-code' {
   interface PluginState {
     harness: {
@@ -225,6 +227,7 @@ declare module 'claude-code' {
       delegations: Shaped<DelegationRow[]>
       rosterIds: Shaped<Record<string, number>>
       wait: { text: string; until: number | null } | null
+      odd: Shaped<OddView>
     }
   }
 }

@@ -122,6 +122,12 @@
       "description": "After this the wait ends with a notice.",
       "default": 360
     },
+    "odd": {
+      "type": "boolean",
+      "title": "Lean ODD feature documents",
+      "description": "Adds /harness feature, harness_task_done with verified evidence, a feature progress bar and resume on session start. Off keeps the default small path with no question, file or block.",
+      "default": false
+    },
     "rules": {
       "type": "boolean",
       "title": "Enforce shared rules",
