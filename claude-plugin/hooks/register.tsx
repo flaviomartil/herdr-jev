@@ -1699,30 +1699,6 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
-    await attempt('reset automatic session state', $, async () => {
-      await update($, automaticAtom, () => null)
-      await update($, automaticPromptsAtom, () => [])
-    })
-    if (options.autoDelegate !== false) {
-      await attempt('restore automatic delegation', $, async () => {
-        const saved = await $.store.get(`harness:auto:${await $.session.id()}:current`)
-        if (isRecord(saved) && typeof saved.turn === 'string' && typeof saved.cwd === 'string' && typeof saved.task === 'string'
-          && typeof saved.model === 'string' && Array.isArray(saved.stages) && typeof saved.state === 'string') {
-          await update($, automaticAtom, () => saved as Automatic)
-        }
-      })
-      const restored = await read($, automaticAtom)
-      if (restored?.state === 'planning' && restored.reason === 'dispatch_pending') {
-        await queueAutomatic($, options, gate, automaticRuntime, restored.turn, restored.task, restored.consultReviewed === true, { cwd: restored.cwd, model: restored.model })
-      }
-      if (restored?.verifyRequested && restored.verificationAttempted !== true) queueAutomaticCollection($, options, gate, automaticRuntime, true)
-      if (e.isInteractive) {
-        automaticTimer?.cancel()
-        automaticTimer = $.clock.every(5000, () => {
-          queueAutomaticCollection($, options, gate, automaticRuntime, false)
-        })
-      }
-    }
     await attempt('register command', $, () =>
       $.command.register({
         name: 'harness',
@@ -1760,6 +1736,30 @@ export const register: Register = (on, options) => {
       description: 'After reading a completed automatic consult in harness_status, accept its recommendation and start the shared execution plan, or pass accept=false to decline and continue directly. Main session only.',
       inputSchema: { type: 'object', properties: { accept: { type: 'boolean' } } } }))
 
+    await attempt('reset automatic session state', $, async () => {
+      await update($, automaticAtom, () => null)
+      await update($, automaticPromptsAtom, () => [])
+    })
+    if (options.autoDelegate !== false) {
+      await attempt('restore automatic delegation', $, async () => {
+        const saved = await $.store.get(`harness:auto:${await $.session.id()}:current`)
+        if (isRecord(saved) && typeof saved.turn === 'string' && typeof saved.cwd === 'string' && typeof saved.task === 'string'
+          && typeof saved.model === 'string' && Array.isArray(saved.stages) && typeof saved.state === 'string') {
+          await update($, automaticAtom, () => saved as Automatic)
+        }
+      })
+      const restored = await read($, automaticAtom)
+      if (restored?.state === 'planning' && restored.reason === 'dispatch_pending') {
+        await queueAutomatic($, options, gate, automaticRuntime, restored.turn, restored.task, restored.consultReviewed === true, { cwd: restored.cwd, model: restored.model })
+      }
+      if (restored?.verifyRequested && restored.verificationAttempted !== true) queueAutomaticCollection($, options, gate, automaticRuntime, true)
+      if (e.isInteractive) {
+        automaticTimer?.cancel()
+        automaticTimer = $.clock.every(5000, () => {
+          queueAutomaticCollection($, options, gate, automaticRuntime, false)
+        })
+      }
+    }
     await attempt('read session model', $, async () => {
       const model = await $.session.model()
       await update($, advisorModelAtom, () => model)
