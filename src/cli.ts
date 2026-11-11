@@ -1325,4 +1325,12 @@ program.command("notify")
     }
   });
 
+program.command("rules")
+  .description("Rule engine: check a hook payload from stdin (exit 2 on deny)")
+  .argument("<action>", "check")
+  .action(async (action: string) => {
+    const { main } = await import("./rules/cli.js");
+    process.exit(await main([action]));
+  });
+
 program.parse(process.argv);

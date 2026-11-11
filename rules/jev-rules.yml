@@ -1,0 +1,40 @@
+version: 1
+
+commit:
+  forbidden:
+    - 'co-authored-by\s*:'
+    - 'generated\s+with'
+    - 'generated\s+by\s+\[?claude'
+
+guard:
+  protectedBranches:
+    - main
+    - master
+
+secrets:
+  patterns:
+    - 'AKIA[0-9A-Z]{16}'
+    - '-----BEGIN (RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----'
+    - 'ghp_[A-Za-z0-9]{36}'
+    - 'github_pat_[A-Za-z0-9_]{40,}'
+    - 'sk-[A-Za-z0-9_-]{32,}'
+    - 'xox[abprs]-[A-Za-z0-9-]{10,}'
+    - 'AIza[0-9A-Za-z_-]{35}'
+    - '(?i)(api[_-]?key|secret|token|passw(or)?d)["'']?\s*[:=]\s*["''][A-Za-z0-9/+_.-]{20,}["'']'
+  allow:
+    - '(?i)(your|example|placeholder|changeme|xxxx|dummy|sample|<.*>|\$\{)'
+
+workRepo:
+  roots:
+    - '~/projects'
+  exclude: []
+  allowFiles:
+    - README.md
+
+generic:
+  names:
+    - '^(notes|note|report|temp|tmp|test|todo|scratch|output|summary|analysis|findings|draft|untitled)\.[a-z0-9]+$'
+    - '^(temp|tmp)[-_.].*'
+    - '^entrega-.*\.md$'
+
+skillReminder: 'Before starting, check whether a skill covers this task and follow it.'
