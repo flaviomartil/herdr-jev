@@ -77,6 +77,13 @@ const real: [string, string][] = [
   ["Convert the config files from json to yaml", "mechanical"],
   ["Scaffold a new service folder", "mechanical"],
   ["Explore the payments module", "explore"],
+  ["nao precisa revisar, so implementa o form", "feature"],
+  ["do not fix anything, just explain the flow", "explore"],
+  ["Implement the form and review it", "feature"],
+  ["adiciona logs e depois revisa", "feature"],
+  ["Check whether the migration is safe", "review"],
+  ["Verifique se o deploy quebrou algo", "review"],
+  ["check where the token is defined", "explore"],
 ];
 
 describe("realistic task texts", () => {

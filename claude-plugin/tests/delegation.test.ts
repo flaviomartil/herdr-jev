@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
-import { resetDelegation } from '../hooks/delegation'
+import { resetDelegation, spawnWithTier } from '../hooks/delegation'
 import { finish, wire } from './support'
 
 const opts = { options: { delegation: true } }
@@ -117,4 +117,13 @@ test('delegation: the runs table is bounded', opts, async ($, on) => {
   }
   const first = await call($, 'harness_wait', { runIds: ['run-1'] })
   expect(String(first.result)).toContain('perdido')
+})
+
+test('delegation: a non-type error from next() is rethrown, not turned into a deny', opts, async ($, on) => {
+  setup(on)
+  await start($)
+  const boom = async () => {
+    throw new Error('boom')
+  }
+  await expect(spawnWithTier($ as never, { model: 'opus', prompt: 'Implement x', description: 'implement' }, boom, { delegation: true })).rejects.toThrow('boom')
 })

@@ -148,6 +148,12 @@ function newRun(task: TaskInput, decision: Decision): Run {
   return run
 }
 
+function releaseOwn(prompt: string): void {
+  const left = (ownPrompts.get(prompt) ?? 0) - 1
+  if (left > 0) ownPrompts.set(prompt, left)
+  else ownPrompts.delete(prompt)
+}
+
 function evict(): void {
   for (const [id, run] of runs) {
     if (runs.size <= MAX_RUNS) return
@@ -180,6 +186,8 @@ async function startClaude($: EngineInterface, run: Run): Promise<void> {
     byAgent.set(spawned.agentId, run.id)
   } catch (error) {
     settle(run, 'failed', `spawn failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 200))
+  } finally {
+    releaseOwn(prompt)
   }
 }
 
@@ -280,12 +288,7 @@ export async function spawnWithTier<E extends SpawnE, R>(
   options: PluginOptions,
 ): Promise<R> {
   if (!delegationEnabled(options)) return next(e)
-  const own = ownPrompts.get(e.prompt)
-  if (own !== undefined) {
-    if (own <= 1) ownPrompts.delete(e.prompt)
-    else ownPrompts.set(e.prompt, own - 1)
-    return next(e)
-  }
+  if (ownPrompts.has(e.prompt)) return next(e)
   const models = await loadModels($)
   const fix = enforceSpawn(e, models)
   if (!fix.changed) return next(e)

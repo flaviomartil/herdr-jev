@@ -63,21 +63,48 @@ const TIERS: Record<Level, { claude: ClaudeTier; codex: keyof Models["codex"]; a
 };
 const RULES: { cls: JudgeClass; re: RegExp }[] = [
   { cls: "review", re: /\b(?:review|revis|audit|code review)/i },
+  { cls: "review", re: /\b(?:check|verif|valid|confirm|ensure|garant)\w*\b[^.\n]*\b(?:safe|safety|secur|seguro|seguran|quebr|broke|break|correct|corret|vulnerab|regress)/i },
   { cls: "summary", re: /\b(?:summari[sz]|summary|tl;?dr|resum|sumariz|sintetiz|digest)/i },
   { cls: "fix", re: /\b(?:fix|corrig|conserta|resolv|regression|broken|hotfix)/i },
   { cls: "feature", re: /\b(?:implement|refactor|refator|migrate\b|migrar\b|feature|funcionalidade|desenvolv|develop)/i },
   { cls: "mechanical", re: /\b(?:rename|renomea|bulk|convert|format|reformat|scaffold|replace all|mechanical|boilerplate|substitu)/i },
   { cls: "feature", re: /\b(?:add|create|write|cria|adicion|escrev|escrit|insert|inclu)/i },
+  { cls: "explore", re: /^\W*(?:check|verif|valid|confirm)/i },
   { cls: "search", re: /\b(?:search|grep|find|locate|list|where|procur|busc|encontr|onde|lista|liste)/i },
   { cls: "explore", re: /\b(?:explor|investig|inspect|read\b|understand|entend|explain|expli|analy|an[aá]lis|analis|verif|valid|check|confirm|crash|le[ia]\b|descobr|mapeie|map\b)/i },
 ];
 const EXPLICIT_TOP = /\b(use|usa|usar|com|with)\s+(fable|astra)\b|\bT0\b|\bdecis[aã]o (de )?arquitetura\b|\barchitecture (decision|review from scratch)\b/i;
 const LARGE = /\b(entire|whole|across the (repo|codebase)|todo o (repo|c[oó]digo)|codebase inteir[ao])\b/i;
 
+const NEGATED = /\b(?:n[aã]o|do not|don't|dont|sem|without|no need to)\b[^,.;\n]*?(?=,|\.|;|\n|$|\bbut\b|\bmas\b|\bjust\b|\bs[oó]\b|\bapenas\b)/gi;
+
+export function stripNegated(text: string): string {
+  return text.replace(NEGATED, " ");
+}
+
+function earlierAction(text: string, before: number): JudgeClass | null {
+  let best: { cls: JudgeClass; at: number } | null = null;
+  for (const rule of RULES) {
+    if (rule.cls !== "fix" && rule.cls !== "feature") continue;
+    const at = rule.re.exec(text)?.index;
+    if (at !== undefined && at < before && (best === null || at < best.at)) best = { cls: rule.cls, at };
+  }
+  return best?.cls ?? null;
+}
+
 export function classify(text: string, hints: Hints = {}): { cls: JudgeClass; matched: boolean } {
   if (hints.class !== undefined) return { cls: hints.class, matched: true };
   if (hints.architecture === true || EXPLICIT_TOP.test(text)) return { cls: "architecture", matched: true };
-  for (const rule of RULES) if (rule.re.test(text)) return { cls: rule.cls, matched: true };
+  const clean = stripNegated(text);
+  for (const rule of RULES) {
+    const hit = rule.re.exec(clean);
+    if (hit === null) continue;
+    if (rule.cls === "review") {
+      const earlier = earlierAction(clean, hit.index);
+      if (earlier !== null) return { cls: earlier, matched: true };
+    }
+    return { cls: rule.cls, matched: true };
+  }
   return { cls: "feature", matched: false };
 }
 
