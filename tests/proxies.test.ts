@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -6,7 +6,7 @@ import { decide } from "../src/proxies/decide.ts";
 import { main } from "../src/proxies/cli.ts";
 import { check } from "../src/proxies/monitor.ts";
 import type { Deps, History } from "../src/proxies/monitor.ts";
-import { fileLock } from "../src/proxies/monitor.ts";
+import { LOCK_STALE_MS, defaultDeps, fileLock } from "../src/proxies/monitor.ts";
 import { parseRegistry } from "../src/proxies/registry.ts";
 
 const REG = `proxies:
@@ -199,4 +199,23 @@ test("file lock is exclusive, reclaims dead pid and stale files", () => {
 test("registry requires port and valid unit names", () => {
   expect(() => parseRegistry("proxies:\n  - id: a\n    health: /h\n")).toThrow();
   expect(() => parseRegistry("proxies:\n  - id: a\n    port: 1\n    unit: x;rm.service\n")).toThrow();
+});
+
+test("stale lock recovery leaves no stale files and lets one winner in", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lk-"));
+  const path = join(dir, "l.lock");
+  writeFileSync(path, "99999999");
+  const a = fileLock(path, 120_000, () => false);
+  const b = fileLock(path, 120_000, () => true);
+  const first = a();
+  expect(first).not.toBeNull();
+  expect(b()).toBeNull();
+  first!();
+  expect(readdirSync(dir)).toEqual([]);
+});
+
+test("stale threshold exceeds the longest repair hold", () => {
+  const d = defaultDeps();
+  expect(LOCK_STALE_MS).toBe(120_000);
+  expect(LOCK_STALE_MS).toBeGreaterThan(d.recoverMs + 5_000 + 1_000);
 });

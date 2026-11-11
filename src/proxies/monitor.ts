@@ -67,7 +67,9 @@ export function fileLock(path = lockPath(), staleMs = LOCK_STALE_MS, alive: (pid
           const pid = Number(readFileSync(path, "utf8"));
           const old = Date.now() - statSync(path).mtimeMs > staleMs;
           if (!old && Number.isInteger(pid) && pid > 0 && alive(pid)) return null;
-          unlinkSync(path);
+          const stale = `${path}.${process.pid}.stale`;
+          renameSync(path, stale);
+          unlinkSync(stale);
         } catch {
           return null;
         }
@@ -119,13 +121,10 @@ export type Result = {
   command?: string;
 };
 
-const UNIT = /^[\w@.-]+\.service$/;
-
 type UnitInfo = { activeState?: string; restarts?: number };
 
 async function unitInfo(deps: Deps, p: Proxy): Promise<UnitInfo> {
   if (!p.unit) return {};
-  if (!UNIT.test(p.unit)) return {};
   const flag = p.scope === "system" ? [] : ["--user"];
   const res = await deps.exec(["systemctl", ...flag, "show", p.unit, "-p", "ActiveState,NRestarts"]);
   const out: UnitInfo = {};
