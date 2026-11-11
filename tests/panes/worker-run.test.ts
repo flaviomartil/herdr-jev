@@ -22,6 +22,29 @@ test("codex invocation uses a profile when its config exists, else --model, prom
   expect(plain.argv).toEqual(["codex", "exec", "--model", "gpt-5-5", "-"]);
 });
 
+test("codex alias without a profile fails early, and models.local.yml maps aliases to profiles", () => {
+  expect(() => buildInvocation({ cli: "codex", model: "terra", prompt: "p" }, { codexProfileExists: () => false })).toThrow("codex profile terra ausente");
+  const mapped = buildInvocation({ cli: "codex", model: "terra", prompt: "p" }, { codexProfileExists: (n) => n === "px", codexMap: { terra: "px" } });
+  expect(mapped.argv.slice(0, 4)).toEqual(["codex", "exec", "-p", "px"]);
+  const explicit = buildInvocation({ cli: "codex", model: "terra", prompt: "p" }, { codexProfileExists: (n) => n === "eco", codexMap: { terra: "profile:eco" } });
+  expect(explicit.argv.slice(2, 4)).toEqual(["-p", "eco"]);
+  expect(() => buildInvocation({ cli: "codex", model: "sol", prompt: "p" }, { codexProfileExists: () => false, codexMap: { sol: "profile:nope" } })).toThrow("codex profile nope ausente");
+  const plain = buildInvocation({ cli: "codex", model: "sol", prompt: "p" }, { codexProfileExists: () => false, codexMap: { sol: "gpt-5-5" } });
+  expect(plain.argv.slice(2, 4)).toEqual(["--model", "gpt-5-5"]);
+});
+
+test("worker-run with a missing codex profile records a failed exit and never starts the CLI", async () => {
+  const home = mkTmp("home");
+  const env = fakes.env({ HERDR_JEV_STATE_DIR: state.stateDir, HOME: home });
+  const lines: string[] = [];
+  const code = await runWorker({ runId: "r-noprofile", cli: "codex", model: "terra", promptFile, cwd: work, env, echo: (l) => lines.push(l) });
+  expect(code).toBe(2);
+  expect(lines).toEqual(["codex profile terra ausente"]);
+  const sum = summarize("r-noprofile", readEvents("r-noprofile", env));
+  expect([sum.state, sum.tail]).toEqual(["failed", "codex profile terra ausente"]);
+  expect(readFileSync(fakes.log, "utf8")).not.toContain("codex exec");
+});
+
 test("agy attaches the prompt with -p= and skips permissions; claude uses -p with stdin", () => {
   const agy = buildInvocation({ cli: "agy", model: "gemini-flash", effort: "low", prompt: "-dash prompt" });
   expect(agy.argv).toEqual(["agy", "--model", "gemini-flash", "--effort", "low", "--dangerously-skip-permissions", "-p=-dash prompt"]);
@@ -84,4 +107,13 @@ test("inactivity timeout kills a silent worker", async () => {
   expect(code).toBe(124);
   const kinds = readEvents("r-idle", env).filter((e) => e.type === "timeout").map((e) => e.kind);
   expect(kinds).toEqual(["inactivity"]);
+});
+
+test("grandchildren that ignore SIGTERM are SIGKILLed before the wrapper returns", async () => {
+  const pidFile = join(work, "stubborn.pid");
+  const env = fakes.env({ HERDR_JEV_STATE_DIR: state.stateDir, FAKE_STUBBORN_PID_FILE: pidFile });
+  const code = await runWorker({ runId: "r-stubborn", cli: "codex", model: "gpt-5-5", promptFile, cwd: work, env, echo: () => undefined, timeoutMs: 600, graceMs: 100 });
+  expect(code).toBe(124);
+  const child = Number(readFileSync(pidFile, "utf8").trim());
+  expect(() => process.kill(child, 0)).toThrow();
 });

@@ -744,6 +744,12 @@ Jev analyzes naming patterns and provider conventions to determine:
 
 `/jev` in the Claude Code mod opens a four-section pane (needs you, working agents, models and proxies, proposals). Agent identity (stable names, per-CLI avatars) lives in `src/identity/`. Details in `claude-plugin/README.md`.
 
+## Worker panes (`worker-run`, `panes`)
+
+`herdr-jev worker-run --cli codex|agy|claude --model M [--effort E] --prompt-file F --run-id R [--cwd D] [--timeout S] [--inactivity S]` runs one external worker in its own process group and appends `start`, `out` and `exit` events to `<state>/runs/<R>/events.jsonl`. Timeouts kill the whole group.
+
+`herdr-jev panes start|pump|status|list|focus|close|restart|send|tab|layout|abort|watch` places workers through a `PaneHost` (herdr, tmux, Ghostty on macOS, or background), at most 3 visible with the rest queued. The Claude mod drives these commands when its `panes` option is on; see `claude-plugin/README.md`.
+
 ## Jev Office
 
 The Jev Office draws every agent as a person at a desk, grouped by workspace and tab, with state, branch, uncommitted changes, model, weekly quota and run summary. Open it from the Command Palette (**Jev: Office view**) or run it standalone:

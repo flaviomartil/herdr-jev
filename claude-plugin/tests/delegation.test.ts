@@ -39,7 +39,7 @@ test('delegation: Agent tool with opus to implement goes out as sonnet with pass
   await $.agent.spawn({ subagentType: 'general-purpose', model: 'opus', prompt: 'Implement the endpoint', description: 'implement endpoint' } as never)
   const out = seen.spawns[0]!
   expect(out.subagentType).toBe('harness:sonnet-medium')
-  expect(out.model).toBe('claude-sonnet-5-5')
+  expect(out.model).toBe('sonnet')
   expect(out.prompt.startsWith('Passo 0: localizar e seguir as skills que cobrem a tarefa; reportar quais usou.')).toBe(true)
 })
 
@@ -65,6 +65,8 @@ test('delegation: a batch of 3 returns 3 runIds without waiting, and harness_wai
   expect(started.runs.every(r => r.state === 'running')).toBe(true)
   expect(started.runs.map(r => `${r.model}:${r.effort}`)).toEqual(['claude-haiku-5-5:low', 'claude-sonnet-5-5:medium', 'claude-opus-5-5:high'])
   expect(seen.spawns).toHaveLength(3)
+  expect(seen.spawns.map(s => s.model)).toEqual(['haiku', 'sonnet', 'opus'])
+  expect(seen.specs.filter(s => s.name.startsWith('haiku') || s.name.startsWith('sonnet') || s.name.startsWith('opus')).every(s => ['haiku', 'sonnet', 'opus'].includes(String(s.model)))).toBe(true)
   expect(seen.spawns.every(s => s.prompt.startsWith('Passo 0:'))).toBe(true)
   const waiting = call($, 'harness_wait', { runIds: started.runs.map(r => r.runId) })
   await finish($, 'agent-1', 'found')
@@ -74,16 +76,6 @@ test('delegation: a batch of 3 returns 3 runIds without waiting, and harness_wai
   expect(done.results.map(r => r.result)).toEqual(['found', 'fixed', 'approved'])
   expect(done.results.every(r => r.state === 'done')).toBe(true)
   expect(done.pending).toEqual([])
-})
-
-test('delegation: an external worker run is a recorded stub, not a started process', opts, async ($, on) => {
-  const seen = setup(on)
-  seen.runHook = async () => ({ exitCode: 0, stdout: '/bin/codex', stderr: '' })
-  await start($)
-  const out = await call($, 'harness_delegate', { tasks: [{ task: 'Find the config', prefer: 'codex' }] })
-  const run = (JSON.parse(String(out.result)) as { runs: { runId: string; worker: string; stub?: boolean; state: string }[] }).runs[0]!
-  expect([run.worker, run.stub, run.state]).toEqual(['codex', true, 'skipped'])
-  expect(seen.spawns).toHaveLength(0)
 })
 
 test('delegation: the mod own spawn keeps the judge hints and is not reclassified', opts, async ($, on) => {

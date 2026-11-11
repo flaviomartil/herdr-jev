@@ -170,3 +170,55 @@ test("cli: panes list and start report JSON, worker-run validates its flags", as
   expect(await main(["panes", "nonsense"])).toBe(2);
   expect(createHost("background").kind).toBe("background");
 });
+
+test("a pane that dies before the worker starts frees its queue slot", async () => {
+  const e = env({ HERDR_PANE_ID: "p-origin" });
+  const ctx = ctxFor(e);
+  const first = [id(), id(), id()];
+  for (const runId of first) await manager.start(ctx, { runId, cli: "codex", model: "luna", prompt: "t", cwd: work });
+  const waiting = id();
+  process.env.FAKE_PANE_GONE = "1";
+  try {
+    const result = await manager.start(ctx, { runId: waiting, cli: "codex", model: "luna", prompt: "t", cwd: work });
+    expect(result.status).toBe("started");
+  } finally {
+    delete process.env.FAKE_PANE_GONE;
+  }
+  for (const runId of first) {
+    const sum = summarize(runId, readEvents(runId, e));
+    expect([sum.state, sum.tail]).toEqual(["failed", "pane closed before the worker started"]);
+  }
+});
+
+test("session end detaches visible runs and restore reopens them with watch next to interrupted offers", async () => {
+  const e = env({ HERDR_PANE_ID: "p-origin" });
+  const ctx = ctxFor(e);
+  const repo = mkTmp("repo2");
+  const visible = id();
+  const bg = id();
+  await manager.start(ctx, { runId: visible, name: "vis", cli: "codex", model: "luna", prompt: "a", cwd: repo, session: "S9" });
+  await manager.start(ctx, { runId: bg, name: "back", cli: "codex", model: "luna", prompt: "b", cwd: repo, session: "S9", host: "background" });
+  appendEvent(visible, { type: "start", pid: 99999990, pgid: 99999990 }, e);
+  appendEvent(bg, { type: "start", pid: 99999991, pgid: 99999991 }, e);
+  expect(await manager.detach(ctx, "S9")).toEqual([visible]);
+  expect(await manager.abort(ctx, { session: "S9", backgroundOnly: true })).toEqual([bg]);
+  expect(summarize(visible, readEvents(visible, e))).toMatchObject({ state: "running", detached: true });
+  expect(summarize(bg, readEvents(bg, e)).state).toBe("interrupted");
+  await manager.layoutSave(ctx, repo);
+  const restored = await manager.layoutRestore(ctx, repo);
+  expect(restored.detached).toEqual([visible]);
+  expect(restored.reopened).toEqual([visible]);
+  expect(restored.restartOffered).toEqual([bg]);
+});
+
+test("ghostty wraps the worker line in sh -c so fish-like shells accept it", async () => {
+  const seen: string[][] = [];
+  const host = createHost("ghostty", {}, async (argv) => {
+    seen.push(argv);
+    return { ok: true, stdout: "term-1\n", stderr: "" };
+  });
+  const placed = await host.split("a; rc=$?; if [ \"$rc\" -eq 0 ]; then exit; fi", work, "t", {});
+  expect(placed).toEqual({ id: "term-1" });
+  expect(seen[0]![0]).toBe("osascript");
+  expect(seen[0]![2]).toContain("input text \"sh -c ");
+});

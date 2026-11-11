@@ -225,7 +225,7 @@ export function enforceSpawn(s: SpawnLike, models: Models = DEFAULT_MODELS): Spa
     }
     if (target !== null) {
       subagentType = agentTypeFor(target.tier, target.effort);
-      model = models.claude[target.tier];
+      model = target.tier;
       notes.push(`${want.class}: ${cur.tier}${cur.effort ? `-${cur.effort}` : ""} -> ${target.tier}-${target.effort}`);
     }
   }

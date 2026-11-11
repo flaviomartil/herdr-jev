@@ -24,7 +24,7 @@ case "$1 $2" in
   "pane split") n=$((n+1)); echo $n > "$FAKE_DIR/herdr.n"; echo "{\\"result\\":{\\"pane\\":{\\"pane_id\\":\\"p-$n\\"}}}";;
   "tab create") echo '{"result":{"tab":{"tab_id":"t-1"},"root_pane":{"pane_id":"p-root"}}}';;
   "tab list") echo '{"result":{"tabs":[{"tab_id":"t-1","label":"feat"}]}}';;
-  "pane read") echo "screen";;
+  "pane read") if [ -n "$FAKE_PANE_GONE" ]; then echo "pane not found" >&2; exit 1; fi; echo "screen";;
 esac
 exit 0
 `);
@@ -43,6 +43,7 @@ exit 0
 printf '%s\\n' "${bin} $*" >> "$FAKE_LOG"
 if [ ! -t 0 ] && [ "${bin}" != "agy" ]; then in=$(cat); printf '%s\\n' "STDIN:$in" >> "$FAKE_LOG"; fi
 if [ -n "$FAKE_CHILD_PID_FILE" ]; then sleep 60 & echo $! > "$FAKE_CHILD_PID_FILE"; wait; fi
+if [ -n "$FAKE_STUBBORN_PID_FILE" ]; then sh -c 'trap "" TERM; exec sleep 60' & echo $! > "$FAKE_STUBBORN_PID_FILE"; wait; fi
 if [ -n "$FAKE_SLEEP" ]; then sleep "$FAKE_SLEEP"; fi
 echo "out from ${bin}"
 exit "\${FAKE_EXIT:-0}"

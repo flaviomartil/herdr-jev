@@ -32,6 +32,7 @@ export interface Entry {
 }
 
 interface Registry {
+  max?: number;
   entries: Record<string, Entry>;
   tabs: Record<string, { host: HostKind; tabId: string; paneId: string }>;
 }
@@ -49,7 +50,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function readRegistry(ctx: Ctx): Registry {
   try {
     const parsed = JSON.parse(readFileSync(registryFile(ctx), "utf8"));
-    return { entries: parsed.entries ?? {}, tabs: parsed.tabs ?? {} };
+    return { max: typeof parsed.max === "number" ? parsed.max : undefined, entries: parsed.entries ?? {}, tabs: parsed.tabs ?? {} };
   } catch {
     return { entries: {}, tabs: {} };
   }
@@ -156,7 +157,14 @@ async function launch(ctx: Ctx, reg: Registry, entry: Entry): Promise<boolean> {
 
 async function pumpLocked(ctx: Ctx, reg: Registry): Promise<string[]> {
   const started: string[] = [];
-  const max = ctx.max ?? MAX_VISIBLE;
+  const max = ctx.max ?? reg.max ?? MAX_VISIBLE;
+  for (const entry of Object.values(reg.entries)) {
+    if (entry.status !== "active" || !entry.paneId || summaryOf(ctx, entry).state !== "queued") continue;
+    if ((await hostOf(ctx, entry).state(entry.paneId)) === "gone") {
+      entry.status = "closed";
+      appendEvent(entry.runId, { type: "exit", code: 1, outcome: "failed", tail: "pane closed before the worker started" }, ctx.env);
+    }
+  }
   const queued = Object.values(reg.entries).filter((e) => e.status === "queued").sort((a, b) => a.createdAt - b.createdAt);
   for (const entry of queued) {
     const live = Object.values(reg.entries).filter((e) => isLive(ctx, e)).length;
@@ -187,6 +195,7 @@ export async function start(ctx: Ctx, input: StartInput): Promise<StartResult> {
   };
   return withLock(ctx, async () => {
     const reg = readRegistry(ctx);
+    if (ctx.max) reg.max = ctx.max;
     reg.entries[runId] = entry;
     appendEvent(runId, { type: "queued", cli: entry.cli, model: entry.model, host: entry.host, name: entry.name }, ctx.env);
     await pumpLocked(ctx, reg);
@@ -194,6 +203,19 @@ export async function start(ctx: Ctx, input: StartInput): Promise<StartResult> {
     const status = entry.status === "active" ? "started" : entry.status === "queued" ? "queued" : "failed";
     return { runId, status, host: entry.host, paneId: entry.paneId, title: titleOf(entry), ...(status === "failed" ? { reason: "pane host could not start the worker" } : {}) };
   });
+}
+
+export async function openWatch(ctx: Ctx, runId: string, name: string, cwd: string, kind?: HostKind): Promise<Outcome> {
+  const host = createHost(kind ?? detectHost(ctx.env), ctx.env, ctx.cmd);
+  if (host.kind === "background") return { ok: false, message: "no terminal to watch in" };
+  const line = `${shq(workerBin(ctx))} panes watch ${shq(safeRunId(runId))}; sleep 10`;
+  const placed = await host.split(line, cwd, `${name} · claude`, { direction: "down" });
+  return { ok: placed !== null, message: placed ? `watching ${name}` : "could not open a watch pane" };
+}
+
+export function recordEvent(ctx: Ctx, runId: string, type: string, extra: Record<string, unknown>): void {
+  if (!["start", "out", "exit", "queued"].includes(type)) throw new Error(`invalid event type: ${type}`);
+  appendEvent(runId, { type: type as "start", ...extra }, ctx.env);
 }
 
 export async function pump(ctx: Ctx): Promise<string[]> {
@@ -206,7 +228,7 @@ export async function pump(ctx: Ctx): Promise<string[]> {
 }
 
 export function resolveEntry(ctx: Ctx, name: string): Entry | null {
-  const all = Object.values(readRegistry(ctx).entries).filter((e) => e.status !== "closed" || true);
+  const all = Object.values(readRegistry(ctx).entries);
   const hits = all.filter((e) => e.runId === name || e.name === name).sort((a, b) => b.createdAt - a.createdAt);
   return hits[0] ?? null;
 }
@@ -249,6 +271,19 @@ export async function abort(ctx: Ctx, opts: { session?: string; backgroundOnly?:
       }
     }
     writeRegistry(ctx, reg);
+    return hit;
+  });
+}
+
+export async function detach(ctx: Ctx, session?: string): Promise<string[]> {
+  return withLock(ctx, async () => {
+    const hit: string[] = [];
+    for (const entry of Object.values(readRegistry(ctx).entries)) {
+      if (entry.host === "background" || !isLive(ctx, entry)) continue;
+      if (session && entry.session !== session) continue;
+      appendEvent(entry.runId, { type: "detached" }, ctx.env);
+      hit.push(entry.runId);
+    }
     return hit;
   });
 }
@@ -348,34 +383,38 @@ export async function layoutSave(ctx: Ctx, cwd: string): Promise<Outcome> {
 export interface RestoreResult extends Outcome {
   reopened: string[];
   restartOffered: string[];
+  detached: string[];
 }
 
 export async function layoutRestore(ctx: Ctx, cwd: string): Promise<RestoreResult> {
   const file = layoutFile(ctx, repoName(cwd));
-  if (!existsSync(file)) return { ok: false, message: "no saved layout", reopened: [], restartOffered: [] };
+  if (!existsSync(file)) return { ok: false, message: "no saved layout", reopened: [], restartOffered: [], detached: [] };
   const saved = JSON.parse(readFileSync(file, "utf8")) as { tabs: { feature: string; host: HostKind }[]; entries: any[] };
   const reopened: string[] = [];
   const restartOffered: string[] = [];
+  const detached: string[] = [];
   for (const t of saved.tabs) {
     if (!readRegistry(ctx).tabs[t.feature]) await newTab(ctx, t.feature, cwd, t.host);
   }
   const bin = shq(workerBin(ctx));
   for (const e of saved.entries) {
-    const state = summarize(e.runId, readEvents(e.runId, ctx.env)).state;
-    if (state === "done" || state === "failed" || state === "timeout") {
-      const watchId = `${e.runId}-watch`.slice(0, 64);
+    const sum = summarize(e.runId, readEvents(e.runId, ctx.env));
+    const state = sum.state;
+    const stillRunning = state === "running" && sum.detached;
+    if (state === "done" || state === "failed" || state === "timeout" || stillRunning) {
       const reg = readRegistry(ctx);
       const tabPane = e.tab ? reg.tabs[e.tab]?.paneId ?? null : null;
       const host = createHost(detectHost(ctx.env), ctx.env, ctx.cmd);
       const placed = await host.split(`${bin} panes watch ${shq(e.runId)}; exec "\${SHELL:-sh}"`, e.cwd, `${e.name} · ${e.cli} (watch)`, { anchor: tabPane, direction: "down" });
       if (placed) reopened.push(e.runId);
-      void watchId;
+      if (stillRunning) detached.push(e.runId);
     } else {
       restartOffered.push(e.runId);
     }
   }
+  const keep = detached.length > 0 ? ` Still running after the session ended, watching: ${detached.join(", ")}.` : "";
   const offer = restartOffered.length > 0 ? ` Interrupted or unfinished, not rerun: ${restartOffered.join(", ")}. Use /harness restart <run> to rerun one.` : "";
-  return { ok: true, message: `layout restored: ${reopened.length} finished runs reopened with watch.${offer}`, reopened, restartOffered };
+  return { ok: true, message: `layout restored: ${reopened.length} runs reopened with watch.${keep}${offer}`, reopened, restartOffered, detached };
 }
 
 export async function watch(runId: string, env: NodeJS.ProcessEnv, write: (s: string) => void = (s) => process.stdout.write(s), pollMs = 500, maxMs = 3_600_000): Promise<number> {

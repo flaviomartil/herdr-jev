@@ -179,7 +179,7 @@ export function ghosttyHost(cmd: Cmd = processCmd): PaneHost {
     async split(command, _cwd, _title, opts) {
       const dir = opts?.direction ?? "right";
       const anchor = opts?.anchor ? `first terminal whose id is "${esc(opts.anchor)}"` : front;
-      const r = await cmd(osa(`tell application "Ghostty"\nset t2 to split (${anchor}) direction ${dir}\ninput text "${esc(command)}\\n" to t2\nreturn id of t2\nend tell`));
+      const r = await cmd(osa(`tell application "Ghostty"\nset t2 to split (${anchor}) direction ${dir}\ninput text "${esc(`sh -c ${shq(command)}`)}\\n" to t2\nreturn id of t2\nend tell`));
       const id = r.stdout.trim();
       return r.ok && id ? { id } : null;
     },
