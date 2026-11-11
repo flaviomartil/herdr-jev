@@ -848,7 +848,7 @@ A quoted literal after `||` or `??` is redacted when the assignment target is se
 
 `herdr-jev proxies status|check [--repair] [--json]` watches local proxies registered in `~/.config/jev/proxies.local.yml` (mode 600, private; the repo ships only `config/proxies.example.yml`). Per entry: `id`, `port`, optional `health` (HTTP path, else TCP), `unit`, `scope` (`user` or `system`), `dependsOn`, `usedBy`.
 
-Rules: systemd owns dead processes and the tool never restarts them. A proxy is acted on only after two failed checks 10 s apart. `activating` units are not touched and `failed` units only print the `reset-failed` command. `NRestarts` rising between checks means systemd is handling it. At most one restart per 10 min per proxy (state in `~/.local/state/jev/proxies-state.json`). System units only warn. Without `--repair` nothing is restarted. After a restart the check waits up to 20 s for recovery.
+Rules: systemd owns dead processes and the tool never restarts them. A proxy is acted on only after two failed checks 10 s apart. `activating` units are not touched and `failed` units only print the `reset-failed` command. `NRestarts` rising between checks means systemd is handling it. At most one restart per 10 min per proxy (state in `~/.local/state/herdr-jev/proxies-state.json`). System units only warn. Without `--repair` nothing is restarted. After a restart the check waits up to 20 s for recovery.
 
 The Claude mod runs `check --repair` at session start and every 30 s, toasts restarts and failures, and shows `proxy down: <ids>` in the band. Enable with the `proxies` plugin option (default off).
 

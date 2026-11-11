@@ -33,3 +33,8 @@ test('proxies: enabled runs check --repair at start and toasts a restart', opts,
   expect(seen.runs.find(argv => argv[1] === 'proxies')).toEqual(['herdr-jev', 'proxies', 'check', '--repair', '--json'])
   expect(seen.toasts.some(text => text.includes('proxy alpha restarted'))).toBe(true)
 })
+
+test('proxies: inactive unit with no action is not shown as down', () => {
+  const out = summarize([{ id: 'o', healthy: false, action: 'none', activeState: 'inactive' }])
+  expect(out.note).toBe('')
+})

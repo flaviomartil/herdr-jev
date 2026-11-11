@@ -4,22 +4,25 @@ import { cliConfig, runJson } from './cli'
 const CHECK_EVERY_MS = 30_000
 const CHECK_TIMEOUT_MS = 90_000
 
-type Row = { id: string; healthy: boolean; action: string; restarted?: boolean; recovered?: boolean; command?: string }
+type Row = { id: string; activeState?: string; healthy: boolean; action: string; restarted?: boolean; recovered?: boolean; command?: string }
 
 let note = ''
 let running = false
+let timer: { cancel: () => void } | null = null
 
 export const proxiesEnabled = (options: PluginOptions): boolean => options.proxies === true
 
 export const proxyNote = (): string => note
 
 export function resetProxies(): void {
+  timer?.cancel()
+  timer = null
   note = ''
   running = false
 }
 
 export function summarize(rows: readonly Row[]): { note: string; toasts: string[] } {
-  const down = rows.filter(row => !row.healthy && row.recovered !== true)
+  const down = rows.filter(row => !row.healthy && row.recovered !== true && !(row.action === 'none' && row.activeState !== undefined && row.activeState !== 'active'))
   const toasts: string[] = []
   for (const row of rows) {
     if (row.restarted === true) toasts.push(`proxy ${row.id} restarted${row.recovered === true ? '' : ', still down'}`)
@@ -53,7 +56,8 @@ export async function startProxies($: EngineInterface, options: PluginOptions, c
     }
   }
   void tick()
-  $.clock.every(CHECK_EVERY_MS, () => {
+  timer?.cancel()
+  timer = $.clock.every(CHECK_EVERY_MS, () => {
     void tick()
   })
 }

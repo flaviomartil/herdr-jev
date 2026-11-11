@@ -6,7 +6,7 @@ export type ProxyScope = "user" | "system";
 
 export type Proxy = {
   id: string;
-  port?: number;
+  port: number;
   health?: string;
   unit?: string;
   scope: ProxyScope;
@@ -30,12 +30,12 @@ export function parseRegistry(text: string): Proxy[] {
     if (!cur) return;
     const id = cur.id;
     if (!id) throw new Error("proxy entry without id");
-    const port = cur.port === undefined ? undefined : Number(cur.port);
-    if (port !== undefined && !(Number.isInteger(port) && port > 0 && port < 65536)) throw new Error(`${id}: invalid port`);
-    if (!cur.health && port === undefined) throw new Error(`${id}: needs port or health`);
+    const port = Number(cur.port);
+    if (cur.port === undefined || !(Number.isInteger(port) && port > 0 && port < 65536)) throw new Error(`${id}: port required`);
+    if (cur.unit && !/^[\w@.-]+\.service$/.test(cur.unit)) throw new Error(`${id}: invalid unit name`);
     out.push({
       id,
-      ...(port !== undefined ? { port } : {}),
+      port,
       ...(cur.health ? { health: cur.health } : {}),
       ...(cur.unit ? { unit: cur.unit } : {}),
       scope: cur.scope === "system" ? "system" : "user",

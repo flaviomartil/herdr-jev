@@ -19,7 +19,6 @@ function tcp(port: number, timeoutMs: number): Promise<boolean> {
 }
 
 export const probe: Probe = async (proxy) => {
-  if (proxy.port === undefined) return false;
   if (!(await tcp(proxy.port, PROBE_TIMEOUT_MS))) return false;
   if (!proxy.health?.startsWith("/")) return true;
   try {

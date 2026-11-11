@@ -7,6 +7,6 @@ proxies:
     dependsOn: []
     usedBy: [codex]
   - id: example-system-proxy
-    port: 18080
+    port: 18999
     unit: example.service
     scope: system

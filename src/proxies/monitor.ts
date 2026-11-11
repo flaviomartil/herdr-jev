@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { decide } from "./decide.js";
+import { RESTART_WINDOW_MS, decide } from "./decide.js";
 import type { Action } from "./decide.js";
 import { probe as defaultProbe } from "./health.js";
 import type { Probe } from "./health.js";
@@ -22,7 +22,7 @@ export type History = Record<string, number[]>;
 
 export type Store = { load: () => History; save: (h: History) => void };
 
-export const statePath = (home = homedir()): string => join(home, ".local", "state", "jev", "proxies-state.json");
+export const statePath = (home = homedir()): string => join(home, ".local", "state", "herdr-jev", "proxies-state.json");
 
 export function fileStore(path = statePath()): Store {
   return {
@@ -35,9 +35,55 @@ export function fileStore(path = statePath()): Store {
     },
     save: (h) => {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, JSON.stringify(h), { mode: 0o600 });
+      const tmp = `${path}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(h), { mode: 0o600 });
+      renameSync(tmp, path);
     },
   };
+}
+
+export const lockPath = (home = homedir()): string => join(home, ".local", "state", "herdr-jev", "proxies.lock");
+
+export const LOCK_STALE_MS = 120_000;
+
+export type Lock = () => (() => void) | null;
+
+export function fileLock(path = lockPath(), staleMs = LOCK_STALE_MS, alive: (pid: number) => boolean = pidAlive): Lock {
+  return () => {
+    mkdirSync(dirname(path), { recursive: true });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fd = openSync(path, "wx", 0o600);
+        writeFileSync(fd, String(process.pid));
+        closeSync(fd);
+        return () => {
+          try {
+            unlinkSync(path);
+          } catch {}
+        };
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "EEXIST") return null;
+        try {
+          const pid = Number(readFileSync(path, "utf8"));
+          const old = Date.now() - statSync(path).mtimeMs > staleMs;
+          if (!old && Number.isInteger(pid) && pid > 0 && alive(pid)) return null;
+          unlinkSync(path);
+        } catch {
+          return null;
+        }
+      }
+    }
+    return null;
+  };
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
 }
 
 export type Deps = {
@@ -46,6 +92,7 @@ export type Deps = {
   sleep: (ms: number) => Promise<void>;
   now: () => number;
   store: Store;
+  lock: Lock;
   recheckMs: number;
   recoverMs: number;
 };
@@ -56,6 +103,7 @@ export const defaultDeps = (): Deps => ({
   sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
   store: fileStore(),
+  lock: fileLock(),
   recheckMs: 10_000,
   recoverMs: 20_000,
 });
@@ -71,10 +119,13 @@ export type Result = {
   command?: string;
 };
 
+const UNIT = /^[\w@.-]+\.service$/;
+
 type UnitInfo = { activeState?: string; restarts?: number };
 
 async function unitInfo(deps: Deps, p: Proxy): Promise<UnitInfo> {
   if (!p.unit) return {};
+  if (!UNIT.test(p.unit)) return {};
   const flag = p.scope === "system" ? [] : ["--user"];
   const res = await deps.exec(["systemctl", ...flag, "show", p.unit, "-p", "ActiveState,NRestarts"]);
   const out: UnitInfo = {};
@@ -136,11 +187,28 @@ export async function check(proxies: Proxy[], deps: Deps, repair: boolean): Prom
     });
     const r: Result = { id: p.id, healthy: false, activeState: now.activeState, action: d.action, reason: d.reason, restarted: false, command: d.command };
     if (d.action === "restart" && repair && p.unit) {
-      await deps.exec(["systemctl", "--user", "restart", p.unit]);
-      history[p.id] = [...(history[p.id] ?? []).filter((t) => deps.now() - t < 3_600_000), deps.now()];
-      deps.store.save(history);
-      r.restarted = true;
-      r.recovered = await waitRecovered(deps, p);
+      const release = deps.lock();
+      if (!release) {
+        r.action = "wait";
+        r.reason = "another session is repairing";
+      } else {
+        try {
+          const fresh = deps.store.load();
+          const recent = (fresh[p.id] ?? []).some((t) => deps.now() - t < RESTART_WINDOW_MS);
+          if (recent) {
+            r.action = "warn";
+            r.reason = "restart denied, one per 10 min";
+          } else {
+            fresh[p.id] = [...(fresh[p.id] ?? []).filter((t) => deps.now() - t < 3_600_000), deps.now()];
+            deps.store.save(fresh);
+            await deps.exec(["systemctl", "--user", "restart", p.unit]);
+            r.restarted = true;
+            r.recovered = await waitRecovered(deps, p);
+          }
+        } finally {
+          release();
+        }
+      }
     } else if (d.action === "restart") {
       r.command = `systemctl --user restart ${p.unit}`;
     }

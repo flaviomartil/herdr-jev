@@ -1,8 +1,12 @@
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { decide } from "../src/proxies/decide.ts";
 import { main } from "../src/proxies/cli.ts";
 import { check } from "../src/proxies/monitor.ts";
 import type { Deps, History } from "../src/proxies/monitor.ts";
+import { fileLock } from "../src/proxies/monitor.ts";
 import { parseRegistry } from "../src/proxies/registry.ts";
 
 const REG = `proxies:
@@ -21,7 +25,7 @@ const REG = `proxies:
     scope: system
 `;
 
-type Fake = { alive: Set<string>; units: Record<string, { state: string; n: number }>; calls: string[][]; history: History; t: number; healOnRestart: boolean };
+type Fake = { alive: Set<string>; units: Record<string, { state: string; n: number }>; calls: string[][]; history: History; t: number; healOnRestart: boolean; locked?: boolean };
 
 function fake(over: Partial<Fake> = {}): { deps: Deps; f: Fake } {
   const f: Fake = { alive: new Set(), units: {}, calls: [], history: {}, t: 1_000_000, healOnRestart: true, ...over };
@@ -41,6 +45,7 @@ function fake(over: Partial<Fake> = {}): { deps: Deps; f: Fake } {
       f.t += ms;
     },
     now: () => f.t,
+    lock: () => (f.locked ? null : () => {}),
     store: { load: () => f.history, save: (h) => void (f.history = h) },
     recheckMs: 10_000,
     recoverMs: 20_000,
@@ -140,4 +145,58 @@ test("cli check --json prints results and exit code reflects health", async () =
 test("cli rejects unknown subcommand", async () => {
   const errs: string[] = [];
   expect(await main(["proxies", "x"], { out: () => {}, err: (s) => errs.push(s) })).toBe(2);
+});
+
+test("held lock blocks restart", async () => {
+  const { deps, f } = fake({ alive: new Set(["beta", "sys"]), locked: true });
+  const res = await check(proxies, deps, true);
+  expect(restarts(f)).toHaveLength(0);
+  expect(res[0]!.reason).toContain("another session");
+});
+
+test("history reloaded under lock denies a restart another session just did", async () => {
+  const { deps, f } = fake({ alive: new Set(["beta", "sys"]) });
+  const load = deps.store.load;
+  let calls = 0;
+  deps.store.load = () => (++calls === 1 ? {} : { alpha: [f.t - 1000] });
+  const res = await check(proxies, deps, true);
+  expect(restarts(f)).toHaveLength(0);
+  expect(res[0]!.action).toBe("warn");
+  void load;
+});
+
+test("history is persisted before the restart exec", async () => {
+  const { deps, f } = fake({ alive: new Set(["beta", "sys"]) });
+  let saved = false;
+  const save = deps.store.save;
+  deps.store.save = (h) => {
+    saved = true;
+    save(h);
+  };
+  const exec = deps.exec;
+  deps.exec = async (a) => {
+    if (a.includes("restart")) expect(saved).toBe(true);
+    return exec(a);
+  };
+  await check(proxies, deps, true);
+  expect(restarts(f)).toHaveLength(1);
+});
+
+test("file lock is exclusive, reclaims dead pid and stale files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "lk-"));
+  const path = join(dir, "l.lock");
+  const lock = fileLock(path, 120_000, () => true);
+  const rel = lock();
+  expect(rel).not.toBeNull();
+  expect(lock()).toBeNull();
+  rel!();
+  writeFileSync(path, "99999999");
+  expect(fileLock(path, 120_000, () => false)()).not.toBeNull();
+  writeFileSync(path, String(process.pid));
+  expect(fileLock(path, -1, () => true)()).not.toBeNull();
+});
+
+test("registry requires port and valid unit names", () => {
+  expect(() => parseRegistry("proxies:\n  - id: a\n    health: /h\n")).toThrow();
+  expect(() => parseRegistry("proxies:\n  - id: a\n    port: 1\n    unit: x;rm.service\n")).toThrow();
 });
