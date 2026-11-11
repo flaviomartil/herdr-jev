@@ -10,6 +10,8 @@ import {
   featuresDir,
   inferPhase,
   isInside,
+  SCAN_CAP,
+  repoKey,
   newDoc,
   normalizeCommand,
   normalizeTaskId,
@@ -30,7 +32,8 @@ const RAN_CAP = 200
 const EMPTY: OddView = { repo: '', current: null, features: [], phase: null }
 const oddAtom = atom({ plugin: 'harness', key: 'odd' } as const, EMPTY, { shape: 'odd-1' })
 
-type Where = { home: string; cwd: string; root: string; repo: string }
+type Where = { home: string; cwd: string; root: string; repo: string; key: string }
+const LOCK_STALE_MS = 30_000
 
 let current: string | null = null
 let asked = false
@@ -65,7 +68,9 @@ async function locate($: EngineInterface): Promise<Where | null> {
   if (where !== null && where.cwd === cwd && where.home === home) return where
   const top = await attempt(() => $.process.run(['git', 'rev-parse', '--show-toplevel'], { cwd, timeoutMs: 3000 }))
   const root = top !== undefined && top.exitCode === 0 && top.stdout.trim().length > 0 ? top.stdout.trim() : cwd
-  where = { home, cwd, root, repo: root.slice(root.lastIndexOf('/') + 1) }
+  const real = await attempt(() => $.fs.stat(root, { resolve: true }))
+  const name = root.slice(root.lastIndexOf('/') + 1)
+  where = { home, cwd, root, repo: name, key: repoKey(name, real?.realPath ?? root) }
   return where
 }
 
@@ -81,11 +86,11 @@ async function publish($: EngineInterface, w: Where | null): Promise<void> {
 }
 
 async function scan($: EngineInterface, w: Where): Promise<OddFeatureRow[]> {
-  const dir = featuresDir(w.home, w.repo)
+  const dir = featuresDir(w.home, w.key)
   const entries = await attempt(() => $.fs.list(dir))
   const rows: OddFeatureRow[] = []
-  for (const entry of entries ?? []) {
-    if (!entry.name.endsWith('.md')) continue
+  const newest = [...(entries ?? [])].filter(entry => entry.name.endsWith('.md')).sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, SCAN_CAP)
+  for (const entry of newest) {
     const path = `${dir}/${entry.name}`
     const doc = await readDoc($, path)
     if (doc !== null) rows.push(rowOf(doc, path))
@@ -104,28 +109,65 @@ const bar = (row: OddFeatureRow): string => `${row.name} ${row.done}/${row.total
 function ports($: EngineInterface, w: Where): EvidencePorts {
   const git = (args: string[]) => $.process.run(['git', ...args], { cwd: w.root, timeoutMs: 5000 })
   return {
-    commitExists: async sha => (await attempt(() => git(['cat-file', '-e', `${sha}^{commit}`])))?.exitCode === 0,
-    ranOk: command => ran.get(command) === true,
-    run: async command => {
-      const out = await attempt(() => $.tool.call({ tool: 'Bash', command } as never))
-      return out === undefined || (out as { isError?: boolean }).isError === true || (out as { deny?: string }).deny !== undefined ? 1 : 0
+    commitOk: async (sha, createdMs) => {
+      if ((await attempt(() => git(['cat-file', '-e', `${sha}^{commit}`])))?.exitCode !== 0) return false
+      if ((await attempt(() => git(['merge-base', '--is-ancestor', sha, 'HEAD'])))?.exitCode !== 0) return false
+      const when = await attempt(() => git(['show', '-s', '--format=%ct', sha]))
+      return when !== undefined && when.exitCode === 0 && Number(when.stdout.trim()) * 1000 >= createdMs
     },
-    changed: async files => {
-      const safe = files.filter(file => !file.startsWith('-'))
+    ranOk: command => ran.get(command) === true,
+    changed: async (files, createdMs) => {
+      const safe = files.filter(file => !file.startsWith('-') && !file.startsWith('/') && !file.includes('..'))
       if (safe.length === 0) return false
-      const status = await attempt(() => git(['status', '--porcelain', '--', ...safe]))
-      if (status !== undefined && status.exitCode === 0 && status.stdout.trim().length > 0) return true
-      const last = await attempt(() => git(['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD', '--', ...safe]))
-      return last !== undefined && last.exitCode === 0 && last.stdout.trim().length > 0
+      const dirty = await attempt(() => git(['status', '--porcelain', '--', ...safe]))
+      const since = await attempt(() => git(['log', `--since=@${Math.floor(createdMs / 1000)}`, '--format=', '--name-only', '--', ...safe]))
+      const touched = (dirty?.exitCode === 0 && dirty.stdout.trim().length > 0) || (since?.exitCode === 0 && since.stdout.trim().length > 0)
+      if (!touched) return false
+      for (const file of safe) {
+        const st = await attempt(() => $.fs.stat(`${w.root}/${file}`))
+        if (st !== undefined && st.mtimeMs > createdMs) return true
+      }
+      return false
     },
   }
 }
 
-async function save($: EngineInterface, w: Where, name: string, doc: FeatureDoc): Promise<string> {
-  const path = featurePath(w.home, w.repo, name)
-  await $.fs.write(path, renderDoc(doc))
-  await refresh($, w)
-  return path
+async function withLock<T>($: EngineInterface, path: string, work: () => Promise<T>): Promise<T | null> {
+  const lock = `${path}.lock`
+  await attempt(() => $.process.run(['mkdir', '-p', path.slice(0, path.lastIndexOf('/'))], { timeoutMs: 3000 }))
+  for (let i = 0; i < 20; i++) {
+    const got = await attempt(() => $.process.run(['mkdir', lock], { timeoutMs: 3000 }))
+    if (got?.exitCode === 0) {
+      try {
+        return await work()
+      } finally {
+        await attempt(() => $.process.run(['rmdir', lock], { timeoutMs: 3000 }))
+      }
+    }
+    const st = await attempt(() => $.fs.stat(lock))
+    if (st !== undefined && (await $.clock.now()) - st.mtimeMs > LOCK_STALE_MS) {
+      await attempt(() => $.process.run(['rmdir', lock], { timeoutMs: 3000 }))
+      continue
+    }
+    await attempt(() => $.clock.sleep(100))
+  }
+  return null
+}
+
+async function mutate($: EngineInterface, w: Where, name: string, change: (doc: FeatureDoc | null) => FeatureDoc | string): Promise<FeatureDoc | string> {
+  const path = featurePath(w.home, w.key, name)
+  const out = await withLock($, path, async () => {
+    const next = change(await readDoc($, path))
+    if (typeof next === 'string') return next
+    const tmp = `${path}.tmp`
+    await $.fs.write(tmp, renderDoc(next))
+    const moved = await $.process.run(['mv', '-f', tmp, path], { timeoutMs: 3000 })
+    if (moved.exitCode !== 0) throw new Error('mv failed')
+    return next
+  })
+  if (out === null) return 'the feature document is locked by another writer, try again.'
+  if (typeof out !== 'string') await refresh($, w)
+  return out
 }
 
 async function currentDoc($: EngineInterface, w: Where): Promise<{ doc: FeatureDoc; name: string } | string> {
@@ -134,7 +176,7 @@ async function currentDoc($: EngineInterface, w: Where): Promise<{ doc: FeatureD
       ? 'No open feature. The user opens one with /harness feature <name> <request>.'
       : `Several open features (${open.map(row => row.name).join(', ')}). The user picks one with /harness feature <name>.`
   }
-  const doc = await readDoc($, featurePath(w.home, w.repo, current))
+  const doc = await readDoc($, featurePath(w.home, w.key, current))
   return doc === null ? `Feature document for ${current} is unreadable.` : { doc, name: current }
 }
 
@@ -150,10 +192,10 @@ export async function oddCommand($: EngineInterface, options: PluginOptions, arg
   if (cmd.kind === 'spec') {
     const found = await currentDoc($, w)
     if (typeof found === 'string') return found
-    await save($, w, found.name, addSpec(found.doc, cmd.text))
-    return `Spec added to ${found.name}.`
+    const done = await mutate($, w, found.name, doc => (doc === null ? 'feature document is gone.' : addSpec(doc, cmd.text)))
+    return typeof done === 'string' ? done : `Spec added to ${found.name}.`
   }
-  const path = featurePath(w.home, w.repo, cmd.name)
+  const path = featurePath(w.home, w.key, cmd.name)
   if (isInside(path, w.root)) return 'Feature documents must live outside the work repo.'
   const existing = await readDoc($, path)
   if (existing !== null) {
@@ -162,8 +204,10 @@ export async function oddCommand($: EngineInterface, options: PluginOptions, arg
     return `Feature ${cmd.name} resumed: ${path}`
   }
   const created = new Date(await $.clock.now()).toISOString()
+  const made = await mutate($, w, cmd.name, doc => doc ?? newDoc(cmd.name, w.repo, created, cmd.request))
+  if (typeof made === 'string') return made
   current = cmd.name
-  await save($, w, cmd.name, newDoc(cmd.name, w.repo, created, cmd.request))
+  await publish($, w)
   return `Feature ${cmd.name} opened: ${path}`
 }
 
@@ -184,9 +228,14 @@ async function taskDone($: EngineInterface, e: Record<string, unknown>): Promise
   if (task.done) return `${task.id} is already done.`
   const evidence = parseEvidence(e.evidence)
   if (typeof evidence === 'string') return `harness_task_done: ${evidence}. ${task.id} stays open.`
-  const verdict = await verifyEvidence(evidence, ports($, w))
+  const verdict = await verifyEvidence(evidence, ports($, w), Date.parse(found.doc.created) || 0)
   if (!verdict.ok) return `harness_task_done: evidence not accepted (${verdict.note}). ${task.id} stays open.`
-  await save($, w, found.name, completeTask(found.doc, task.id, verdict.line))
+  const saved = await mutate($, w, found.name, doc => {
+    const fresh = doc?.tasks.find(t => t.id === task.id)
+    if (doc === null || fresh === undefined) return 'task vanished from the document.'
+    return fresh.done ? 'task already done.' : completeTask(doc, task.id, verdict.line)
+  })
+  if (typeof saved === 'string') return `harness_task_done: ${saved}`
   const row = open.find(r => r.name === found.name)
   return `${task.id} done (${verdict.note}). ${row === undefined ? '' : bar(row)}`
 }
@@ -199,9 +248,8 @@ async function taskAdd($: EngineInterface, e: Record<string, unknown>): Promise<
   const title = typeof e.title === 'string' ? e.title.trim() : ''
   if (title.length === 0) return 'harness_task_add: title is empty.'
   const spec = typeof e.spec === 'string' ? e.spec.trim().toUpperCase() : ''
-  const next = addTask(found.doc, title, spec)
-  if (typeof next === 'string') return `harness_task_add: ${next}.`
-  await save($, w, found.name, next)
+  const next = await mutate($, w, found.name, doc => (doc === null ? 'feature document is gone.' : addTask(doc, title, spec)))
+  if (typeof next === 'string') return `harness_task_add: ${next}`
   return `T${next.tasks.length} added to ${found.name}, linked to ${spec}.`
 }
 

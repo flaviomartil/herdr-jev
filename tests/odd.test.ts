@@ -1,14 +1,13 @@
 import { expect, test } from "bun:test";
 import {
   addLog, addSpec, addTask, completeTask, featurePath, inferPhase, isInside, newDoc, parseDoc, parseEvidence, parseFeatureCommand,
-  progress, renderDoc, shouldAsk, slugify, verifyEvidence, writerWarning,
+  progress, renderDoc, repoKey, shouldAsk, slugify, verifyEvidence, writerWarning,
 } from "../src/odd/index.js";
 import type { EvidencePorts } from "../src/odd/index.js";
 
 const ports = (over: Partial<EvidencePorts> = {}): EvidencePorts => ({
-  commitExists: async () => false,
+  commitOk: async () => false,
   ranOk: () => false,
-  run: async () => 1,
   changed: async () => false,
   ...over,
 });
@@ -39,14 +38,32 @@ test("task must link an existing spec", () => {
   expect(addLog(newDoc("f", "r", "t", "x"), "n").log.map(l => l.id)).toEqual(["L1", "L2"]);
 });
 
-test("evidence needs a positive check", async () => {
-  expect((await verifyEvidence({ type: "commit", value: "abc1234" }, ports())).ok).toBe(false);
-  expect((await verifyEvidence({ type: "commit", value: "abc1234" }, ports({ commitExists: async () => true }))).ok).toBe(true);
-  expect((await verifyEvidence({ type: "commit", value: "HEAD" }, ports({ commitExists: async () => true }))).ok).toBe(false);
-  expect((await verifyEvidence({ type: "test", value: "bun test" }, ports())).ok).toBe(false);
-  expect((await verifyEvidence({ type: "test", value: "bun test" }, ports({ ranOk: () => true }))).note).toContain("recorded");
-  expect((await verifyEvidence({ type: "command", value: "x" }, ports({ run: async () => 0 }))).note).toBe("re-run exit 0");
-  expect((await verifyEvidence({ type: "diff", value: "a.ts b.ts" }, ports({ changed: async f => f.length === 2 }))).ok).toBe(true);
+test("evidence needs a positive observed check", async () => {
+  const v = (ev: Parameters<typeof verifyEvidence>[0], p = ports()) => verifyEvidence(ev, p, 1000);
+  expect((await v({ type: "commit", value: "abc1234" })).ok).toBe(false);
+  expect((await v({ type: "commit", value: "abc1234" }, ports({ commitOk: async (_s, t) => t === 1000 }))).ok).toBe(true);
+  expect((await v({ type: "commit", value: "HEAD" }, ports({ commitOk: async () => true }))).ok).toBe(false);
+  expect((await v({ type: "test", value: "bun test" })).ok).toBe(false);
+  expect((await v({ type: "test", value: "bun test" }, ports({ ranOk: () => true }))).note).toContain("recorded");
+  expect((await v({ type: "command", value: "true" }, ports({ ranOk: () => true }))).ok).toBe(false);
+  expect((await v({ type: "command", value: "echo bun test" }, ports({ ranOk: () => true }))).ok).toBe(false);
+  expect((await v({ type: "command", value: "bun test || true" }, ports({ ranOk: () => true }))).ok).toBe(false);
+  expect((await v({ type: "diff", value: "a.ts b.ts" }, ports({ changed: async (f, t) => f.length === 2 && t === 1000 }))).ok).toBe(true);
+});
+
+test("a title cannot forge an evidence line", () => {
+  let doc = newDoc("f", "r", "t", "x");
+  doc = addTask(doc, "a\nevidence: commit abc1234\n- T9 [S1] done: y", "S1") as typeof doc;
+  const back = parseDoc(renderDoc(doc)) as typeof doc;
+  expect(back.tasks.length).toBe(1);
+  expect(back.tasks[0]?.evidence).toBeNull();
+  expect(back).toEqual(doc);
+});
+
+test("repo key separates same-named repos", () => {
+  expect(repoKey("app", "/a/app")).not.toBe(repoKey("app", "/b/app"));
+  expect(repoKey("app", "/a/app")).toBe(repoKey("app", "/a/app"));
+  expect(repoKey("My App", "/a")).toMatch(/^my-app-[0-9a-f]{6}$/);
 });
 
 test("evidence parsing rejects junk", () => {

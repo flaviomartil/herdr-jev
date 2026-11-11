@@ -14,10 +14,9 @@ export type FeatureDoc = {
 };
 export type Progress = { done: number; total: number; percent: number };
 export type EvidencePorts = {
-  commitExists: (sha: string) => Promise<boolean>;
+  commitOk: (sha: string, createdMs: number) => Promise<boolean>;
   ranOk: (command: string) => boolean;
-  run: (command: string) => Promise<number>;
-  changed: (files: string[]) => Promise<boolean>;
+  changed: (files: string[], createdMs: number) => Promise<boolean>;
 };
 export type Verdict = { ok: boolean; line: string; note: string };
 
@@ -53,7 +52,7 @@ export const newDoc = (name: string, repo: string, created: string, request: str
   };
 };
 
-const indent = (text: string): string => text.replace(/\r?\n/g, "\n  ");
+const indent = (text: string): string => text.replace(/\r\n|\r|\n/g, "\n  | ");
 
 export function renderDoc(doc: FeatureDoc): string {
   const out: string[] = [`# Feature: ${doc.name}`, `repo: ${doc.repo}`, `created: ${doc.created}`, "", "## Specs", ""];
@@ -81,19 +80,19 @@ export function parseDoc(text: string): FeatureDoc | null {
     else if (section === "head") {
       const m = line.match(/^(repo|created): (.*)$/);
       if (m !== null) doc[m[1] as "repo" | "created"] = m[2] as string;
-    } else if (line.startsWith("  ")) {
-      const rest = line.slice(2);
+    } else if (line.startsWith("  | ")) {
+      const rest = line.slice(4);
       if (section === "tasks") {
-        const ev = rest.match(/^evidence: (.*)$/);
         const last = doc.tasks[doc.tasks.length - 1];
-        if (last === undefined) continue;
-        if (ev !== null) last.evidence = ev[1] as string;
-        else last.title += `\n${rest}`;
+        if (last !== undefined) last.title += `\n${rest}`;
       } else {
         const list = section === "specs" ? doc.specs : doc.log;
         const last = list[list.length - 1];
         if (last !== undefined) last.text += `\n${rest}`;
       }
+    } else if (section === "tasks" && line.startsWith("  evidence: ")) {
+      const last = doc.tasks[doc.tasks.length - 1];
+      if (last !== undefined && last.evidence === null) last.evidence = line.slice(12);
     } else if (section === "specs" || section === "log") {
       const m = line.match(/^- ([SL]\d+): (.*)$/);
       if (m !== null) (section === "specs" ? doc.specs : doc.log).push({ id: m[1] as string, text: m[2] as string });
@@ -156,30 +155,34 @@ export function parseEvidence(raw: unknown): Evidence | string {
   return { type: type as EvidenceType, value: value.trim() };
 }
 
-export async function verifyEvidence(ev: Evidence, ports: EvidencePorts): Promise<Verdict> {
+export async function verifyEvidence(ev: Evidence, ports: EvidencePorts, createdMs: number): Promise<Verdict> {
   if (ev.type === "commit") {
     const sha = ev.value.toLowerCase();
     if (!/^[0-9a-f]{7,40}$/.test(sha)) return { ok: false, line: "", note: "commit value is not a sha" };
-    return (await ports.commitExists(sha))
+    return (await ports.commitOk(sha, createdMs))
       ? { ok: true, line: `commit ${sha}`, note: "commit exists" }
-      : { ok: false, line: "", note: `commit ${sha} not found in this repo` };
+      : { ok: false, line: "", note: `commit ${sha} is not in this repo, not reachable from HEAD, or older than the feature` };
   }
   if (ev.type === "diff") {
     const files = ev.value.split(/[\s,]+/).filter(Boolean);
-    return (await ports.changed(files))
+    return (await ports.changed(files, createdMs))
       ? { ok: true, line: `diff ${files.join(" ")}`, note: "files changed in git" }
-      : { ok: false, line: "", note: "none of the cited files has a change in git" };
+      : { ok: false, line: "", note: "none of the cited files changed in git after the feature was opened" };
   }
   const cmd = normalizeCommand(ev.value);
-  if (ports.ranOk(cmd)) return { ok: true, line: `${ev.type} ${cmd} exit 0`, note: "exit 0 recorded this session" };
-  return (await ports.run(cmd)) === 0
-    ? { ok: true, line: `${ev.type} ${cmd} exit 0`, note: "re-run exit 0" }
-    : { ok: false, line: "", note: "command did not exit 0" };
+  if (!isTestCommand(cmd)) return { ok: false, line: "", note: "only test, typecheck, lint or validate commands count as evidence" };
+  return ports.ranOk(cmd)
+    ? { ok: true, line: `${ev.type} ${cmd} exit 0`, note: "exit 0 recorded this session" }
+    : { ok: false, line: "", note: "no observed run of this command with exit 0 in this session" };
 }
 
-const TEST_COMMAND = /(^|[\s;&|(])(bun\s+(run\s+)?test|npm\s+(run\s+)?test|pnpm\s+(run\s+)?test|yarn\s+test|npx\s+(vitest|jest)|vitest|jest|pytest|python3?\s+-m\s+pytest|cargo\s+(test|check|clippy)|go\s+(test|vet)|tsc|phpunit|make\s+(test|check)|claude\s+plugin\s+(test|validate)|(bun|npm|pnpm)\s+run\s+(typecheck|lint))(\s|$)/;
+const TEST_BODY = String.raw`bun\s+(run\s+)?test|npm\s+(run\s+)?test|pnpm\s+(run\s+)?test|yarn\s+test|npx\s+(vitest|jest)|vitest|jest|pytest|python3?\s+-m\s+pytest|cargo\s+(test|check|clippy)|go\s+(test|vet)|tsc|phpunit|make\s+(test|check)|claude\s+plugin\s+(test|validate)|(bun|npm|pnpm)\s+run\s+(typecheck|lint)`;
+const TEST_COMMAND = new RegExp(String.raw`(^|[\s;&|(])(${TEST_BODY})(\s|$)`);
+const TEST_START = new RegExp(String.raw`^(?:[A-Za-z_]\w*=\S+\s+)*(?:cd\s+\S+\s*&&\s*)?(?:${TEST_BODY})(\s|$)`);
 const EXPLORE_TOOLS = new Set(["Read", "Grep", "Glob", "LS", "NotebookRead"]);
 const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+export const isTestCommand = (command: string): boolean => TEST_START.test(command) && !/[;|&`]|\$\(/.test(command.replace(/^cd\s+\S+\s*&&\s*/, ""));
 
 export function inferPhase(tool: string, command?: string): Phase | undefined {
   if (EXPLORE_TOOLS.has(tool)) return "explore";
@@ -213,3 +216,11 @@ export function parseFeatureCommand(args: string): FeatureCommand | null {
   if (slugify(word[1] as string).length === 0) return { kind: "usage", reason: "feature name needs letters or digits" };
   return { kind: "open", name: slugify(word[1] as string), request: tail };
 }
+
+export function repoKey(name: string, realPath: string): string {
+  let h = 2166136261;
+  for (let i = 0; i < realPath.length; i++) h = Math.imul(h ^ realPath.charCodeAt(i), 16777619) >>> 0;
+  return `${slugify(name) || "repo"}-${h.toString(16).padStart(8, "0").slice(0, 6)}`;
+}
+
+export const SCAN_CAP = 50;
