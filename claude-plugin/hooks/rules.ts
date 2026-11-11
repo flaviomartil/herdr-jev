@@ -1,9 +1,9 @@
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
-import { commitFiles, createEvaluator, mergeRules, parseRules, writtenPaths } from './rules-core'
+import { commitFiles, createEvaluator, failureVerdict, mergeRules, parseRules, pushNeedsBranch, writtenPaths } from './rules-core'
 import type { Evaluator } from './rules-core'
 import { DEFAULT_RULES } from './rules-data'
 
-const TOOLS = ['Bash', 'Write', 'Edit', 'MultiEdit'] as const
+const TOOLS = ['Bash', 'Write', 'Edit', 'MultiEdit', 'NotebookEdit'] as const
 const LOCAL_FILE = '.config/jev/rules.local.yml'
 
 export const rulesEnabled = (options: PluginOptions): boolean => options.rules !== false
@@ -14,6 +14,15 @@ async function attempt<T>(run: () => Promise<T>): Promise<T | undefined> {
   } catch {
     return undefined
   }
+}
+
+async function realOf($: EngineInterface, path: string): Promise<string | undefined> {
+  const hit = await attempt(() => $.fs.stat(path, { resolve: true }))
+  if (hit?.realPath !== undefined) return hit.realPath
+  const cut = path.lastIndexOf('/')
+  if (cut <= 0) return undefined
+  const parent = await attempt(() => $.fs.stat(path.slice(0, cut), { resolve: true }))
+  return parent?.realPath === undefined ? undefined : `${parent.realPath}${path.slice(cut)}`
 }
 
 async function readText($: EngineInterface, path: string): Promise<string | null> {
@@ -38,7 +47,7 @@ function evaluator($: EngineInterface): Promise<Evaluator> {
       try {
         config = mergeRules(base, parseRules(text))
       } catch {
-        config = base
+        return { evaluate: failureVerdict }
       }
     }
     return createEvaluator(config)
@@ -69,12 +78,25 @@ export function registerRules(on: On, options: PluginOptions): void {
       const cwd = await attempt(() => $.session.cwd())
       const home = await attempt(() => $.env.get('HOME'))
       const files: Record<string, string> = {}
+      const unreadable: string[] = []
+      const realPaths: Record<string, string> = {}
+      let branch: string | undefined
       let isNew: boolean | undefined
       if (tool === 'Bash' && typeof input.command === 'string') {
         for (const file of commitFiles(input.command)) {
           const text = await readText($, file.startsWith('/') ? file : `${cwd}/${file}`)
-          if (text !== null) files[file] = text
+          if (text === null) unreadable.push(file)
+          else files[file] = text
         }
+        if (pushNeedsBranch(input.command)) {
+          const run = await attempt(() => $.process.run(['git', 'symbolic-ref', '--short', 'HEAD'], { cwd, timeoutMs: 1000 }))
+          if (run !== undefined && run.exitCode === 0) branch = run.stdout.trim()
+        }
+      }
+      for (const path of writtenPaths(tool, input)) {
+        const abs = path.startsWith('/') ? path : `${cwd ?? ''}/${path}`
+        const real = await realOf($, abs)
+        if (real !== undefined) realPaths[path] = real
       }
       if (tool === 'Write') {
         const [path] = writtenPaths(tool, input)
@@ -86,7 +108,7 @@ export function registerRules(on: On, options: PluginOptions): void {
           }
         }
       }
-      const verdict = (await evaluator($)).evaluate({ type: 'tool', tool, input, cwd, home, files, isNew })
+      const verdict = (await evaluator($)).evaluate({ type: 'tool', tool, input, cwd, home, files, unreadable, realPaths, branch, isNew })
       if (verdict.decision === 'deny') return { deny: `harness rules: ${verdict.reason}` }
       if (verdict.decision === 'ask') {
         const id = e.tool_use_id
@@ -103,7 +125,11 @@ export function registerRules(on: On, options: PluginOptions): void {
         return { ...ran, context: [...(ran.context ?? []), `harness rules: ${verdict.reason}`] } as typeof ran
       }
       return next(e)
-    }).catch(($, e, next) => next(e))
+    }).catch(($, e, next) => {
+      if (next.called) return next(e)
+      const failed = failureVerdict({ type: 'tool', tool, input: e as unknown as Record<string, unknown> })
+      return failed.decision === 'deny' ? { deny: `harness rules: ${failed.reason}` } : next(e)
+    })
 
     on('tool.check', { tool }, async ($, e, next) => {
       const id = e.tool_use_id
