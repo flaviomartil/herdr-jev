@@ -227,6 +227,7 @@ declare module 'claude-code' {
       costs: Record<string, HarnessCost>
       delegations: Shaped<DelegationRow[]>
       rosterIds: Shaped<Record<string, number>>
+      wait: { text: string; until: number | null } | null
       odd: Shaped<OddView>
       proposals: Shaped<ProposalRow[]>
       proposalExpanded: string

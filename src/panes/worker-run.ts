@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AGY_AUTH_EARLY } from "../failover/outcome/agy.js";
 import { redactSecrets } from "../herdr/pane-text.js";
 import { parseModelOverrides } from "../judge/index.js";
 import { appendEvent } from "./events.js";
@@ -88,6 +89,13 @@ export interface WorkerOptions {
   env?: NodeJS.ProcessEnv;
   echo?: (line: string) => void;
   graceMs?: number;
+  finalExit?: boolean;
+}
+
+export interface WorkerReport {
+  code: number;
+  outcome: "done" | "failed" | "timeout" | "interrupted";
+  output: string;
 }
 
 const MAX_OUT_EVENTS = 5000;
@@ -115,6 +123,10 @@ function reportHerdr(env: NodeJS.ProcessEnv, cli: string, state: string, message
 }
 
 export async function runWorker(opts: WorkerOptions): Promise<number> {
+  return (await runWorkerDetailed(opts)).code;
+}
+
+export async function runWorkerDetailed(opts: WorkerOptions): Promise<WorkerReport> {
   const env = opts.env ?? process.env;
   const echo = opts.echo ?? ((line: string) => process.stdout.write(`${line}\n`));
   const prompt = readFileSync(opts.promptFile, "utf8");
@@ -124,8 +136,8 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     echo(message);
-    appendEvent(opts.runId, { type: "exit", code: 2, outcome: "failed", tail: message }, env);
-    return 2;
+    if (opts.finalExit !== false) appendEvent(opts.runId, { type: "exit", code: 2, outcome: "failed", tail: message }, env);
+    return { code: 2, outcome: "failed", output: message };
   }
   const [bin, ...args] = invocation.argv as [string, ...string[]];
   const shownArgs = args.map((a) => (a.startsWith("-p=") ? "-p=<prompt>" : a));
@@ -133,7 +145,7 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
   const inactivityMs = opts.inactivityMs ?? 300_000;
   const grace = opts.graceMs ?? 3000;
 
-  return new Promise<number>((resolve) => {
+  return new Promise<WorkerReport>((resolve) => {
     const child = spawn(bin, args, { cwd: opts.cwd, detached: true, stdio: ["pipe", "pipe", "pipe"], env });
     const pid = child.pid ?? 0;
     let finished = false;
@@ -145,7 +157,15 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
     appendEvent(opts.runId, { type: "start", pid, pgid: pid, wrapperPid: process.pid, cli: opts.cli, model: opts.model, effort: opts.effort ?? null, argv: [bin, ...shownArgs], cwd: opts.cwd ?? process.cwd() }, env);
     reportHerdr(env, opts.cli, "working", `${opts.cli} ${opts.model}`);
 
-    const stop = (kind: "timeout" | "interrupted") => {
+    let authKilled = false;
+    const stop = (kind: "timeout" | "interrupted" | "auth") => {
+      if (kind === "auth") {
+        if (finished || authKilled) return;
+        authKilled = true;
+        killGroup(pid, "SIGTERM");
+        killTimer = setTimeout(() => killGroup(pid, "SIGKILL"), grace);
+        return;
+      }
       if (finished || outcome === "timeout" || outcome === "interrupted") return;
       outcome = kind;
       if (kind === "timeout") appendEvent(opts.runId, { type: "timeout", kind: stopKind }, env);
@@ -172,6 +192,7 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
       const text = redactSecrets(raw).slice(0, MAX_LINE);
       echo(text);
       tail.push(text);
+      if (opts.cli === "agy" && !authKilled && AGY_AUTH_EARLY.test(text)) stop("auth");
       if (tail.length > TAIL_LINES) tail.shift();
       if (outCount < MAX_OUT_EVENTS) {
         outCount += 1;
@@ -214,11 +235,13 @@ export async function runWorker(opts: WorkerOptions): Promise<number> {
       killGroup(pid, "SIGKILL");
       for (const [s, h] of handlers) process.off(s, h);
       if (outcome === "failed" && code === 0) outcome = "done";
-      const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : code ?? 1;
+      const exitCode = outcome === "timeout" ? 124 : outcome === "interrupted" ? 130 : authKilled ? 1 : code ?? 1;
       const joined = tail.join("\n");
-      appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined }, env);
-      reportHerdr(env, opts.cli, outcome === "done" ? "done" : "blocked", `${outcome} (${exitCode})`);
-      resolve(exitCode);
+      if (opts.finalExit !== false) {
+        appendEvent(opts.runId, { type: "exit", code: exitCode, signal, outcome, tail: joined.length > TAIL_CHARS ? joined.slice(-TAIL_CHARS) : joined }, env);
+        reportHerdr(env, opts.cli, outcome === "done" ? "done" : "blocked", `${outcome} (${exitCode})`);
+      }
+      resolve({ code: exitCode, outcome, output: joined });
     };
     child.on("error", (error) => {
       line(`spawn failed: ${error.message}`);

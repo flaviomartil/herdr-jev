@@ -5,6 +5,8 @@ import * as manager from "./manager.js";
 import type { Ctx } from "./manager.js";
 import { processCmd } from "./host.js";
 import type { HostKind } from "./host.js";
+import { parseChain } from "../failover/failover.js";
+import { runWorkerFailover } from "../failover/worker.js";
 import { runWorker } from "./worker-run.js";
 import type { WorkerCli } from "./worker-run.js";
 
@@ -20,7 +22,7 @@ function flags(argv: string[]): { opts: Record<string, string | true>; rest: str
     if (a.startsWith("--")) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next !== undefined && !next.startsWith("--") && !["yes", "stdin-prompt", "json", "background-only"].includes(key)) {
+      if (next !== undefined && !next.startsWith("--") && !["yes", "stdin-prompt", "json", "background-only", "failover"].includes(key)) {
         opts[key] = next;
         i++;
       } else opts[key] = true;
@@ -49,7 +51,10 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     }
     const timeout = num(opts.timeout);
     const inactivity = num(opts.inactivity);
-    return runWorker({
+    const run = opts.failover === true || str(opts.chain)
+      ? (o: Parameters<typeof runWorker>[0]) => runWorkerFailover({ ...o, chain: parseChain(str(opts.chain)), maxAttempts: num(opts["attempts-left"]), setTitle: (t) => process.stdout.write(`\x1b]2;${t}\x07`) })
+      : runWorker;
+    return run({
       runId: str(opts["run-id"])!, cli: cli as WorkerCli, model: str(opts.model)!, effort: str(opts.effort),
       promptFile: str(opts["prompt-file"])!, cwd: str(opts.cwd), env,
       ...(timeout ? { timeoutMs: timeout * 1000 } : {}), ...(inactivity ? { inactivityMs: inactivity * 1000 } : {}),
@@ -75,6 +80,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
           runId: str(opts.run)!, name: str(opts.name), cli: cli as WorkerCli, model: str(opts.model)!, effort: str(opts.effort),
           prompt, promptFile: str(opts["prompt-file"]), cwd, host: str(opts.host) as HostKind | undefined, tab: str(opts.tab),
           session: str(opts.session), lingerSec: num(opts.linger), timeoutSec: num(opts.timeout), inactivitySec: num(opts.inactivity),
+          failover: opts.failover === true, chain: str(opts.chain), attemptsLeft: num(opts["attempts-left"]),
         });
         out({ ...started, eventsFile: eventsFile(started.runId, env) });
         return 0;

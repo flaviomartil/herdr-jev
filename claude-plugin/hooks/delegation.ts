@@ -3,19 +3,22 @@ import {
   DEFAULT_MODELS,
   REGISTERED_PAIRS,
   agentTypeFor,
+  chainFor,
   enforceSpawn,
   isRegisteredType,
   judge,
   mergeModels,
+  parseChainOverrides,
   parseModelOverrides,
   withPasso0,
 } from './judge-core'
 import { publishDelegations } from './jev-state'
-import type { Decision, Hints, JudgeClass, Models, Worker } from './judge-core'
+import type { ChainOverrides, ChainStep, Decision, Hints, JudgeClass, Models, Worker } from './judge-core'
 import { summarizeEvents } from './panes-core'
 
 const TOOL_WAIT = /^mcp__harness__harness_wait$/
 const HARD_CAP = 20
+const MAX_CHAIN_ATTEMPTS = 6
 const MAX_RUNS = 200
 const MAX_QUEUE = 100
 const WAIT_DEFAULT_MS = 120_000
@@ -32,6 +35,8 @@ type Run = {
   cwd?: string
   tab?: string
   decision: Decision
+  rest: ChainStep[]
+  used: number
   state: RunState
   agentId?: string
   watch?: string
@@ -54,6 +59,7 @@ let salt = newSalt()
 let dirty = false
 let flushing: Promise<void> | null = null
 let modelsLoaded: Promise<Models> | null = null
+let chainsLoaded: Promise<ChainOverrides> | null = null
 let availableLoaded: Promise<Partial<Record<Worker, boolean>>> | null = null
 
 export const delegationEnabled = (options: PluginOptions): boolean => options.delegation === true
@@ -90,6 +96,64 @@ function loadModels($: EngineInterface): Promise<Models> {
     }
   })()
   return modelsLoaded
+}
+
+function loadChains($: EngineInterface): Promise<ChainOverrides> {
+  chainsLoaded ??= (async () => {
+    try {
+      const home = await $.env.get('HOME')
+      return home === undefined ? {} : parseChainOverrides(await $.fs.read(`${home}/${MODELS_FILE}`))
+    } catch {
+      return {}
+    }
+  })()
+  return chainsLoaded
+}
+
+const healthKey = (step: ChainStep): string => `${step.worker === 'claude-subagent' ? 'claude' : step.worker}/${step.worker === 'claude-subagent' ? step.tier : step.model}`
+
+async function isLocked($: EngineInterface, options: PluginOptions, step: ChainStep): Promise<boolean> {
+  try {
+    const out = await $.process.run([herdrJevBin(options), 'health', 'check', '--key', healthKey(step)], { timeoutMs: 10_000 })
+    return (JSON.parse(out.stdout.trim().split('\n').pop() ?? '') as { locked?: boolean }).locked === true
+  } catch {
+    return false
+  }
+}
+
+async function usableChain($: EngineInterface, options: PluginOptions, steps: ChainStep[]): Promise<ChainStep[]> {
+  const open: ChainStep[] = []
+  for (const step of steps) if (!(await isLocked($, options, step))) open.push(step)
+  return open.length > 0 ? open : steps
+}
+
+function applyStep(decision: Decision, step: ChainStep): Decision {
+  const { agentType: _drop, ...rest } = decision
+  return { ...rest, worker: step.worker, model: step.model, effort: step.effort, tier: step.tier, reason: `${decision.reason}, chain ${step.worker}/${step.tier}`, ...(step.agentType === undefined ? {} : { agentType: step.agentType }) }
+}
+
+const chainArg = (steps: ChainStep[]): ChainStep[] => {
+  const lead: ChainStep[] = []
+  for (const step of steps) {
+    if (step.worker === 'claude-subagent') break
+    lead.push(step)
+  }
+  return lead
+}
+
+async function advanceRun($: EngineInterface, run: Run, options: PluginOptions, why: string): Promise<boolean> {
+  if (run.used >= MAX_CHAIN_ATTEMPTS) return false
+  const next = run.rest.shift()
+  if (next === undefined) return false
+  run.decision = applyStep(run.decision, next)
+  run.ext = undefined
+  run.state = 'queued'
+  run.note = `fallback to ${next.worker}/${next.tier}: ${why}`.slice(0, 160)
+  if (next.worker === 'claude-subagent') {
+    queue.push(run.id)
+    await pump($, options)
+  } else await startExternal($, run, options)
+  return true
 }
 
 function loadAvailable($: EngineInterface): Promise<Partial<Record<Worker, boolean>>> {
@@ -159,7 +223,7 @@ function newRun(task: TaskInput, decision: Decision): Run {
   const done = new Promise<void>(resolve => {
     finish = resolve
   })
-  const run: Run = { id: `run-${counter}`, task: task.task, cwd: task.cwd, tab: typeof task.tab === 'string' && task.tab !== '' ? task.tab : undefined, decision, state: 'queued', done, finish }
+  const run: Run = { id: `run-${counter}`, task: task.task, cwd: task.cwd, tab: typeof task.tab === 'string' && task.tab !== '' ? task.tab : undefined, decision, rest: [], used: 0, state: 'queued', done, finish }
   runs.set(run.id, run)
   evict()
   return run
@@ -217,10 +281,16 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
   const id = `x${Date.now().toString(36)}-${run.id.replace(/\D/g, '')}`
   const name = `${run.decision.class}-${run.id.replace(/\D/g, '')}`
   const cwd = run.cwd
+  const lead = options.failover === true ? chainArg(run.rest) : []
+  const chain = lead.length > 0 ? ['--chain', lead.map(step => `${step.worker}/${step.model}`).join(',')] : []
+  run.rest = run.rest.slice(lead.length)
   const argv = [
     herdrJevBin(options), 'panes', 'start', '--run', id, '--name', name, '--cli', run.decision.worker,
     '--model', run.decision.model, '--effort', run.decision.effort, '--stdin-prompt',
     '--session', await $.session.id(), '--max', String(maxWorkers(options)),
+    ...(options.failover === true ? ['--failover'] : []),
+    ...chain,
+    ...(options.failover === true ? ['--attempts-left', String(Math.max(1, MAX_CHAIN_ATTEMPTS - run.used))] : []),
     ...(panesEnabled(options) ? [] : ['--host', 'background']),
     ...(run.tab === undefined ? [] : ['--tab', run.tab]),
   ]
@@ -239,9 +309,35 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
   }
 }
 
+function attemptsIn(text: string): number {
+  let used = 0
+  for (const line of text.split('\n')) {
+    if (!line.includes('failover-end')) continue
+    try {
+      const n = (JSON.parse(line) as { attempts?: number }).attempts
+      if (typeof n === 'number') used = n
+    } catch {
+      continue
+    }
+  }
+  return used
+}
+
+function requestError(text: string): boolean {
+  for (const line of text.split('\n')) {
+    if (!line.includes('failover-end')) continue
+    try {
+      if ((JSON.parse(line) as { request?: boolean }).request === true) return true
+    } catch {
+      continue
+    }
+  }
+  return false
+}
+
 const finished = (r: Run): boolean => r.state !== 'queued' && r.state !== 'running'
 
-async function refreshExternal($: EngineInterface, run: Run): Promise<void> {
+async function refreshExternal($: EngineInterface, run: Run, options: PluginOptions): Promise<void> {
   if (run.ext?.file == null || finished(run)) return
   let text: string
   try {
@@ -252,6 +348,7 @@ async function refreshExternal($: EngineInterface, run: Run): Promise<void> {
   const sum = summarizeEvents(text)
   if (sum.state === 'running') return
   if (sum.state === 'done') settle(run, 'done', sum.tail)
+  else if (options.failover === true && sum.outcome !== 'interrupted' && !requestError(text) && (run.used += Math.max(1, attemptsIn(text)), true) && await advanceRun($, run, options, `${sum.outcome} ${sum.tail.slice(0, 80)}`)) return
   else settle(run, 'failed', `${sum.outcome}${sum.exitCode === null ? '' : ` (exit ${sum.exitCode})`}: ${sum.tail}`.slice(0, 4000))
   void publish($)
 }
@@ -384,7 +481,7 @@ export async function delegateBatch($: EngineInterface, input: Record<string, un
   if (tasks.length > 0 && queue.length + tasks.length > MAX_QUEUE) return `harness_delegate batch: queue is full (${MAX_QUEUE}); wait for runs to finish.`
   if (tasks.length === 0) return 'harness_delegate batch: tasks must be a non-empty array of { task }.'
   if (tasks.length > HARD_CAP) return `harness_delegate batch: at most ${HARD_CAP} tasks per call.`
-  const [models, available] = await Promise.all([loadModels($), loadAvailable($)])
+  const [models, available, chains] = await Promise.all([loadModels($), loadAvailable($), loadChains($)])
   const created: Run[] = []
   for (const task of tasks) {
     const hints: Hints = {
@@ -393,7 +490,15 @@ export async function delegateBatch($: EngineInterface, input: Record<string, un
       ...(task.size === 'small' || task.size === 'large' ? { size: task.size } : {}),
       ...(WORKERS.includes(task.prefer ?? '') ? { prefer: task.prefer as Worker } : {}),
     }
-    const run = newRun(task, judge(task.task, hints, models))
+    const judged = judge(task.task, hints, models)
+    const run = newRun(task, judged)
+    if (options.failover === true && hints.prefer === undefined) {
+      const steps = await usableChain($, options, chainFor(judged.class, judged.effort, models, chains, available))
+      if (steps.length > 0) {
+        run.decision = applyStep(judged, steps[0] as ChainStep)
+        run.rest = steps.slice(1)
+      }
+    }
     created.push(run)
     if (run.decision.worker === 'claude-subagent') queue.push(run.id)
     else await startExternal($, run, options)
@@ -413,6 +518,7 @@ export async function noteTurnComplete($: EngineInterface, e: { agentId?: string
   if (run === undefined || run.state !== 'running') return
   byAgent.delete(e.agentId)
   if (e.reason === 'answer') settle(run, 'done', e.answer)
+  else if (options.failover === true && e.reason === 'error' && (run.used += 1, true) && await advanceRun($, run, options, `worker turn ended: ${e.reason}`)) return pump($, options).catch(() => undefined)
   else settle(run, 'failed', `worker turn ended: ${e.reason}`)
   await publish($)
   await watchClaudeEnd($, run, options, e.reason === 'answer', e.reason === 'answer' ? e.answer : e.reason)
@@ -430,7 +536,7 @@ async function waitRuns($: EngineInterface, input: Record<string, unknown>, opti
   if (picked.some(r => r.ext !== undefined && !finished(r))) {
     const settled = () => (input.mode === 'first' ? picked.some(finished) : picked.every(finished))
     for (let waited = 0; waited < timeout; waited += EXT_POLL_MS) {
-      await Promise.all(picked.map(r => refreshExternal($, r)))
+      await Promise.all(picked.map(r => refreshExternal($, r, options)))
       if (settled()) break
       if (waited % (EXT_POLL_MS * 5) === 0) await pumpPanes($, options)
       await Promise.race([joined, $.clock.sleep(EXT_POLL_MS)])
