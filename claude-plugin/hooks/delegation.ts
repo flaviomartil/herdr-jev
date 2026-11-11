@@ -221,6 +221,10 @@ function view(run: Run) {
   }
 }
 
+export function delegationRuns() {
+  return [...runs.values()].map(run => ({ ...view(run), agentId: run.agentId, task: run.task }))
+}
+
 export async function delegateBatch($: EngineInterface, input: Record<string, unknown>, options: PluginOptions): Promise<string> {
   if (!delegationEnabled(options)) return 'harness_delegate batch: delegation is off (userConfig delegation).'
   const tasks = parseTasks(input.tasks)

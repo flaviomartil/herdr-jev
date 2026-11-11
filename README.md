@@ -740,6 +740,10 @@ Jev analyzes naming patterns and provider conventions to determine:
 
 ---
 
+## Claude Code mod pane
+
+`/jev` in the Claude Code mod opens a four-section pane (needs you, working agents, models and proxies, proposals). Agent identity (stable names, per-CLI avatars) lives in `src/identity/`. Details in `claude-plugin/README.md`.
+
 ## Jev Office
 
 The Jev Office draws every agent as a person at a desk, grouped by workspace and tab, with state, branch, uncommitted changes, model, weekly quota and run summary. Open it from the Command Palette (**Jev: Office view**) or run it standalone:

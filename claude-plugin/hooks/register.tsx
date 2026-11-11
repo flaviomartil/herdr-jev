@@ -67,6 +67,7 @@ import {
   registerJudgeAgents,
   spawnWithTier,
 } from './delegation'
+import { registerModPane } from './mod-pane'
 import { mergeReviewIds, reviewIdsKey } from './review-run'
 import type { ReviewIds } from './review-run'
 import type { ConsultTarget, Hue, PlanTaskInput, ReviewPhase, SavedState, TriageResult } from './plan'
@@ -1707,6 +1708,7 @@ export const register: Register = (on, options) => {
   registerPrGate(on, options)
   registerRules(on, options)
   registerDelegationHooks(on, options)
+  registerModPane(on)
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
