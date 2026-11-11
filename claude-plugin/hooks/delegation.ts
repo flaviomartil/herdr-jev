@@ -221,6 +221,7 @@ async function startExternal($: EngineInterface, run: Run, options: PluginOption
     herdrJevBin(options), 'panes', 'start', '--run', id, '--name', name, '--cli', run.decision.worker,
     '--model', run.decision.model, '--effort', run.decision.effort, '--stdin-prompt',
     '--session', await $.session.id(), '--max', String(maxWorkers(options)),
+    ...(options.failover === true ? ['--failover'] : []),
     ...(panesEnabled(options) ? [] : ['--host', 'background']),
     ...(run.tab === undefined ? [] : ['--tab', run.tab]),
   ]

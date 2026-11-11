@@ -186,7 +186,18 @@ Precisa de `delegation`. Cada delegação a `codex` ou `agy` roda sob `herdr-jev
 - Esc no turno principal ou `/harness close` mandam SIGTERM ao `pgid` gravado. O fim da sessão marca os runs em segundo plano como `interrupted`.
 - Comandos: `/harness tab <feature>`, `focus <nome>`, `close <nome>`, `restart <nome>`, `send <nome> <texto>`, `layout save` e `layout restore`. `close` e `restart` de worker em execução pedem `--yes`. `layout restore` reabre runs terminados com `watch` e só oferece `restart` para os interrompidos, nunca reexecuta.
 - `watchClaudeAgents` (padrão `false`): com `panes` ligada, abre um pane só de leitura para cada subagente Claude delegado.
-- Falha de worker sem fallback: a cadeia de failover entra na P6.
+- Falha de worker: ver Failover e espera.
+
+## Failover e espera (opção `failover`, desligada por padrão)
+
+Workers: `herdr-jev worker-run --failover [--chain cli/modelo,cli/modelo]` roda a cadeia dentro do próprio wrapper, sem o Claude aberto. Cada tentativa vira um `Outcome` (`Success`, `Quota`, `Auth`, `Transient`, `Failed`, `Timeout`) por parser de CLI em `src/failover/outcome/<cli>.ts`. Saída não reconhecida vira `Failed`.
+
+- `Transient` (429 sem quota, 5xx, conexão): até 2 retries no mesmo alvo, com `Retry-After` quando existe, senão 2 s e 8 s com jitter. `Quota`: lockout até o reset lido da mensagem do CLI, senão 30 min, e vai ao próximo. `Auth`: lockout do CLI. `Timeout`: 1 retry. `Failed`: próximo uma vez, de novo devolve. Erro de requisição nunca vai a fallback. Teto de 6 tentativas.
+- Cadeia vazia por lockout: o wrapper espera o menor `until` (contagem no pane) e retoma sozinho, até 6 h.
+- Estado em `~/.local/state/herdr-jev/health.json` (lockouts por `cli/modelo`, breaker por CLI com 3 falhas, 5 s dobrando até 120 s) e `route-log.jsonl`. Escrita atômica com lock de PID e expiração em 10 s. `HERDR_JEV_HEALTH_DIR` troca a pasta. `herdr-jev health check|lock|clear|gc --key cli/modelo` expõe o estado.
+- `delegation` com `failover` ligado passa `--failover` ao wrapper.
+
+Turno principal: com a opção ligada, um `turn.step` sem resposta troca uma vez para o tier abaixo (opus, sonnet, haiku) enquanto houver budget. Se o turno termina em erro, um diagnóstico mínimo via `$.model.complete` (no máximo uma vez a cada 5 min por modelo, pulado com lockout ativo) separa quota (429), login (401) e sobrecarga. Quota e sobrecarga abrem a espera: timer do `session.start`, contagem na band, sonda em 1, 2, 5, 10 e 15 min quando não há horário. Ao liberar, o mod avisa e pergunta se continua. `autoResume` envia sozinho. Qualquer prompt, Esc ou `/harness wait cancel` cancela. `/harness wait` mostra o estado. Teto de `maxWaitMinutes` (360).
 
 ## Modelos
 
@@ -272,6 +283,7 @@ Aviso direto: a leitura NÃO é restrita. Um worker Codex lê tudo o que o usuá
 - `prGateAsk` (padrão `false`): ver PR gate.
 - `delegation` (padrão `false`): ver Juiz e delegação.
 - `panes` (padrão `false`) e `watchClaudeAgents` (padrão `false`): ver Panes.
+- `failover` (padrão `false`), `autoResume` (padrão `false`) e `maxWaitMinutes` (padrão `360`): ver Failover e espera.
 - `codex` (padrão `false`): registra e oferece o agente `harness:codex`. `codexMaxMinutes` (padrão `30`): tempo máximo de uma execução do Codex.
 
 ## Limites conhecidos
