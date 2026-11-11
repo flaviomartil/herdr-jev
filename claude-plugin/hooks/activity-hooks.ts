@@ -44,12 +44,8 @@ async function attempt($: EngineInterface, label: string, work: () => Promise<un
 export async function maybeAutoOpen($: EngineInterface, options: PluginOptions): Promise<void> {
   if (!autoOpenEnabled(options) || userClosed) return
   await attempt($, 'auto open jev pane', async () => {
-    try {
-      const panes = await $.ui.panes()
-      if (panes.some(p => p.id === JEV_PANE_ID && p.isPlaced)) return
-    } catch {
-      // panes unreadable: open anyway
-    }
+    const panes = await $.ui.panes().catch(() => [])
+    if (panes.some(p => p.id === JEV_PANE_ID && p.isPlaced)) return
     const opened = await $.ui.open({ id: JEV_PANE_ID, title: 'Jev', closeOnEscape: true })
     if (opened?.isPlaced === false) {
       if ((await read($, jevHintAtom)) !== HINT_TEXT) $.ui.toast(HINT_TEXT)
@@ -132,7 +128,7 @@ export async function liveTurnComplete($: EngineInterface, options: PluginOption
 
 export function registerActivity(on: On, options: PluginOptions): void {
   on('ui.close', async ($, e, next) => {
-    if (e.id === JEV_PANE_ID) userClosed = true
+    if (e.id === JEV_PANE_ID && e.origin?.kind === 'person') userClosed = true
     return next(e)
   }).catch(($, e, next) => next(e))
 

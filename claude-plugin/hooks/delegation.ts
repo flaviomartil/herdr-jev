@@ -64,6 +64,7 @@ const herdrJevBin = (options: PluginOptions): string =>
   typeof options.herdrJevBin === 'string' && options.herdrJevBin.trim() !== '' ? options.herdrJevBin.trim() : 'herdr-jev'
 
 export function resetDelegation(): void {
+  tailTimer?.cancel()
   tailTimer = null
   runs.clear()
   byAgent.clear()
@@ -341,27 +342,42 @@ async function pump($: EngineInterface, options: PluginOptions): Promise<void> {
 }
 
 let tailTimer: Timer | null = null
+const tailing = new Set<string>()
+const TAIL_CAP = 262_144
 
 async function tailExternal($: EngineInterface, run: Run): Promise<void> {
   const file = run.ext?.file
   const id = run.ext?.id
-  if (file == null || id === undefined) return
-  let size: number
+  if (file == null || id === undefined || tailing.has(id)) return
+  tailing.add(id)
   try {
-    size = (await $.fs.stat(file)).size
-  } catch {
-    return
+    let size: number
+    try {
+      size = (await $.fs.stat(file)).size
+    } catch {
+      return
+    }
+    let at = cursorOf(id)
+    if (size <= at) return
+    if (size - at > TAIL_CAP) {
+      at = size - TAIL_CAP
+      setCursor(id, at)
+    }
+    const out = await $.process.run(['tail', '-c', `+${at + 1}`, file], { timeoutMs: 5000 })
+    if (out.exitCode !== 0) return
+    const text = out.stdout.slice(0, TAIL_CAP)
+    const cut = text.lastIndexOf('\n')
+    if (cut < 0) {
+      if (text.length >= TAIL_CAP) setCursor(id, at + new TextEncoder().encode(text).length)
+      return
+    }
+    const chunk = text.slice(0, cut + 1)
+    setCursor(id, at + new TextEncoder().encode(chunk).length)
+    applyTail(id, await $.clock.now(), parseTail(chunk))
+    await publishActivity($)
+  } finally {
+    tailing.delete(id)
   }
-  const at = cursorOf(id)
-  if (size <= at) return
-  const out = await $.process.run(['tail', '-c', `+${at + 1}`, file], { timeoutMs: 5000 })
-  if (out.exitCode !== 0) return
-  const cut = out.stdout.lastIndexOf('\n')
-  if (cut < 0) return
-  const chunk = out.stdout.slice(0, cut + 1)
-  setCursor(id, at + new TextEncoder().encode(chunk).length)
-  applyTail(id, await $.clock.now(), parseTail(chunk))
-  await publishActivity($)
 }
 
 function ensureTail($: EngineInterface): void {
