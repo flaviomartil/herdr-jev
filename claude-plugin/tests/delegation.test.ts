@@ -39,7 +39,7 @@ test('delegation: Agent tool with opus to implement goes out as sonnet with pass
   await $.agent.spawn({ subagentType: 'general-purpose', model: 'opus', prompt: 'Implement the endpoint', description: 'implement endpoint' } as never)
   const out = seen.spawns[0]!
   expect(out.subagentType).toBe('harness:sonnet-medium')
-  expect(out.model).toBe('claude-sonnet-5-5')
+  expect(out.model).toBe('sonnet')
   expect(out.prompt.startsWith('Passo 0: localizar e seguir as skills que cobrem a tarefa; reportar quais usou.')).toBe(true)
 })
 
@@ -65,6 +65,8 @@ test('delegation: a batch of 3 returns 3 runIds without waiting, and harness_wai
   expect(started.runs.every(r => r.state === 'running')).toBe(true)
   expect(started.runs.map(r => `${r.model}:${r.effort}`)).toEqual(['claude-haiku-5-5:low', 'claude-sonnet-5-5:medium', 'claude-opus-5-5:high'])
   expect(seen.spawns).toHaveLength(3)
+  expect(seen.spawns.map(s => s.model)).toEqual(['haiku', 'sonnet', 'opus'])
+  expect(seen.specs.filter(s => s.name.startsWith('haiku') || s.name.startsWith('sonnet') || s.name.startsWith('opus')).every(s => ['haiku', 'sonnet', 'opus'].includes(String(s.model)))).toBe(true)
   expect(seen.spawns.every(s => s.prompt.startsWith('Passo 0:'))).toBe(true)
   const waiting = call($, 'harness_wait', { runIds: started.runs.map(r => r.runId) })
   await finish($, 'agent-1', 'found')

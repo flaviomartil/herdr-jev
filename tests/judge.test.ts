@@ -104,7 +104,7 @@ describe("model overrides", () => {
 describe("spawn enforcement", () => {
   test("implementing with opus becomes sonnet with passo 0", () => {
     const fix = enforceSpawn({ model: "opus", subagentType: "general-purpose", prompt: "Implement the pagination endpoint", description: "implement pagination" });
-    expect([fix.subagentType, fix.model]).toEqual(["harness:sonnet-medium", "claude-sonnet-5-5"]);
+    expect([fix.subagentType, fix.model]).toEqual(["harness:sonnet-medium", "sonnet"]);
     expect(fix.prompt.startsWith(PASSO_0)).toBe(true);
   });
   test("review on sonnet becomes opus", () => {
@@ -113,7 +113,7 @@ describe("spawn enforcement", () => {
   });
   test("explore on opus becomes haiku low", () => {
     const fix = enforceSpawn({ model: "claude-opus-5-5", prompt: "Find where routes are declared", description: "find routes" });
-    expect([fix.subagentType, fix.model]).toEqual(["harness:haiku-low", "claude-haiku-5-5"]);
+    expect([fix.subagentType, fix.model]).toEqual(["harness:haiku-low", "haiku"]);
   });
   test("wrong effort on the right tier is rewritten", () => {
     const fix = enforceSpawn({ subagentType: "harness:sonnet-high", prompt: "Fix the parser bug", description: "fix parser" });

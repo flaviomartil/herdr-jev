@@ -110,7 +110,7 @@ export async function registerJudgeAgents($: EngineInterface, options: PluginOpt
       name,
       description: `Harness ${pair.tier} worker at ${pair.effort} effort, chosen by the delegation judge.`,
       prompt: 'Do exactly the task you are given. Report what you did and which skills you used.',
-      model: models.claude[pair.tier],
+      model: pair.tier,
       effort: pair.effort,
     })
     names.push(name)
@@ -184,7 +184,7 @@ async function startClaude($: EngineInterface, run: Run, options: PluginOptions)
   try {
     const spawned = await $.agent.spawn({
       subagentType: run.decision.agentType,
-      model: run.decision.model,
+      model: run.decision.tier,
       prompt,
       description: run.task.replace(/\s+/g, ' ').slice(0, 60),
       ...(run.cwd === undefined ? {} : { cwd: run.cwd }),
