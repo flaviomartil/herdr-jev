@@ -197,3 +197,11 @@ describe("plugin copy", () => {
     expect(data).toBe(`export const DEFAULT_RULES = ${JSON.stringify(readFileSync(join(root, "rules/jev-rules.yml"), "utf8"))}\n`);
   });
 });
+
+describe("dynamic command position", () => {
+  test.each(["$(echo rm) -rf /x", "R=rm; $R -rf /x", "`echo rm` -r -f /x", "${R} --recursive --force /x"])("N1 asks for %s", command => expect(decision(bash(command))).toBe("ask"));
+  test("N1 dynamic commands without recursive force stay allowed", () => {
+    expect(decision(bash("$(echo ls) -la /x"))).toBe("allow");
+    expect(decision(bash("$R -r /x"))).toBe("allow");
+  });
+});

@@ -244,6 +244,20 @@ export function commitFiles(command: string): string[] {
   return out.filter(f => f !== '-')
 }
 
+const DYNAMIC_HEAD = /^(\$\(.*?\)|`.*?`|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?)\s+(.*)$/
+
+function dynamicRmRf(command: string): boolean {
+  for (const piece of command.split(/[;&|\n]+/)) {
+    const match = DYNAMIC_HEAD.exec(piece.trim())
+    if (match === null) continue
+    const flags = match[2]!.split(/\s+/).filter(a => a.startsWith('-'))
+    const recursive = flags.some(a => a === '--recursive' || /^-[A-Za-z]*[rR]/.test(a))
+    const force = flags.some(a => a === '--force' || /^-[A-Za-z]*f/.test(a))
+    if (recursive && force) return true
+  }
+  return false
+}
+
 function isRmRf(seg: string[]): boolean {
   const t = stripLead(seg)
   if (t.length === 0 || baseName(t[0]!) !== 'rm') return false
@@ -406,7 +420,7 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
       }
     }
     try {
-      if (segments.some(isRmRf)) out.push({ decision: 'ask', rule: 'rm-rf', reason: msg('rmrf', 'Recursive forced delete needs confirmation.') })
+      if (segments.some(isRmRf) || dynamicRmRf(command)) out.push({ decision: 'ask', rule: 'rm-rf', reason: msg('rmrf', 'Recursive forced delete needs confirmation.') })
       for (const seg of segments) {
         const why = pushReason(seg, protectedBranches, event.branch)
         if (why) {
