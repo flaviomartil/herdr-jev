@@ -10,6 +10,7 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "test": "bun test",
+    "test:plugin": "claude plugin test claude-plugin",
     "typecheck": "tsc --noEmit",
     "lint": "bunx biome check src test || true",
     "smoke": "bash scripts/smoke.sh"
