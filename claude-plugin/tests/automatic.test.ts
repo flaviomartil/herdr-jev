@@ -786,3 +786,19 @@ test('manual collection schedules long verification outside the tool hook and de
   await settle()
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'verified' })
 })
+
+test('the five harness tools are registered at session start before the automatic restore reads the store', async ($, on) => {
+  on('store.get', { key: /^harness:auto:/ }, (_$, e, next) => {
+    seen.registered.push(`store:${e.key}`)
+    return next(e)
+  })
+  const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  const read = seen.registered.indexOf('store:harness:auto:sess-1:current')
+  expect(read).toBeGreaterThan(-1)
+  for (const name of ['harness_plan', 'harness_run', 'harness_status', 'harness_collect', 'harness_delegate']) {
+    const at = seen.registered.indexOf(`tool:${name}`)
+    expect(at).toBeGreaterThanOrEqual(0)
+    expect(at).toBeLessThan(read)
+  }
+})
