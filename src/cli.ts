@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 import { choice, noul, score } from "@typesafe-ai/sdk";
 import { Command, Option } from "commander";
-import { triageTaskWithJev, resolveTypeSafeApiKey } from "./triage/client.js";
+import { triageTaskWithJev, resolveTypeSafeApiKey, createDeterministicFallback } from "./triage/client.js";
+import { detectCwdCapabilityTags, resolveCapabilityTags } from "./triage/mcp-profile.js";
 import { planExecution } from "./pipelines/planner.js";
 import { startMcpServer } from "./mcp/server.js";
 import {
@@ -279,6 +280,27 @@ program
     console.log(`Reasoning Effort: ${decision.effort.toUpperCase()}`);
     console.log(`Recommended Pipeline: ${decision.recommendedPipeline === "triad" ? "TRIAD (Advisor -> Implementer -> Reviewer)" : "DIRECT (Implementer)"}`);
     console.log(`Latency: ${decision.latencyMs}ms\n`);
+  });
+
+program
+  .command("mcp-profile")
+  .description("Derive abstract MCP capability tags from a task and working directory; Jev triage unless --offline")
+  .option("--task <text>", "Task text classified by Jev triage and keyword rules")
+  .option("--cwd <dir>", "Working directory whose top-level markers add tags", process.cwd())
+  .option("--offline", "Skip the Jev call and use the deterministic triage fallback")
+  .option("--json", "Output JSON")
+  .action(async (options: { task?: string; cwd: string; offline?: boolean; json?: boolean }) => {
+    const task = options.task?.trim() || undefined;
+    const decision = task
+      ? options.offline ? createDeterministicFallback(task, "offline", 0) : await triageTaskWithJev(task)
+      : undefined;
+    const tags = resolveCapabilityTags({ task, decision, cwdTags: detectCwdCapabilityTags(resolve(options.cwd)) });
+    if (options.json) {
+      console.log(JSON.stringify({ tags, triage: decision ? { complexity: decision.complexity, effort: decision.effort,
+        needsResearch: decision.needsResearch, fallback: decision.rawAnswers.fallback === true } : null }));
+      return;
+    }
+    console.log(tags.join(","));
   });
 
 program
