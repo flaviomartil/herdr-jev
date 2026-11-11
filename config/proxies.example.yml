@@ -1,0 +1,12 @@
+proxies:
+  - id: example-proxy
+    port: 18000
+    health: /health
+    unit: example-proxy.service
+    scope: user
+    dependsOn: []
+    usedBy: [codex]
+  - id: example-system-proxy
+    port: 18999
+    unit: example.service
+    scope: system
