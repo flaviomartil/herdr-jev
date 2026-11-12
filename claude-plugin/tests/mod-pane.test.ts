@@ -37,10 +37,12 @@ test('mod pane: 3 agents of distinct CLIs get stable names, distinct avatars and
   expect(await ui.find({ type: 'Text', text: 'codex' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'agy' })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: 'claude' })).toBeDefined()
-  for (const section of ['Precisa de voce', 'Trabalhando', 'Modelos e proxies', 'Propostas']) {
+  for (const section of ['Precisa de voce', 'Trabalhando']) {
     expect(await ui.find({ type: 'Text', text: new RegExp(section) })).toBeDefined()
   }
-  expect(await ui.find({ type: 'Text', text: /Sem propostas/ })).toBeDefined()
+  for (const section of ['Modelos e proxies', 'Propostas', 'Sem propostas', 'Lockouts']) {
+    expect(await ui.find({ type: 'Text', text: new RegExp(section) })).toBeUndefined()
+  }
   const first = (await ui.findAll({ type: 'Text', text: /^(Ada|Bo|Cass)$/ })).map(t => t.text)
   await ui.unmount()
   const again = await jevUi($)

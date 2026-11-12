@@ -187,12 +187,16 @@ const seed = async ($: Engine, count: number) => {
 }
 const NAMES = /^(Ada|Bo|Cass|Dev|Ede|Fen)$/
 
-test('pane: 3 agents per page with next and previous keys', live, async ($, on) => {
+test('pane: shows all agents when they fit, else pages by available height', live, async ($, on) => {
   const seen = setup(on)
   await start($)
   await seed($, 5)
   await seen.clock.advance(300)
-  const ui = await jevUi($)
+  const tall = await jevUi($)
+  expect(await tall.findAll({ type: 'Text', text: NAMES })).toHaveLength(5)
+  expect(await tall.find({ type: 'Button', key: 'pg-next' })).toBeUndefined()
+  await tall.unmount()
+  const ui = await $.ui.mount({ plugin: 'harness', surface: 'terminal', component: 'Pane', requestId: 'jev', props: { ...PANE_PROPS, title: 'Jev', scroll: { offset: 0, bodyRows: 28 } } })
   expect(await ui.findAll({ type: 'Text', text: NAMES })).toHaveLength(3)
   expect(await ui.find({ type: 'Text', text: '1/2' })).toBeDefined()
   await ui.press({ key: 'pg-next' })

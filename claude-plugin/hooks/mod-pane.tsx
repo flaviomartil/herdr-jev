@@ -5,14 +5,14 @@ import { CLI_THEME, avatar, cliKind, nameFor, parseRosterFile } from './identity
 import type { CliKind } from './identity-core'
 import { proposalAction, toggleDiff, visibleProposals } from './improve'
 import { noteAgents } from './jev-state'
-import { elapsedWord, percentOf, resetActivity, spinnerFrame, tokenWord } from './activity'
+import { elapsedWord, percentOf, resetActivity, tokensDown } from './activity'
 import { markUserClosed, paneWanted, resetAutoOpen } from './activity-hooks'
 import type { Activity } from '../types'
-import { roleMarkOf } from './art-core'
+import { roleMarkOf, variantOf } from './art-core'
 import type { RoleMark } from './art-core'
 import { Art } from './pane-art'
 import { currentTick, emptyCrew, reducedMotion, resetCrew, syncFrames } from './pane-crew'
-import { buildCrew, headerText, reportLines } from './pane-rows'
+import { buildCrew, fitPageSize, headerText, reportLines } from './pane-rows'
 import type { CrewInput, CrewModel } from './pane-rows'
 
 export const MOD_PANE_ID = 'jev'
@@ -261,7 +261,17 @@ export function registerModPane(on: On, options: PluginOptions): void {
     const expanded = await read($, expandedAtom)
     const rows = agentRows(data)
     const crew = await read($, crewAtom)
-    const model = buildCrew(crewInputs(rows, data.roster, names), { ...crew, now, page: await read($, pageAtom) })
+    const share = featureShare(data.plan)
+    const needs = needsRows(data, rows)
+    const limits = data.usage?.limits ?? []
+    const showModels = limits.length > 0
+    const showProposals = proposals.shown.length > 0 || proposals.hidden > 0
+    const sections = 3 + (showModels ? 1 : 0) + (showProposals ? 1 : 0)
+    const overhead =
+      1 + (1 + Math.max(1, needs.length)) + 1 + (share === null ? 0 : 1) + odd.features.length + 2 + (sections - 1) +
+      (showModels ? 1 + limits.length : 0) + (showProposals ? 1 + proposals.shown.length * 3 + 1 : 0) + 1
+    const pageSize = fitPageSize((e.props.scroll?.bodyRows ?? 40) - overhead, rows.length, withFace ? 6 : 5)
+    const model = buildCrew(crewInputs(rows, data.roster, names), { ...crew, now, page: await read($, pageAtom), pageSize })
     const byId = new Map(rows.map(r => [r.id, r]))
     const flow = await read($, progressAtom)
     const oddNow = odd.current === null ? undefined : odd.features.find(f => f.name === odd.current)
@@ -275,12 +285,9 @@ export function registerModPane(on: On, options: PluginOptions): void {
       isTerminal && withFace
         ? model.pageRows
             .filter(v => v.signal !== 'done' && v.signal !== 'failed')
-            .map(v => ({ key: `av-${v.id}`, spec: { kind: v.kind, state: v.artState, role: v.role, lead: v.isLead, animate: v.signal === 'running' && byId.get(v.id)?.state !== 'queued' } }))
+            .map(v => ({ key: `av-${v.id}`, spec: { kind: v.kind, variant: variantOf(v.id), state: v.artState, role: v.role, lead: v.isLead, animate: v.signal === 'running' && byId.get(v.id)?.state !== 'queued' } }))
         : []
     syncFrames($, options, MOD_PANE_ID, drawnArt)
-    const share = featureShare(data.plan)
-    const needs = needsRows(data, rows)
-    const limits = data.usage?.limits ?? []
     const head = (key: string, label: string) => (
       <Text key={key} bold dimColor>{`── ${label}`}</Text>
     )
@@ -288,8 +295,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
     return (
       <Box flexDirection="column" paddingX={1} rowGap={1}>
         <Box flexDirection="row" alignItems="center">
-          <Text bold>Jev</Text>
-          {header !== null && <Text key="flow-header" dimColor wrap="truncate-end">{`  ${header}`}</Text>}
+          {header !== null && <Text key="flow-header" dimColor wrap="truncate-end">{header}</Text>}
           <Box flexGrow={1} />
           <Button key="close" plain dimColor label="✕" onPress={() => {
             markUserClosed()
@@ -338,11 +344,18 @@ export function registerModPane(on: On, options: PluginOptions): void {
                     onPress={() => update($, expandedAtom, cur => ({ ...cur, [row.id]: !cur[row.id] }))}
                   />
                 )
-                const tail = isOpen && act !== null && act.log.length > 0 && (
+                const tools = act === null ? '' : Object.entries(act.tools).map(([tool, n]) => `${tool} ${n}`).join(' · ')
+                const agentId = act?.id ?? row.id
+                const tail = isOpen && (
                   <Box key={`log-${row.id}`} flexDirection="column" paddingLeft={2}>
-                    {act.log.slice(-EXPAND_LINES).map((line, i) => (
+                    {act !== null && act.line !== '' && <Text dimColor wrap="truncate-end">{`agora: ${act.line}`}</Text>}
+                    {tools !== '' && <Text dimColor wrap="truncate-end">{`ferramentas: ${tools}`}</Text>}
+                    {act !== null && act.log.slice(-EXPAND_LINES).map((line, i) => (
                       <Text key={`${row.id}-l${i}`} dimColor wrap="truncate-end">{line}</Text>
                     ))}
+                    {act !== null && act.snippet !== '' && <Text dimColor wrap="truncate-end">{`» ${act.snippet}`}</Text>}
+                    {act === null && <Text dimColor>sem atividade registrada</Text>}
+                    <Button key={`tr-${row.id}`} plain dimColor label="abrir transcript" onPress={() => $.ui.view({ agentId }).then(() => undefined)} />
                   </Box>
                 )
                 if (isFinished) {
@@ -357,6 +370,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
                         <Text color={STATE_COLOR[row.state]}>{`${mark} ${STATE_WORD[row.state]}`}</Text>
                         <Text dimColor wrap="truncate-end">{result}</Text>
                         {elapsed !== '' && <Text dimColor>{elapsed}</Text>}
+                        {act !== null && act.tokens > 0 && <Text dimColor>{tokensDown(act.tokens)}</Text>}
                       </Box>
                       {tail}
                     </Box>
@@ -370,25 +384,22 @@ export function registerModPane(on: On, options: PluginOptions): void {
                       {act?.stepTotal != null && <Text dimColor>{`passo ${act.stepDone ?? 0}/${act.stepTotal}`}</Text>}
                     </Box>
                   ) : row.state === 'queued' ? null : (
-                    <Box key={`pr-${row.id}`} flexDirection="row" columnGap={1}>
-                      <Text color={color}>{spinnerFrame(now)}</Text>
-                      <Text dimColor>{steps > 0 ? `${steps} passos` : 'iniciando'}</Text>
-                      {act !== null && act.tokens > 0 && <Text dimColor>{tokenWord(act.tokens)}</Text>}
-                    </Box>
+                    <Text key={`pr-${row.id}`} dimColor>{`· ${steps > 0 ? `${steps} passos` : 'iniciando'}`}</Text>
                   )
                 const doing = act !== null && act.line !== '' ? act.line : row.detail
                 return (
                   <Box key={row.id} flexDirection="row" columnGap={1} marginTop={1} paddingLeft={view.depth * 2}>
-                    {withFace && Art(artKit, { key: `av-${row.id}`, kind: row.kind, state: view.artState, role: row.role, lead: view.isLead, ageMs: view.ageMs, animate: view.signal === 'running' && row.state !== 'queued', tick: currentTick(), reducedMotion: reducedMotion(options), fallback: avatar(row.kind, row.id) })}
+                    {withFace && Art(artKit, { key: `av-${row.id}`, kind: row.kind, variant: variantOf(row.id), state: view.artState, role: row.role, lead: view.isLead, ageMs: view.ageMs, animate: view.signal === 'running' && row.state !== 'queued', tick: currentTick(), reducedMotion: reducedMotion(options), fallback: avatar(row.kind, row.id) })}
                     <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                       <Box flexDirection="row" columnGap={1}>
                         {toggle}
                         <Text bold color={color}>{name}</Text>
                         <Text dimColor>{row.cli}</Text>
-                        <Text color={color}>{`[${chip}]`}</Text>
+                        {row.model !== '?' && <Text color={color}>{`[${chip}]`}</Text>}
                         <Text color={view.color}>{`${view.glyph} ${row.state === 'queued' ? STATE_WORD.queued : view.word}`}</Text>
                         <Box flexGrow={1} />
                         {elapsed !== '' && <Text dimColor>{elapsed}</Text>}
+                        {act !== null && act.tokens > 0 && <Text dimColor>{tokensDown(act.tokens)}</Text>}
                       </Box>
                       <Box flexDirection="row" columnGap={1}>
                         <Text dimColor>{act?.phase ?? row.phase}</Text>
@@ -411,7 +422,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
             </Box>
           )}
         </Box>
-        <Box key="models" flexDirection="column">
+        {showModels && <Box key="models" flexDirection="column">
           {head('models-h', 'Modelos e proxies')}
           {limits.map(limit => (
             <Box key={limit.kind} flexDirection="row" columnGap={1}>
@@ -419,12 +430,9 @@ export function registerModPane(on: On, options: PluginOptions): void {
               {bar(kit, `lim-${limit.kind}`, Math.max(0, Math.min(100, Math.round(limit.percentUsed))), limit.percentUsed >= 90 ? 'error' : 'success')}
             </Box>
           ))}
-          {empty('models-lock', 'Lockouts: sem dados.')}
-          {empty('models-proxy', 'Proxies: sem dados.')}
-        </Box>
-        <Box key="proposals" flexDirection="column">
+        </Box>}
+        {showProposals && <Box key="proposals" flexDirection="column">
           {head('prop-h', 'Propostas')}
-          {proposals.shown.length === 0 && empty('prop-0', 'Sem propostas.')}
           {proposals.shown.map(p => (
             <Box key={`prop-${p.id}`} flexDirection="column">
               <Box flexDirection="row" columnGap={1}>
@@ -441,7 +449,7 @@ export function registerModPane(on: On, options: PluginOptions): void {
             </Box>
           ))}
           {proposals.hidden > 0 && empty('prop-more', `+${proposals.hidden} mais`)}
-        </Box>
+        </Box>}
       </Box>
     )
   })

@@ -247,6 +247,8 @@ export function elapsedWord(ms: number): string {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`
 }
 
+export const tokensDown = (n: number): string => `↓ ${n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : n}`
+
 export const tokenWord = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k ctx` : `${n} ctx`)
 
 export const isEnded = (id: string): boolean => acts.get(id)?.end != null

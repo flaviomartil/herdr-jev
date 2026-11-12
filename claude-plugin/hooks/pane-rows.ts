@@ -25,6 +25,7 @@ export type CrewContext = {
   listed: readonly string[]
   now: number
   page: number
+  pageSize?: number
 }
 
 export type CrewRow = CrewInput & {
@@ -45,6 +46,11 @@ export type CrewModel = {
   page: number
   pages: number
   unknown: string[]
+}
+
+export function fitPageSize(availableRows: number, rowCount: number, rowHeight: number): number {
+  if (rowCount * rowHeight <= availableRows) return Math.max(1, rowCount)
+  return Math.max(1, Math.floor((availableRows - 1) / rowHeight))
 }
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
@@ -132,12 +138,13 @@ export function buildCrew(inputs: readonly CrewInput[], ctx: CrewContext): CrewM
     }
   })
   const known = new Set(inputs.flatMap(i => [i.id, ...(i.actId === null ? [] : [i.actId])]))
-  const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE))
+  const size = Math.max(1, ctx.pageSize ?? PAGE_SIZE)
+  const pages = Math.max(1, Math.ceil(rows.length / size))
   const page = Math.min(Math.max(0, ctx.page), pages - 1)
   return {
     hub,
     rows,
-    pageRows: rows.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
+    pageRows: rows.slice(page * size, page * size + size),
     page,
     pages,
     unknown: ctx.listed.filter(id => !known.has(id)),

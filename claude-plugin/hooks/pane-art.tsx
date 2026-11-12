@@ -11,9 +11,9 @@ export const ART_COLUMNS = 7
 export const ART_ROWS = 5
 
 export function artFrame(request: ArtRequest): ArtSpec {
-  const { kind, state, role, lead, ageMs, animate } = request
+  const { kind, state, role, lead, ageMs, animate, variant } = request
   const frame = state === 'running' ? frameFor(request.tick, request.reducedMotion) : 0
-  return { kind, state, role, lead, ageMs, animate, frame }
+  return { kind, state, role, lead, ageMs, animate, variant, frame }
 }
 
 export function Art(kit: ArtKit, request: ArtRequest) {

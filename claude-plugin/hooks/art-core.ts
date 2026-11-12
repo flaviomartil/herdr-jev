@@ -83,8 +83,43 @@ const HUES: Record<ArtKind, { b: number; d: number; h: number }> = {
   other: { b: 0x9aa0a6, d: 0x5f6368, h: 0xdadce0 },
 };
 
-export function paletteFor(kind: ArtKind): Record<string, number> {
-  return { ...HUES[kind], e: EYE };
+const HUE_STEP = 52;
+
+export function rotateHue(color: number, degrees: number): number {
+  const r = ((color >> 16) & 0xff) / 255;
+  const g = ((color >> 8) & 0xff) / 255;
+  const b = (color & 0xff) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return color;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  const h0 = max === r ? ((g - b) / d + (g < b ? 6 : 0)) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  const h = (((h0 * 60 + degrees) % 360) + 360) % 360 / 360;
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t0: number): number => {
+    const t = (t0 + 1) % 1;
+    const v = t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
+    return Math.round(v * 255);
+  };
+  return (channel(h + 1 / 3) << 16) | (channel(h) << 8) | channel(h - 1 / 3);
+}
+
+export function paletteFor(kind: ArtKind, variant = 0): Record<string, number> {
+  const base = HUES[kind];
+  if (variant === 0) return { ...base, e: EYE };
+  const turn = variant * HUE_STEP;
+  return { b: rotateHue(base.b, turn), d: rotateHue(base.d, turn), h: rotateHue(base.h, turn), e: EYE };
+}
+
+export const VARIANTS = 6;
+
+export function variantOf(id: string): number {
+  let h = 0;
+  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return h % VARIANTS;
 }
 
 const ACCESSORY_PALETTE: Record<string, number> = {
@@ -123,6 +158,7 @@ export type ArtSpec = {
   lead?: boolean;
   ageMs?: number;
   animate?: boolean;
+  variant?: number;
 };
 
 export function emptyGrid(): PixelGrid {
@@ -156,7 +192,7 @@ export function greyOut(color: number): number {
 export function composeGrid(spec: ArtSpec): PixelGrid {
   const grid = emptyGrid();
   const odd = (spec.frame ?? 0) % 2 === 1;
-  const palette = paletteFor(spec.kind);
+  const palette = paletteFor(spec.kind, spec.variant ?? 0);
   const walking = spec.state === "running" && odd;
   const shake = spec.state === "failed" && odd ? -2 : 0;
   SHAPES[spec.kind].forEach((row, y) => {
@@ -309,7 +345,7 @@ const artCache = new Map<string, CachedArt>();
 
 export function artKey(spec: ArtSpec): string {
   const sparkle = spec.state === "done" && (spec.ageMs ?? Number.POSITIVE_INFINITY) < SPARKLE_MS;
-  return [spec.kind, spec.state, spec.role ?? "-", spec.lead ? "L" : "-", (spec.frame ?? 0) % 2, sparkle ? "S" : "-"].join("|");
+  return [spec.kind, spec.variant ?? 0, spec.state, spec.role ?? "-", spec.lead ? "L" : "-", (spec.frame ?? 0) % 2, sparkle ? "S" : "-"].join("|");
 }
 
 export function cachedArt(spec: ArtSpec): CachedArt {
