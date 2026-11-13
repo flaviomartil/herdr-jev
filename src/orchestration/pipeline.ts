@@ -231,16 +231,21 @@ async function continueRun(run: any, task: string, options: RunOptions) {
         if (entry.state !== "reported") {
           if (!options.wait && !options.poll) break;
           let observed = "pending";
+          let missingHandoffChecks = 0;
           while (Date.now() < claim.deadline) {
             const waited = await herdr.waitFor({ target: claim.agent, timeoutMs: Math.min(options.poll ? 1000 : 30_000, claim.deadline - Date.now()) });
             observed = readHerdrObservedState(waited) ?? "unknown";
             if (options.poll && observed !== "blocked" && (observed !== "done" || !existsSync(handoff))) break;
-            if (observed === "done" && !existsSync(handoff)) { await Bun.sleep(250); continue; }
+            if (observed === "done" && !existsSync(handoff)) { if (++missingHandoffChecks > 4) break; await Bun.sleep(250); continue; }
             if (!["pending", "timeout", "working", "idle"].includes(observed)) break;
             await Bun.sleep(250);
           }
           if (options.poll && observed !== "blocked" && (observed !== "done" || !existsSync(handoff))) break;
-          if (Date.now() >= claim.deadline) break;
+          if (observed === "done" && !existsSync(handoff)) {
+            const reply = await herdr.readAgent!(claim.agent, 200, "recent");
+            const text = reply.ok ? reply.stdout.trim() : "";
+            writeFileSync(handoff, text || "Worker finished without writing a handoff file.\n", { mode: 0o600 });
+          }
           const settled = externalRun("settle", { ...request, state: observed === "done" ? "done" : observed === "blocked" ? "blocked" : "unknown",
             ...(observed === "done" ? { handoff } : {}), ...(observed === "blocked" ? { blockedReason: "worker_reported_blocked" } : {}) });
           entry.handoffDigest = settled.handoffDigest;

@@ -161,7 +161,7 @@ else if (command === "model-catalog") {
 } else if (command === "mod-delegation" && options["--action"] === "status") {
   out(JSON.parse(process.env.FAKE_MOD_OBSERVATION || "null"));
 } else if (command === "external-run") {
-  const pipeline = process.env.FAKE_PIPELINE_STAGES !== undefined && ["create", "claim", "project", "status", "settle", "handoff", "verify"].includes(options["--action"]);
+  const pipeline = process.env.FAKE_PIPELINE_STAGES !== undefined && ["create", "claim", "project", "status", "settle", "ack", "handoff", "verify"].includes(options["--action"]);
   if (!pipeline && (mode === "legacy" || !["worker-create", "worker-settle", "list"].includes(options["--action"]))) fail("invalid_external_action");
   const request = JSON.parse(options["--request-json"]);
   const state = load();
@@ -191,7 +191,7 @@ else if (command === "model-catalog") {
       out({ text, digest: createHash("sha256").update(text).digest("hex") });
       process.exit(0);
     }
-    out(options["--action"] === "claim" ? { token: "token", agent: "agent-" + request.stage }
+    out(options["--action"] === "claim" ? { token: "token", agent: "agent-" + request.stage, ...(process.env.FAKE_CLAIM_DEADLINE_MS ? { deadline: Date.now() + Number(process.env.FAKE_CLAIM_DEADLINE_MS) } : {}) }
       : options["--action"] === "settle" ? run.stages.find((stage) => stage.role === request.stage) : run);
   } else if (options["--action"] === "worker-create") {
     const run = { id: "00000000-0000-4000-8000-" + String(state.runs.length + 1).padStart(12, "0"), kind: "worker", client: request.client,
