@@ -44,7 +44,8 @@ describe("secrets", () => {
 
 describe("work repo docs", () => {
   test("denies a new md in a work repo", () => expect(decision(write(`${HOME}/projects/acme/app/docs/plan.md`))).toBe("deny"));
-  test("denies an edit of md in a work repo", () => expect(decision(write("docs/plan.md", "x", "Edit"))).toBe("deny"));
+  test("allows an edit of an existing md in a work repo", () => expect(decision(write("docs/plan.md", "x", "Edit"))).toBe("allow"));
+  test("allows overwriting an existing md in a work repo", () => expect(decision({ ...write(`${HOME}/projects/acme/app/docs/plan.md`), isNew: false } as RuleEvent)).toBe("allow"));
   test("allows README.md", () => expect(decision(write(`${HOME}/projects/acme/app/README.md`))).toBe("allow"));
   test("allows md outside the roots", () => expect(decision(write(`${HOME}/notes/plan.md`))).toBe("allow"));
   test("allows md in an excluded personal repo", () => expect(decision(write(`${HOME}/projects/personal/tool/doc.md`))).toBe("allow"));

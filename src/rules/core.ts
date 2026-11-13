@@ -449,14 +449,17 @@ export function createEvaluator(config: RuleConfig, log: (message: string) => vo
       const candidates = real === undefined ? [abs] : [abs, real]
       const base = abs.split('/').pop()!
       const isDoc = docExt.length > 0 ? docExt.some(re => re.test(base)) : /\.md$/i.test(base)
-      if (isDoc && !allowFiles.includes(base.toLowerCase())) {
+      const creates = event.tool === 'apply_patch'
+        ? new RegExp(`^\\*\\*\\* Add File: ${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm').test(writtenText(event.tool, event.input))
+        : event.tool === 'Write' && event.isNew !== false
+      if (isDoc && creates && !allowFiles.includes(base.toLowerCase())) {
         const inWork = candidates.some(c => {
           const inRoot = roots.some(r => under(c, absolute(r, event.cwd, event.home)))
           const excluded = excludes.some(r => under(c, absolute(r, event.cwd, event.home))) || c.split('/').some(part => excludeSegments.includes(part))
           return inRoot && !excluded
         })
         if (inWork) {
-          out.push({ decision: 'deny', rule: 'work-repo-doc', reason: msg('doc', 'No new or edited docs in a work repo (README.md is the exception). Put it in the notes vault.') })
+          out.push({ decision: 'deny', rule: 'work-repo-doc', reason: msg('doc', 'No new docs in a work repo (README.md is the exception; existing docs can be edited). Put it in the notes vault.') })
         }
       }
       if (event.tool === 'Write' && event.isNew !== false && genericNames.some(re => re.test(base))) {
