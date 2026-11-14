@@ -31,7 +31,7 @@ test('queued prompts are sent in order after a failed run', async ($, on) => {
   expect(stdins).toEqual(['first queued', 'second queued'])
 })
 
-test('queued prompts are sent in order after an unknown run', async ($, on) => {
+test('an unconfirmed (unknown) run holds the queue so nothing runs in parallel with it', async ($, on) => {
   const stdins: string[] = []
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': active } })
   seen.runHook = async (argv, init) => {
@@ -42,7 +42,7 @@ test('queued prompts are sent in order after an unknown run', async ($, on) => {
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
   await $.tool.call({ tool: 'mcp__harness__harness_collect', tool_use_id: 'finish-active' } as never)
   for (let i = 0; i < 4; i += 1) { await seen.clock.advance(1); await settle() }
-  expect(stdins).toEqual(['first queued', 'second queued'])
+  expect(stdins).toEqual([])
 })
 
 test('queued prompts are sent in order after the active turn is interrupted', async ($, on) => {

@@ -1683,7 +1683,7 @@ async function queueAutomatic($: EngineInterface, options: PluginOptions, gate: 
 async function advanceAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime): Promise<void> {
   const run = await read($, automaticAtom)
   const pending = run?.pending?.[0]
-  if (pending && run && ['direct', 'verified', 'failed', 'unknown'].includes(run.state)) {
+  if (pending && run && (['direct', 'verified', 'failed'].includes(run.state) || (run.state === 'unknown' && run.reason === 'interrupted'))) {
     await queueAutomatic($, options, gate, runtime, pending.turn, pending.task, false,
       typeof pending.cwd === 'string' && typeof pending.model === 'string' ? { cwd: pending.cwd, model: pending.model } : undefined, true)
   }
