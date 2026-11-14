@@ -242,9 +242,19 @@ async function continueRun(run: any, task: string, options: RunOptions) {
           }
           if (options.poll && observed !== "blocked" && (observed !== "done" || !existsSync(handoff))) break;
           if (observed === "done" && !existsSync(handoff)) {
-            const reply = await herdr.readAgent!(claim.agent, 200, "recent");
-            const text = reply.ok ? reply.stdout.trim() : "";
-            writeFileSync(handoff, text || "Worker finished without writing a handoff file.\n", { mode: 0o600 });
+            let text = "";
+            try {
+              const reply = await herdr.readAgent?.(claim.agent, 200, "recent");
+              text = reply?.ok ? reply.stdout.trim() : "";
+            } catch {}
+            if (!text) observed = "unknown";
+            else {
+              try {
+                writeFileSync(handoff, `handoff-source: worker-screen-fallback\n${text}\n`, { mode: 0o600, flag: "wx" });
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "EEXIST") observed = "unknown";
+              }
+            }
           }
           const settled = externalRun("settle", { ...request, state: observed === "done" ? "done" : observed === "blocked" ? "blocked" : "unknown",
             ...(observed === "done" ? { handoff } : {}), ...(observed === "blocked" ? { blockedReason: "worker_reported_blocked" } : {}) });

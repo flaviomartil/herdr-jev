@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as launcher from "../src/herdr/launcher.js";
 import * as clientModule from "../src/herdr/client.js";
@@ -14,6 +14,8 @@ const originalClient = { ...clientModule };
 let waitOutput = '{"state":"done"}';
 let waitOk = true;
 let finalReply = "final worker reply";
+let onRead: () => void = () => {};
+let readThrows = false;
 let runPipeline: typeof import("../src/orchestration/pipeline.js").runPipeline;
 const { planExecution } = await import("../src/pipelines/planner.js");
 
@@ -26,7 +28,11 @@ beforeAll(async () => {
     ...originalClient,
     createHerdrClient: () => ({
       waitFor: async () => ({ ok: waitOk, stdout: waitOutput, stderr: "", code: waitOk ? 0 : 1 }),
-      readAgent: async () => ({ ok: true, stdout: finalReply, stderr: "", code: 0 }),
+      readAgent: async () => {
+        if (readThrows) throw new Error("read failed");
+        onRead();
+        return { ok: true, stdout: finalReply, stderr: "", code: 0 };
+      },
       notify: async () => ({ ok: true, stdout: "", stderr: "", code: 0 }),
     }),
   }));
@@ -66,6 +72,8 @@ describe("delegated run without implementer handoff", () => {
     waitOutput = '{"state":"done"}';
     waitOk = true;
     finalReply = "final worker reply";
+    onRead = () => {};
+    readThrows = false;
     resetHarnessCaches();
   });
 
@@ -83,7 +91,35 @@ describe("delegated run without implementer handoff", () => {
     expect(calls[0].state).toBe("done");
     const handoff = calls[0].handoff as string;
     expect(existsSync(handoff)).toBe(true);
-    expect(readFileSync(handoff, "utf8")).toContain("final worker reply");
+    const text = readFileSync(handoff, "utf8");
+    expect(text).toContain("final worker reply");
+    expect(text.split("\n")[0]).toBe("handoff-source: worker-screen-fallback");
+  });
+
+  it("settles once as unknown when reading the worker throws", async () => {
+    readThrows = true;
+    await run();
+    const calls = settles();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].state).toBe("unknown");
+    expect(calls[0].handoff).toBeUndefined();
+  });
+
+  it("settles once as unknown when the worker reply is empty", async () => {
+    finalReply = "   ";
+    await run();
+    const calls = settles();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].state).toBe("unknown");
+  });
+
+  it("keeps an implementer.md that appears while the fallback is read", async () => {
+    onRead = () => writeFileSync(join(resolveStateDir(), "00000000-0000-4000-8000-0000000000aa", "implementer.md"), "worker wrote this\n");
+    await run();
+    const calls = settles();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].state).toBe("done");
+    expect(readFileSync(calls[0].handoff as string, "utf8")).toBe("worker wrote this\n");
   });
 
   it("settles once as unknown when the worker wait fails", async () => {
