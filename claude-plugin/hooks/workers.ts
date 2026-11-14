@@ -44,6 +44,8 @@ export type Transition = {
 export const REPORT_LIMIT = 1500
 export const REVIEW_REPORT_LIMIT = 8000
 export const DIFF_LIMIT = 20000
+export const CYCLE_CEILING_MS = 30 * 60_000
+export const FINAL_ROUND_MARGIN_MS = 5 * 60_000
 const STAT_LIMIT = 2000
 const GIT_TIMEOUT_MS = 30000
 
@@ -292,10 +294,16 @@ export function resolveLaunch(plan: HarnessPlan, task: HarnessTask, kind: AgentK
 export type PromptExtras = {
   report?: string
   diff?: string
+  previousFindings?: string
+  finalRound?: boolean
+}
+
+export function isFinalRound(plan: HarnessPlan, now: number): boolean {
+  return plan.at !== undefined && now - plan.at >= CYCLE_CEILING_MS - FINAL_ROUND_MARGIN_MS
 }
 
 export function buildPrompt(plan: HarnessPlan, task: HarnessTask, kind: AgentKind, extras: PromptExtras = {}): string {
-  const { report, diff } = extras
+  const { report, diff, previousFindings, finalRound } = extras
   const paths = task.paths.length === 0 ? '- none declared' : task.paths.map(path => `- ${path}`).join('\n')
   const checks = task.checks.length === 0 ? '- none declared' : task.checks.map(check => `- ${check}`).join('\n')
   const lines = [
@@ -313,6 +321,16 @@ export function buildPrompt(plan: HarnessPlan, task: HarnessTask, kind: AgentKin
   }
   if (kind === 'reviewer' && diff !== undefined && diff.length > 0) {
     lines.push('', diff)
+  }
+  if (kind === 'reviewer' && previousFindings !== undefined && previousFindings.length > 0) {
+    lines.push(
+      '',
+      'Your previous round findings. Verify each one by one against the current diff, say whether it is resolved or still open, and do not add new criteria. Return REVIEW_GATE_VERDICT: APPROVE once all are resolved:',
+      fit(previousFindings, REVIEW_REPORT_LIMIT),
+    )
+  }
+  if (kind === 'reviewer' && finalRound === true) {
+    lines.push('', 'Final round: the cycle time ceiling is near. Report only blocking issues and end with your verdict now.')
   }
   if ((kind === 'implementer' || kind === 'mechanic') && task.reviewReport !== undefined && task.reviewReport.length > 0) {
     lines.push(
@@ -333,6 +351,7 @@ export async function launchAgent(
   kind: AgentKind,
   cwd: string,
   report?: string,
+  round: Pick<PromptExtras, 'previousFindings' | 'finalRound'> = {},
 ): Promise<SpawnOutcome> {
   const target = resolveLaunch(plan, task, kind)
   if (!target.ok) return target
@@ -354,7 +373,7 @@ export async function launchAgent(
     try {
       const spawned = await ports.spawn({
         subagentType: `harness:${kind}`,
-        prompt: buildPrompt(plan, task, kind, { report, diff }),
+        prompt: buildPrompt(plan, task, kind, { report, diff, ...round }),
         description: fit(`${kind}: ${task.title}`, 60),
         cwd,
         model: target.spawnModel,

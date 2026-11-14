@@ -126,6 +126,7 @@ import {
   decideConsultTurn,
   decideReviewTurn,
   decideWorkerTurn,
+  isFinalRound,
   launchAgent,
   launchConsult,
   registerKinds,
@@ -580,7 +581,10 @@ async function startReviewer(
 
   const live = (await read($, planAtom)) ?? plan
   const current = live.tasks.find(one => one.id === task.id) ?? task
-  const outcome = await launchAgent(launchPorts($), gate, live, current, 'reviewer', cwd, current.report)
+  const outcome = await launchAgent(launchPorts($), gate, live, current, 'reviewer', cwd, current.report, {
+    previousFindings: current.reviewReport,
+    finalRound: isFinalRound(live, now),
+  })
 
   if (!outcome.ok) {
     await patchTask($, task.id, one => ({
