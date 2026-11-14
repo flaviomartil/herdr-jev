@@ -41,3 +41,11 @@ test('up to five done agents are listed by name', () => {
   const done = ['a', 'b'].map(name => row(name, 'done'))
   expect(bandText(model([row('api', 'running', 40), ...done]), NOW)).toBe('● 1 ativo · api 40s · ✓ a · ✓ b')
 })
+
+test('queued prompts show their count beside the active agents', () => {
+  expect(bandText(model([row('api', 'running', 40)]), NOW, 2)).toBe('● 1 ativo · api 40s · ⏳ 2 na fila')
+})
+
+test('queued prompts keep the band visible with no live agents', () => {
+  expect(bandText(model([]), NOW, 2)).toBe('⏳ 2 na fila')
+})

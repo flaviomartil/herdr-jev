@@ -1647,11 +1647,11 @@ async function collectAutomatic($: EngineInterface, options: PluginOptions, gate
 
 type AutomaticRuntime = { dispatchTimer: Timer | null; dispatching: boolean; collectTimer: Timer | null; collecting: boolean; pendingVerify: boolean }
 
-async function queueAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime, turn: string, task: string, consultReviewed = false, context?: Pick<Automatic, 'cwd' | 'model'>): Promise<void> {
+async function queueAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime, turn: string, task: string, consultReviewed = false, context?: Pick<Automatic, 'cwd' | 'model'>, drain = false): Promise<void> {
   const previous = await read($, automaticAtom)
   const pendingDispatch = previous?.turn === turn && previous.state === 'planning' && previous.reason === 'dispatch_pending'
   if (!consultReviewed && previous?.turn === turn && !pendingDispatch) return
-  if (runtime.dispatching || !consultReviewed && !pendingDispatch && previous !== null && !['direct', 'verified', 'failed'].includes(previous.state)) {
+  if (runtime.dispatching || !consultReviewed && !pendingDispatch && previous !== null && !['direct', 'verified', 'failed', ...(drain ? ['unknown'] : [])].includes(previous.state)) {
     if (previous !== null && previous.turn !== turn && !previous.pending?.some(row => row.turn === turn)) {
       if ((previous.pending?.length ?? 0) >= 32) { $.ui.toast('Herdr-Jev request queue is full; collect the active task before resubmitting.', { timeoutMs: 8000 }); return }
       await saveAutomatic($, { ...previous, pending: [...(previous.pending ?? []), { turn, task, cwd: await $.session.cwd(), model: await $.session.model() }] })
@@ -1683,9 +1683,9 @@ async function queueAutomatic($: EngineInterface, options: PluginOptions, gate: 
 async function advanceAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime): Promise<void> {
   const run = await read($, automaticAtom)
   const pending = run?.pending?.[0]
-  if (pending && run && ['direct', 'verified', 'failed'].includes(run.state)) {
+  if (pending && run && ['direct', 'verified', 'failed', 'unknown'].includes(run.state)) {
     await queueAutomatic($, options, gate, runtime, pending.turn, pending.task, false,
-      typeof pending.cwd === 'string' && typeof pending.model === 'string' ? { cwd: pending.cwd, model: pending.model } : undefined)
+      typeof pending.cwd === 'string' && typeof pending.model === 'string' ? { cwd: pending.cwd, model: pending.model } : undefined, true)
   }
 }
 
@@ -2110,6 +2110,14 @@ export const register: Register = (on, options) => {
 
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) void onTurnComplete($, options, e.turnId, e.reason)
+    if (e.agentId === undefined && e.reason === 'aborted') {
+      await attempt('automatic queue after abort', $, async () => {
+        const run = await read($, automaticAtom)
+        if (!run?.pending?.length || ['direct', 'verified', 'failed', 'unknown'].includes(run.state)) return
+        await saveAutomatic($, { ...run, state: 'unknown', reason: 'interrupted' })
+        await advanceAutomatic($, options, gate, automaticRuntime)
+      })
+    }
     await attempt('delegation turn complete', $, () => noteTurnComplete($, e, options))
     await attempt('live turn complete', $, () => liveTurnComplete($, options, e))
     if (e.agentId !== undefined) {

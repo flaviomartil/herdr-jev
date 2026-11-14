@@ -1,9 +1,12 @@
+import { atom, read } from 'claude-code'
 import type { EngineInterface, On, PluginOptions } from 'claude-code'
 import { liveEnabled } from './activity'
 import { JEV_PANE_ID, maybeAutoOpen } from './activity-hooks'
 import { crewModelNow } from './mod-pane'
 import { ensureCrewTimers, recordParent, setProgress, setWaiting, crewNow } from './pane-crew'
 import { attentionLines, bandText } from './pane-rows'
+
+const automaticAtom = atom({ plugin: 'harness', key: 'automatic' } as const, null)
 
 export const PROGRESS_TOOL = /^mcp__harness__harness_progress$/
 
@@ -69,7 +72,8 @@ export function registerPaneVisual(on: On, options: PluginOptions): void {
     const rendered = await next(e)
     if (!liveEnabled(options) || e.props.hasSurvey) return rendered
     const { model } = await crewModelNow($)
-    const summary = bandText(model, await $.clock.now())
+    const queued = (await read($, automaticAtom))?.pending?.length ?? 0
+    const summary = bandText(model, await $.clock.now(), queued)
     if (summary === null) return rendered
     const placed = (await $.ui.panes().catch(() => [])).some(p => p.id === JEV_PANE_ID && p.isPlaced)
     const lines = placed ? [] : attentionLines(model)
