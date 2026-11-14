@@ -3,7 +3,7 @@ import { liveEnabled } from './activity'
 import { JEV_PANE_ID, maybeAutoOpen } from './activity-hooks'
 import { crewModelNow } from './mod-pane'
 import { ensureCrewTimers, recordParent, setProgress, setWaiting, crewNow } from './pane-crew'
-import { attentionLines } from './pane-rows'
+import { attentionLines, bandText } from './pane-rows'
 
 export const PROGRESS_TOOL = /^mcp__harness__harness_progress$/
 
@@ -69,7 +69,8 @@ export function registerPaneVisual(on: On, options: PluginOptions): void {
     const rendered = await next(e)
     if (!liveEnabled(options) || e.props.hasSurvey) return rendered
     const { model } = await crewModelNow($)
-    if (model.rows.length === 0) return rendered
+    const summary = bandText(model, await $.clock.now())
+    if (summary === null) return rendered
     const placed = (await $.ui.panes().catch(() => [])).some(p => p.id === JEV_PANE_ID && p.isPlaced)
     const lines = placed ? [] : attentionLines(model)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -77,8 +78,7 @@ export function registerPaneVisual(on: On, options: PluginOptions): void {
       <Box key="crew-band" flexDirection="column">
         {rendered}
         <Box key="crew-head" paddingX={1} flexDirection="row" columnGap={1}>
-          <Button key="crew-open" plain label={`◉ ${model.rows.length}`} onPress={() => $.ui.open({ id: JEV_PANE_ID, title: 'Jev', focus: true, closeOnEscape: true })} />
-          <Text key="crew-sum" dimColor>{`${model.hub?.running ?? 0} ativos`}</Text>
+          <Button key="crew-open" plain label={summary} onPress={() => $.ui.open({ id: JEV_PANE_ID, title: 'Jev', focus: true, closeOnEscape: true })} />
         </Box>
         {lines.map((line, i) => (
           <Box key={`crew-l${i}`} paddingX={1}>

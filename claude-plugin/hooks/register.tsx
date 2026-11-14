@@ -2157,7 +2157,8 @@ export const register: Register = (on, options) => {
     const running = runningExternal(await read($, externalAtom))
     if (e.props.hasSurvey || isHidden) return next(e)
     if (plan === null) {
-      const automatic = await read($, automaticAtom)
+      const current = await read($, automaticAtom)
+      const automatic = current !== null && !['direct', 'verified', 'failed'].includes(current.state) ? current : null
       if (running === 0 && automatic === null && waiting === null) return next(e)
       const rendered = await next(e)
       const { Box, Text } = $.ui.resolve(e)

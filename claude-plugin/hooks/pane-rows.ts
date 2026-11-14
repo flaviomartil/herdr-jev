@@ -183,3 +183,26 @@ export function headerText(flow: FlowProgress | null, odd: OddCurrent | null): s
   if (flow === null) return null
   return [flow.title, flow.phase, `${flow.accepted}/${flow.planned}`].filter(p => p !== '').join(' · ')
 }
+
+const LIVE_SIGNALS: readonly Signal[] = ['running', 'waiting', 'slow', 'quiet']
+const BAND_NAMES = 2
+const BAND_DONE_MAX = 5
+
+const elapsed = (ms: number): string => (ms < 60_000 ? `${Math.round(ms / 1000)}s` : `${Math.round(ms / 60_000)}m`)
+
+export function bandText(model: CrewModel, now: number): string | null {
+  const live = model.rows.filter(row => LIVE_SIGNALS.includes(row.signal))
+  const failed = model.rows.filter(row => row.signal === 'failed')
+  const done = model.rows.filter(row => row.signal === 'done')
+  if (live.length === 0 && failed.length === 0) return null
+  const parts: string[] = []
+  if (failed.length > 0) parts.push(`✗ ${failed.length} ${failed.length === 1 ? 'falhou' : 'falharam'}`)
+  if (live.length > 0) parts.push(`● ${live.length} ${live.length === 1 ? 'ativo' : 'ativos'}`)
+  if (failed.length === 0) {
+    const age = (row: CrewRow): number => (row.act === null ? 0 : Math.max(0, now - row.act.startedAt))
+    for (const row of [...live].sort((a, b) => age(b) - age(a)).slice(0, BAND_NAMES)) parts.push(`${row.name} ${elapsed(age(row))}`)
+  }
+  if (done.length > BAND_DONE_MAX) parts.push(`${done.length} concluídos`)
+  else for (const row of done) parts.push(`✓ ${row.name}`)
+  return parts.join(' · ')
+}
