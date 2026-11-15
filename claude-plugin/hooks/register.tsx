@@ -135,6 +135,7 @@ import {
 import type { Gate, LaunchPorts } from './workers'
 import { AUTOMATIC_CONTEXT, AUTOMATIC_DISPATCH_TIMEOUT_MS, automaticCall, automaticResult, automaticSummary } from './automatic'
 import type { Automatic } from './automatic'
+import { beforeCommand, queueCommand } from './queue'
 
 const claimLogAtom = atom({ plugin: 'harness', key: 'claimLog' } as const, [])
 const claimWarningsAtom = atom({ plugin: 'harness', key: 'claimWarnings' } as const, [])
@@ -1486,6 +1487,25 @@ function pctHue(word: string): Hue {
 }
 
 const automaticSaveGate = createGate()
+const droppedTurns = new Set<string>()
+
+async function queueText($: EngineInterface, command: 'queue' | 'before', args: string): Promise<string> {
+  const now = await $.clock.now()
+  const row = command === 'before' ? { turn: `before-${now}`, task: args.trim(), cwd: await $.session.cwd(), model: await $.session.model() } : null
+  return exclusive(automaticSaveGate, async () => {
+    const run = await read($, automaticAtom)
+    const rows = run?.pending ?? []
+    const isActive = run !== null && !['direct', 'verified', 'failed'].includes(run.state)
+    const edit = row === null ? queueCommand(rows, args, `edit-${now}`) : beforeCommand(rows, row, isActive)
+    if (typeof edit === 'string') return edit
+    if (run === null) return edit.text
+    for (const turn of edit.dropped) droppedTurns.add(turn)
+    const saved = { ...run, pending: edit.rows }
+    await update($, automaticAtom, () => saved)
+    await $.store.set(`harness:auto:${await $.session.id()}:current`, saved)
+    return edit.text
+  })
+}
 
 async function saveAutomatic($: EngineInterface, run: Automatic, replace = false): Promise<boolean> {
   return exclusive(automaticSaveGate, async () => {
@@ -1502,6 +1522,7 @@ async function saveAutomatic($: EngineInterface, run: Automatic, replace = false
     if (replace && current?.pending?.length) {
       run = { ...run, pending: [...new Map([...current.pending.filter(task => task.turn !== run.turn), ...(run.pending ?? [])].map(task => [task.turn, task])).values()] }
     }
+    if (droppedTurns.size > 0 && run.pending?.length) run = { ...run, pending: run.pending.filter(task => !droppedTurns.has(task.turn)) }
     if (!replace && current?.earlyConsults?.length) run = { ...run,
       earlyConsults: [...new Map([...current.earlyConsults, ...(run.earlyConsults ?? [])].map(row => [row.agentId, row])).values()].slice(-32) }
     if (!replace && current?.state === 'consult_ready' && run.state === 'consulting') run = { ...run,
@@ -1743,6 +1764,12 @@ export const register: Register = (on, options) => {
         description: 'Show the Herdr-Jev harness plan and workers in a pane; /harness review runs the harness review',
       }),
     )
+    await attempt('register queue command', $, () =>
+      $.command.register({ name: 'queue', description: 'List the queued Herdr-Jev prompts; /queue rm <n> removes one, /queue edit <n> <text> rewrites one' }),
+    )
+    await attempt('register before command', $, () =>
+      $.command.register({ name: 'before', description: 'Queue a task ahead of every queued Herdr-Jev prompt' }),
+    )
     await attempt('register harness_plan', $, () =>
       $.tool.register({
         name: 'harness_plan',
@@ -1902,6 +1929,10 @@ export const register: Register = (on, options) => {
     if (options.codex === true) await attempt('codex session end', $, () => endAll(externalPorts($, typeof e.sessionId === 'string' ? e.sessionId : undefined), external))
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  on('command.run', { command: 'queue' }, async ($, e) => ({ text: await queueText($, 'queue', e.args) }))
+
+  on('command.run', { command: 'before' }, async ($, e) => ({ text: await queueText($, 'before', e.args) }))
 
   on('command.run', { command: 'harness' }, async ($, e) => {
     const oddText = await oddCommand($, options, e.args)
