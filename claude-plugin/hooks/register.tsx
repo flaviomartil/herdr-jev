@@ -136,6 +136,7 @@ import type { Gate, LaunchPorts } from './workers'
 import { AUTOMATIC_CONTEXT, AUTOMATIC_DISPATCH_TIMEOUT_MS, automaticCall, automaticResult, automaticSummary } from './automatic'
 import type { Automatic } from './automatic'
 import { beforeCommand, queueCommand } from './queue'
+import type { QueueRow } from './queue'
 
 const claimLogAtom = atom({ plugin: 'harness', key: 'claimLog' } as const, [])
 const claimWarningsAtom = atom({ plugin: 'harness', key: 'claimWarnings' } as const, [])
@@ -1488,6 +1489,7 @@ function pctHue(word: string): Hue {
 
 const automaticSaveGate = createGate()
 const droppedTurns = new Set<string>()
+let listedQueue: QueueRow[] | null = null
 
 async function queueText($: EngineInterface, command: 'queue' | 'before', args: string): Promise<string> {
   const now = await $.clock.now()
@@ -1496,10 +1498,16 @@ async function queueText($: EngineInterface, command: 'queue' | 'before', args: 
     const run = await read($, automaticAtom)
     const rows = run?.pending ?? []
     const isActive = run !== null && !['direct', 'verified', 'failed'].includes(run.state)
-    const edit = row === null ? queueCommand(rows, args, `edit-${now}`) : beforeCommand(rows, row, isActive)
+    const editTurn = `edit-${now}`
+    const edit = row === null ? queueCommand(rows, args, editTurn, listedQueue ?? rows) : beforeCommand(rows, row, isActive)
+    if (row === null && args.trim() === '') listedQueue = rows
     if (typeof edit === 'string') return edit
     if (run === null) return edit.text
     for (const turn of edit.dropped) droppedTurns.add(turn)
+    if (row === null && listedQueue !== null) {
+      const edited = edit.rows.find(one => one.turn === editTurn)
+      listedQueue = listedQueue.map(one => (edited !== undefined && edit.dropped.includes(one.turn) ? edited : one))
+    }
     const saved = { ...run, pending: edit.rows }
     await update($, automaticAtom, () => saved)
     await $.store.set(`harness:auto:${await $.session.id()}:current`, saved)
@@ -1523,6 +1531,7 @@ async function saveAutomatic($: EngineInterface, run: Automatic, replace = false
       run = { ...run, pending: [...new Map([...current.pending.filter(task => task.turn !== run.turn), ...(run.pending ?? [])].map(task => [task.turn, task])).values()] }
     }
     if (droppedTurns.size > 0 && run.pending?.length) run = { ...run, pending: run.pending.filter(task => !droppedTurns.has(task.turn)) }
+    if (replace) droppedTurns.clear()
     if (!replace && current?.earlyConsults?.length) run = { ...run,
       earlyConsults: [...new Map([...current.earlyConsults, ...(run.earlyConsults ?? [])].map(row => [row.agentId, row])).values()].slice(-32) }
     if (!replace && current?.state === 'consult_ready' && run.state === 'consulting') run = { ...run,

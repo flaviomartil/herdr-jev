@@ -10,7 +10,7 @@ export function listQueue(rows: readonly QueueRow[]): string {
   return rows.length === 0 ? 'Queue is empty.' : rows.map((row, i) => `${i + 1}. ${row.task}`).join('\n')
 }
 
-export function queueCommand(rows: readonly QueueRow[], args: string, editTurn: string): QueueEdit | string {
+export function queueCommand(rows: readonly QueueRow[], args: string, editTurn: string, listed: readonly QueueRow[] = rows): QueueEdit | string {
   const trimmed = args.trim()
   if (trimmed === '') return listQueue(rows)
   const match = trimmed.match(/^(rm|edit)\s+(\d+)(?:\s+([\s\S]+))?$/)
@@ -18,13 +18,14 @@ export function queueCommand(rows: readonly QueueRow[], args: string, editTurn: 
   const n = Number(match[2])
   const text = match[3]?.trim() ?? ''
   if (match[1] === 'edit' && text === '') return QUEUE_USAGE
-  const target = rows[n - 1]
-  if (target === undefined) return `No item ${n}; the queue has ${rows.length}.`
+  const target = listed[n - 1]
+  if (target === undefined) return `No item ${n}; the queue has ${listed.length}.`
+  if (!rows.some(row => row.turn === target.turn)) return `Item ${n} (${target.task}) is no longer queued; run /queue for the current list.`
   if (match[1] === 'rm') {
-    return { rows: rows.filter((_, i) => i !== n - 1), text: `Removed ${n}. ${target.task}`, dropped: [target.turn] }
+    return { rows: rows.filter(row => row.turn !== target.turn), text: `Removed ${n}. ${target.task}`, dropped: [target.turn] }
   }
   return {
-    rows: rows.map((row, i) => (i === n - 1 ? { ...row, turn: editTurn, task: text } : row)),
+    rows: rows.map(row => (row.turn === target.turn ? { ...row, turn: editTurn, task: text } : row)),
     text: `Edited ${n}. ${text}`,
     dropped: [target.turn],
   }
