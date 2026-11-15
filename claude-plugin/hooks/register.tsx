@@ -73,6 +73,7 @@ import {
 } from './delegation'
 import { registerModPane } from './mod-pane'
 import { paneSpawned, paneToolCall, registerPaneVisual, registerProgressTool } from './pane-hooks'
+import { hideTurnCard, noteTurnCall, noteTurnSpawn, registerTurnCard, resetTurnCard, showTurnCard } from './turn-card'
 import { liveStep, liveToolCall, liveTurnComplete, registerActivity, registerStepTool } from './activity-hooks'
 import { STEP_BRIEF, liveEnabled } from './activity'
 import { improveStart, recordShadow } from './improve'
@@ -1730,6 +1731,7 @@ export const register: Register = (on, options) => {
   registerPaneVisual(on, options)
   registerActivity(on, options)
   registerOdd(on, options)
+  registerTurnCard(on)
 
   on('session.start', async ($, e, next) => {
     automaticRuntime = { dispatchTimer: null, dispatching: false, collectTimer: null, collecting: false, pendingVerify: false }
@@ -1852,6 +1854,7 @@ export const register: Register = (on, options) => {
     const started = await spawnWithTier($, e, x => next(briefed(x)), options)
     await attempt('note codex spawn', $, () => noteSpawn(externalPorts($), e.subagentType, e.prompt, e.cwd, started.agentId))
     await attempt('pane spawn', $, () => paneSpawned($, options, e.parentAgentId, started.agentId))
+    if (e.parentAgentId === undefined && started.agentId !== undefined) noteTurnSpawn()
     return started
   })
 
@@ -1983,6 +1986,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
+    await attempt('turn card hide', $, () => hideTurnCard($))
     if (isWaiting() && e.origin?.kind !== 'plugin') await attempt('cancel wait on prompt', $, () => cancelWait($, options))
     let eligible = options.autoDelegate !== false && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
       && !e.attachments?.length && e.text.trim().length > 0 && e.text.length <= 16384 && !e.text.trim().startsWith('/')
@@ -2009,6 +2013,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     await attempt('clear claim warnings', $, () => update($, claimWarningsAtom, () => []))
+    resetTurnCard()
     let eligible = false
     await update($, automaticPromptsAtom, rows => {
       if (rows.length === 0) return rows
@@ -2105,7 +2110,9 @@ export const register: Register = (on, options) => {
         noteToolCall($, agentId, describeTool(String(e.tool), e as unknown as Record<string, unknown>)),
       )
     }
-    return oddToolCall($, options, e, next)
+    const ran = await oddToolCall($, options, e, next)
+    if (e.agentId === undefined && ran.deny === undefined) noteTurnCall(String(e.tool), e as unknown as Record<string, unknown>, ran)
+    return ran
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
@@ -2120,6 +2127,7 @@ export const register: Register = (on, options) => {
     }
     await attempt('delegation turn complete', $, () => noteTurnComplete($, e, options))
     await attempt('live turn complete', $, () => liveTurnComplete($, options, e))
+    if (e.agentId === undefined) await attempt('turn card show', $, () => showTurnCard($, options))
     if (e.agentId !== undefined) {
       const agentId = e.agentId
       await attempt('automatic consult complete', $, async () => {

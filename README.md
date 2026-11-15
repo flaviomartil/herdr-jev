@@ -768,6 +768,8 @@ One row model feeds the pane and the text views: the band under the pane shows a
 
 Two progress tools split by caller: `harness_progress` (main agent only, ignored when it comes from a subagent) sets the flow title, phase and planned and accepted tasks shown in the pane header as `title · phase · accepted/planned`, and the open ODD feature wins when there is one; `harness_step` stays worker only. Option `autoOpenMode` is `delegated` (default: a delegation or an `Agent` call opens the pane) or `any` (any subagent spawn or tool call opens it).
 
+At the end of each main turn one line appears above the prompt, `turno · 3 arquivos · testes ✓2 ✗1 · 1 commit · 2 delegados`: files the main session edited, test commands that passed and failed, commits and agents it spawned, zero counts left out. It shows only when something happened and hides on the next prompt. Option `turnCard` (default on) turns it off.
+
 ## Worker panes (`worker-run`, `panes`)
 
 `herdr-jev worker-run --cli codex|agy|claude --model M [--effort E] --prompt-file F --run-id R [--cwd D] [--timeout S] [--inactivity S]` runs one external worker in its own process group and appends `start`, `out` and `exit` events to `<state>/runs/<R>/events.jsonl`. Timeouts kill the whole group.

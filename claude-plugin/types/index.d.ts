@@ -264,6 +264,7 @@ declare module 'claude-code' {
       crew: CrewState
       crewPage: number
       flowProgress: FlowProgressState | null
+      turnCard: string | null
     }
   }
 }
