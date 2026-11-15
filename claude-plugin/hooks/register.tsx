@@ -131,6 +131,7 @@ import {
   launchConsult,
   registerKinds,
   resolveLaunch,
+  snapshotHash,
 } from './workers'
 import type { Gate, LaunchPorts } from './workers'
 import { AUTOMATIC_CONTEXT, AUTOMATIC_DISPATCH_TIMEOUT_MS, automaticCall, automaticResult, automaticSummary } from './automatic'
@@ -581,9 +582,11 @@ async function startReviewer(
 
   const live = (await read($, planAtom)) ?? plan
   const current = live.tasks.find(one => one.id === task.id) ?? task
+  const reviewedHash = await snapshotHash(launchPorts($).run, cwd)
   const outcome = await launchAgent(launchPorts($), gate, live, current, 'reviewer', cwd, current.report, {
     previousFindings: current.reviewReport,
     finalRound: isFinalRound(live, now),
+    since: current.reviewedHash,
   })
 
   if (!outcome.ok) {
@@ -600,6 +603,7 @@ async function startReviewer(
     ...one,
     reviewAgentId: outcome.agentId,
     reviewStarting: undefined,
+    reviewedHash,
     note: undefined,
   }))
   await setWorker($, {

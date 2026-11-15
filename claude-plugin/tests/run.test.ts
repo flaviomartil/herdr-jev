@@ -957,3 +957,70 @@ test('autoReview stays off by default', async ($, on) => {
   expect(reviews(seen)).toHaveLength(0)
   expect(planState(seen)?.tasks[0]?.state).toBe('approved')
 })
+
+const roundGit = (seen: ReturnType<typeof wire>, ancestor: boolean) => {
+  let snaps = 0
+  seen.runHook = async argv => {
+    if (argv[0] !== 'git') return undefined
+    if (argv[1] === 'stash' && argv[2] === 'create') {
+      snaps += 1
+      return { exitCode: 0, stdout: `snap${snaps}\n`, stderr: '' }
+    }
+    if (argv[1] === 'merge-base') return { exitCode: ancestor ? 0 : 1, stdout: '', stderr: '' }
+    if (argv[1] === 'diff') {
+      const since = argv.includes('snap1')
+      const text = since ? '+only the fix since round one\n' : '+the whole change\n'
+      return { exitCode: 0, stdout: argv.includes('--stat') ? '' : text, stderr: '' }
+    }
+    return undefined
+  }
+}
+
+const twoRounds = async ($: Engine, seen: ReturnType<typeof wire>) => {
+  await start($)
+  await makePlan($, { objective: 'Parse', tasks: [{ title: 'Add parser', paths: ['src/parser.ts'] }] })
+  const id = planState(seen)?.tasks[0]?.id
+  await runTask($, id)
+  await finish($, 'agent-1', 'done')
+  await finish($, 'agent-2', 'F1 drops EOF.\nREVIEW_GATE_VERDICT: CHANGES_REQUIRED')
+  await runTask($, id)
+  await finish($, 'agent-3', 'Fixed.')
+  return seen.spawns[3]?.prompt ?? ''
+}
+
+test('a second review round carries only the diff since the first round plus its findings', { options: { autoRun: false } }, async ($, on) => {
+  const seen = wire(on)
+  roundGit(seen, true)
+  const prompt = await twoRounds($, seen)
+  expect(seen.spawns[1]?.prompt).toContain('+the whole change')
+  expect(planState(seen)?.tasks[0]?.reviewedHash).toBe('snap2')
+  expect(seen.runs).toContainEqual(['git', 'diff', 'snap1', '--', 'src/parser.ts'])
+  expect(prompt).toContain('+only the fix since round one')
+  expect(prompt).not.toContain('+the whole change')
+  expect(prompt).toContain('since your previous round')
+  expect(prompt).toContain('F1 drops EOF.')
+})
+
+test('a later round falls back to the full diff when the previous hash is not an ancestor', { options: { autoRun: false } }, async ($, on) => {
+  const seen = wire(on)
+  roundGit(seen, false)
+  const prompt = await twoRounds($, seen)
+  expect(prompt).toContain('+the whole change')
+  expect(prompt).not.toContain('+only the fix since round one')
+  expect(prompt).not.toContain('since your previous round')
+  expect(prompt).toContain('F1 drops EOF.')
+})
+
+test('a later round falls back to the full diff when no previous hash was recorded', { options: { autoRun: false } }, async ($, on) => {
+  const seen = wire(on)
+  seen.runHook = async argv => {
+    if (argv[0] === 'git' && argv[1] === 'stash') return { exitCode: 1, stdout: '', stderr: 'no' }
+    if (argv[0] === 'git' && argv[1] === 'rev-parse' && argv[2] === 'HEAD') return { exitCode: 1, stdout: '', stderr: 'no' }
+    if (argv[0] === 'git' && argv[1] === 'diff') return { exitCode: 0, stdout: argv.includes('--stat') ? '' : '+the whole change\n', stderr: '' }
+    return undefined
+  }
+  const prompt = await twoRounds($, seen)
+  expect(planState(seen)?.tasks[0]?.reviewedHash).toBeUndefined()
+  expect(prompt).toContain('+the whole change')
+  expect(prompt).not.toContain('since your previous round')
+})
