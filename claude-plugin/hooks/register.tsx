@@ -587,6 +587,7 @@ async function startReviewer(
     previousFindings: current.reviewReport,
     finalRound: isFinalRound(live, now),
     since: current.reviewedHash,
+    snapshot: reviewedHash,
   })
 
   if (!outcome.ok) {

@@ -236,20 +236,29 @@ export async function registerKinds(
   return registered
 }
 
-async function gitText(run: RunPort, cwd: string, argv: readonly string[]): Promise<string | null> {
+async function gitText(run: RunPort, cwd: string, argv: readonly string[], env?: Record<string, string>): Promise<string | null> {
   try {
-    const ran = await run(argv, { cwd, timeoutMs: GIT_TIMEOUT_MS })
+    const ran = await run(argv, { cwd, timeoutMs: GIT_TIMEOUT_MS, ...(env === undefined ? {} : { env }) })
     return ran.exitCode === 0 ? ran.stdout : null
   } catch {
     return null
   }
 }
 
+const snapshotGate = createGate()
+
 export async function snapshotHash(run: RunPort, cwd: string): Promise<string | undefined> {
-  const stash = (await gitText(run, cwd, ['git', 'stash', 'create']))?.trim()
-  if (stash !== undefined && stash.length > 0) return stash
-  const head = (await gitText(run, cwd, ['git', 'rev-parse', 'HEAD']))?.trim()
-  return head === undefined || head.length === 0 ? undefined : head
+  return exclusive(snapshotGate, async () => {
+    const index = (await gitText(run, cwd, ['git', 'rev-parse', '--git-path', 'harness-review.index']))?.trim()
+    if (index === undefined || index.length === 0) return undefined
+    const env = { GIT_INDEX_FILE: index }
+    if ((await gitText(run, cwd, ['git', 'read-tree', 'HEAD'], env)) === null) return undefined
+    if ((await gitText(run, cwd, ['git', 'add', '-A'], env)) === null) return undefined
+    const tree = (await gitText(run, cwd, ['git', 'write-tree'], env))?.trim()
+    if (tree === undefined || tree.length === 0) return undefined
+    const commit = (await gitText(run, cwd, ['git', 'commit-tree', tree, '-p', 'HEAD', '-m', 'harness review snapshot']))?.trim()
+    return commit === undefined || commit.length === 0 ? undefined : commit
+  })
 }
 
 async function isAncestor(run: RunPort, cwd: string, hash: string): Promise<boolean> {
@@ -259,16 +268,16 @@ async function isAncestor(run: RunPort, cwd: string, hash: string): Promise<bool
   return false
 }
 
-export async function collectDiff(run: RunPort, cwd: string, paths: readonly string[], since?: string): Promise<string> {
+export async function collectDiff(run: RunPort, cwd: string, paths: readonly string[], since?: string, snapshot?: string): Promise<string> {
   const scope = paths.length === 0 ? 'the whole repository' : paths.join(', ')
-  const base = since !== undefined && (await isAncestor(run, cwd, since)) ? [since] : []
+  const base = since !== undefined && snapshot !== undefined && (await isAncestor(run, cwd, since)) ? [since, snapshot] : []
   const stat = await gitText(run, cwd, ['git', 'diff', '--stat', ...base, '--', ...paths])
   const diff = await gitText(run, cwd, ['git', 'diff', ...base, '--', ...paths])
 
   const heading =
     base.length === 0
       ? `Diff of ${scope}, produced by the harness with git diff (this block is the change under review):`
-      : `Diff of ${scope} since your previous round, produced by the harness with git diff ${base[0]} (this block is only the change made after your last review):`
+      : `Diff of ${scope} since your previous round, produced by the harness with git diff ${base.join(' ')} (this block is only the change made after your last review):`
   const lines = [heading, '<<<DIFF']
   if (diff === null) {
     lines.push('git diff failed; inspect the owned paths with Read, Glob and Grep instead.')
@@ -374,12 +383,12 @@ export async function launchAgent(
   kind: AgentKind,
   cwd: string,
   report?: string,
-  round: Pick<PromptExtras, 'previousFindings' | 'finalRound'> & { since?: string } = {},
+  round: Pick<PromptExtras, 'previousFindings' | 'finalRound'> & { since?: string; snapshot?: string } = {},
 ): Promise<SpawnOutcome> {
   const target = resolveLaunch(plan, task, kind)
   if (!target.ok) return target
 
-  const diff = kind === 'reviewer' ? await collectDiff(ports.run, cwd, task.paths, round.since) : undefined
+  const diff = kind === 'reviewer' ? await collectDiff(ports.run, cwd, task.paths, round.since, round.snapshot) : undefined
 
   return exclusive(gate, async (): Promise<SpawnOutcome> => {
     const key = registrationKey(target.spawnModel, target.effort)

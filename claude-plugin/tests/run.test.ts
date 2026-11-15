@@ -958,32 +958,57 @@ test('autoReview stays off by default', async ($, on) => {
   expect(planState(seen)?.tasks[0]?.state).toBe('approved')
 })
 
+const INDEX = '.git/harness-review.index'
+
 const roundGit = (seen: ReturnType<typeof wire>, ancestor: boolean) => {
-  let snaps = 0
-  seen.runHook = async argv => {
+  const files = new Set(['src/parser.ts'])
+  const trees = new Map<string, string[]>()
+  let staged: string[] = []
+  let written = 0
+  seen.runHook = async (argv, init) => {
     if (argv[0] !== 'git') return undefined
-    if (argv[1] === 'stash' && argv[2] === 'create') {
-      snaps += 1
-      return { exitCode: 0, stdout: `snap${snaps}\n`, stderr: '' }
+    const ok = (stdout = '') => ({ exitCode: 0, stdout, stderr: '' })
+    const temp = (init as { env?: Record<string, string> } | undefined)?.env?.GIT_INDEX_FILE === INDEX
+    if (argv[1] === 'rev-parse' && argv[2] === '--git-path') return ok(`${INDEX}\n`)
+    if (argv[1] === 'read-tree' && temp) return ok()
+    if (argv[1] === 'add' && argv[2] === '-A' && temp) {
+      staged = [...files]
+      return ok()
+    }
+    if (argv[1] === 'write-tree' && temp) {
+      written += 1
+      const id = `tree${written}`
+      trees.set(id, staged)
+      return ok(`${id}\n`)
+    }
+    if (argv[1] === 'commit-tree') {
+      const id = `snap-${argv[2]}`
+      trees.set(id, trees.get(argv[2] ?? '') ?? [])
+      return ok(`${id}\n`)
     }
     if (argv[1] === 'merge-base') return { exitCode: ancestor ? 0 : 1, stdout: '', stderr: '' }
     if (argv[1] === 'diff') {
-      const since = argv.includes('snap1')
-      const text = since ? '+only the fix since round one\n' : '+the whole change\n'
-      return { exitCode: 0, stdout: argv.includes('--stat') ? '' : text, stderr: '' }
+      const [from, to] = argv.filter(arg => arg.startsWith('snap-'))
+      if (argv.includes('--stat')) return ok()
+      if (from === undefined || to === undefined) return ok('+the whole change\n')
+      const before = trees.get(from) ?? []
+      const added = (trees.get(to) ?? []).filter(file => !before.includes(file))
+      return ok(`${added.map(file => `+++ b/${file}\n`).join('')}+only the fix since round one\n`)
     }
     return undefined
   }
+  return files
 }
 
-const twoRounds = async ($: Engine, seen: ReturnType<typeof wire>) => {
+const twoRounds = async ($: Engine, seen: ReturnType<typeof wire>, between: () => void = () => undefined) => {
   await start($)
-  await makePlan($, { objective: 'Parse', tasks: [{ title: 'Add parser', paths: ['src/parser.ts'] }] })
+  await makePlan($, { objective: 'Parse', tasks: [{ title: 'Add parser', paths: ['src'] }] })
   const id = planState(seen)?.tasks[0]?.id
   await runTask($, id)
   await finish($, 'agent-1', 'done')
   await finish($, 'agent-2', 'F1 drops EOF.\nREVIEW_GATE_VERDICT: CHANGES_REQUIRED')
   await runTask($, id)
+  between()
   await finish($, 'agent-3', 'Fixed.')
   return seen.spawns[3]?.prompt ?? ''
 }
@@ -993,12 +1018,20 @@ test('a second review round carries only the diff since the first round plus its
   roundGit(seen, true)
   const prompt = await twoRounds($, seen)
   expect(seen.spawns[1]?.prompt).toContain('+the whole change')
-  expect(planState(seen)?.tasks[0]?.reviewedHash).toBe('snap2')
-  expect(seen.runs).toContainEqual(['git', 'diff', 'snap1', '--', 'src/parser.ts'])
+  expect(planState(seen)?.tasks[0]?.reviewedHash).toBe('snap-tree2')
+  expect(seen.runs).toContainEqual(['git', 'diff', 'snap-tree1', 'snap-tree2', '--', 'src'])
   expect(prompt).toContain('+only the fix since round one')
   expect(prompt).not.toContain('+the whole change')
   expect(prompt).toContain('since your previous round')
   expect(prompt).toContain('F1 drops EOF.')
+})
+
+test('a file created between rounds, still untracked, appears in the second round diff', { options: { autoRun: false } }, async ($, on) => {
+  const seen = wire(on)
+  const files = roundGit(seen, true)
+  const prompt = await twoRounds($, seen, () => files.add('src/lex.ts'))
+  expect(prompt).toContain('+++ b/src/lex.ts')
+  expect(prompt).not.toContain('+++ b/src/parser.ts')
 })
 
 test('a later round falls back to the full diff when the previous hash is not an ancestor', { options: { autoRun: false } }, async ($, on) => {
@@ -1014,8 +1047,7 @@ test('a later round falls back to the full diff when the previous hash is not an
 test('a later round falls back to the full diff when no previous hash was recorded', { options: { autoRun: false } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => {
-    if (argv[0] === 'git' && argv[1] === 'stash') return { exitCode: 1, stdout: '', stderr: 'no' }
-    if (argv[0] === 'git' && argv[1] === 'rev-parse' && argv[2] === 'HEAD') return { exitCode: 1, stdout: '', stderr: 'no' }
+    if (argv[0] === 'git' && argv[1] === 'write-tree') return { exitCode: 1, stdout: '', stderr: 'no' }
     if (argv[0] === 'git' && argv[1] === 'diff') return { exitCode: 0, stdout: argv.includes('--stat') ? '' : '+the whole change\n', stderr: '' }
     return undefined
   }
