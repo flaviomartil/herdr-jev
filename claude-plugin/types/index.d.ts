@@ -62,6 +62,7 @@ export type HarnessTask = {
   note?: string
   report?: string
   reviewReport?: string
+  reviewedHash?: string
   consult?: HarnessConsult
 }
 

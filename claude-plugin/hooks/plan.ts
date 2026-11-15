@@ -676,6 +676,7 @@ function parseTask(raw: unknown): HarnessTask | null {
     note: optionalString(raw.note),
     report: optionalString(raw.report),
     reviewReport: optionalString(raw.reviewReport),
+    reviewedHash: optionalString(raw.reviewedHash),
     consult: parseConsult(raw.consult),
   }
 }

@@ -236,25 +236,57 @@ export async function registerKinds(
   return registered
 }
 
-async function gitText(run: RunPort, cwd: string, argv: readonly string[]): Promise<string | null> {
+async function gitText(run: RunPort, cwd: string, argv: readonly string[], env?: Record<string, string>): Promise<string | null> {
   try {
-    const ran = await run(argv, { cwd, timeoutMs: GIT_TIMEOUT_MS })
+    const ran = await run(argv, { cwd, timeoutMs: GIT_TIMEOUT_MS, ...(env === undefined ? {} : { env }) })
     return ran.exitCode === 0 ? ran.stdout : null
   } catch {
     return null
   }
 }
 
-export async function collectDiff(run: RunPort, cwd: string, paths: readonly string[]): Promise<string> {
-  const scope = paths.length === 0 ? 'the whole repository' : paths.join(', ')
-  const stat = await gitText(run, cwd, ['git', 'diff', '--stat', '--', ...paths])
-  const diff = await gitText(run, cwd, ['git', 'diff', '--', ...paths])
+const snapshotGate = createGate()
 
-  const lines = [`Diff of ${scope}, produced by the harness with git diff (this block is the change under review):`, '<<<DIFF']
+export async function snapshotHash(run: RunPort, cwd: string): Promise<string | undefined> {
+  return exclusive(snapshotGate, async () => {
+    const index = (await gitText(run, cwd, ['git', 'rev-parse', '--git-path', 'harness-review.index']))?.trim()
+    if (index === undefined || index.length === 0) return undefined
+    const env = { GIT_INDEX_FILE: index }
+    if ((await gitText(run, cwd, ['git', 'read-tree', 'HEAD'], env)) === null) return undefined
+    if ((await gitText(run, cwd, ['git', 'add', '-A'], env)) === null) return undefined
+    const tree = (await gitText(run, cwd, ['git', 'write-tree'], env))?.trim()
+    if (tree === undefined || tree.length === 0) return undefined
+    const commit = (await gitText(run, cwd, ['git', 'commit-tree', tree, '-p', 'HEAD', '-m', 'harness review snapshot']))?.trim()
+    return commit === undefined || commit.length === 0 ? undefined : commit
+  })
+}
+
+async function isAncestor(run: RunPort, cwd: string, hash: string): Promise<boolean> {
+  for (const ref of [hash, `${hash}^1`]) {
+    if ((await gitText(run, cwd, ['git', 'merge-base', '--is-ancestor', ref, 'HEAD'])) !== null) return true
+  }
+  return false
+}
+
+export async function collectDiff(run: RunPort, cwd: string, paths: readonly string[], since?: string, snapshot?: string): Promise<string> {
+  const scope = paths.length === 0 ? 'the whole repository' : paths.join(', ')
+  const base = since !== undefined && snapshot !== undefined && (await isAncestor(run, cwd, since)) ? [since, snapshot] : []
+  const stat = await gitText(run, cwd, ['git', 'diff', '--stat', ...base, '--', ...paths])
+  const diff = await gitText(run, cwd, ['git', 'diff', ...base, '--', ...paths])
+
+  const heading =
+    base.length === 0
+      ? `Diff of ${scope}, produced by the harness with git diff (this block is the change under review):`
+      : `Diff of ${scope} since your previous round, produced by the harness with git diff ${base.join(' ')} (this block is only the change made after your last review):`
+  const lines = [heading, '<<<DIFF']
   if (diff === null) {
     lines.push('git diff failed; inspect the owned paths with Read, Glob and Grep instead.')
   } else if (diff.trim().length === 0) {
-    lines.push('git diff is empty: there are no unstaged changes in these paths. Inspect the owned files with Read, Glob and Grep.')
+    lines.push(
+      base.length === 0
+        ? 'git diff is empty: there are no unstaged changes in these paths. Inspect the owned files with Read, Glob and Grep.'
+        : 'git diff is empty: nothing changed in these paths since your previous round. Inspect the owned files with Read, Glob and Grep.',
+    )
   } else {
     if (stat !== null && stat.trim().length > 0) lines.push(fit(stat.trimEnd(), STAT_LIMIT), '')
     if (diff.length > DIFF_LIMIT) {
@@ -351,12 +383,12 @@ export async function launchAgent(
   kind: AgentKind,
   cwd: string,
   report?: string,
-  round: Pick<PromptExtras, 'previousFindings' | 'finalRound'> = {},
+  round: Pick<PromptExtras, 'previousFindings' | 'finalRound'> & { since?: string; snapshot?: string } = {},
 ): Promise<SpawnOutcome> {
   const target = resolveLaunch(plan, task, kind)
   if (!target.ok) return target
 
-  const diff = kind === 'reviewer' ? await collectDiff(ports.run, cwd, task.paths) : undefined
+  const diff = kind === 'reviewer' ? await collectDiff(ports.run, cwd, task.paths, round.since, round.snapshot) : undefined
 
   return exclusive(gate, async (): Promise<SpawnOutcome> => {
     const key = registrationKey(target.spawnModel, target.effort)
