@@ -1986,6 +1986,7 @@ export const register: Register = (on, options) => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
+    resetTurnCard()
     await attempt('turn card hide', $, () => hideTurnCard($))
     if (isWaiting() && e.origin?.kind !== 'plugin') await attempt('cancel wait on prompt', $, () => cancelWait($, options))
     let eligible = options.autoDelegate !== false && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
@@ -2013,7 +2014,6 @@ export const register: Register = (on, options) => {
       return next(e)
     }
     await attempt('clear claim warnings', $, () => update($, claimWarningsAtom, () => []))
-    resetTurnCard()
     let eligible = false
     await update($, automaticPromptsAtom, rows => {
       if (rows.length === 0) return rows
