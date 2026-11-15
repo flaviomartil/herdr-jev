@@ -163,6 +163,12 @@
       "title": "Reduced motion",
       "description": "Draws the pixel crew static: no walk, blink, shake or sparkle frames and no frame timer.",
       "default": false
+    },
+    "turnCard": {
+      "type": "boolean",
+      "title": "Turn summary card",
+      "description": "After each main turn shows one line above the prompt with files changed, tests passed and failed, commits and delegated runs. Hidden on the next prompt.",
+      "default": true
     }
   }
 }
