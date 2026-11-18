@@ -1569,10 +1569,16 @@ async function startAutomatic($: EngineInterface, options: PluginOptions, gate: 
   let run: Automatic = { ...previous, turn, cwd, task, model, state: 'planning', reason: 'planning', stages: [], consultReviewed }
   if (!await saveAutomatic($, run) || await $.session.id() !== session) return
   const config = cliConfig(options, cwd)
+  const permissionMode = await read($, permissionModeAtom)
+  if (permissionMode === 'plan') {
+    await saveAutomatic($, { ...run, state: 'direct', reason: 'plan_mode' })
+    return
+  }
   let raw: unknown
   try {
     raw = await automaticCall(runPort($), config, ['mod-route', '--auto-delegate', '--session', session, '--turn', turn,
-      ...(model ? ['--model', model] : []), '--cwd', cwd, ...(consultReviewed ? ['--consult-reviewed', ...(run.consultReport ? ['--request-json-stdin'] : [])] : [])], timeoutMs,
+      ...(model ? ['--model', model] : []), '--cwd', cwd, ...(permissionMode ? ['--permission-mode', permissionMode] : []),
+      ...(consultReviewed ? ['--consult-reviewed', ...(run.consultReport ? ['--request-json-stdin'] : [])] : [])], timeoutMs,
       consultReviewed && run.consultReport ? JSON.stringify({ task, consultReport: run.consultReport }) : task)
     run = automaticResult(run, raw)
   } catch {

@@ -109,7 +109,11 @@ test('native plan mode keeps implementation with the advisor and bypass mode sti
   await $.turn.start({ text: initial.task, turnId: 'execution' })
   await seen.clock.advance(1)
   await settle()
-  expect(seen.runs.filter(argv => argv[1] === 'mod-route')).toHaveLength(1)
+  const routes = seen.runs.filter(argv => argv[1] === 'mod-route')
+  expect(routes).toHaveLength(1)
+  const flag = routes[0]!.indexOf('--permission-mode')
+  expect(flag).toBeGreaterThan(0)
+  expect(routes[0]![flag + 1]).toBe('bypassPermissions')
 });
 
 test('entering plan mode before scheduled dispatch prevents the writing launch', { options: { autoDelegate: true } }, async ($, on) => {

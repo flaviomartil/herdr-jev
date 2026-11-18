@@ -307,6 +307,7 @@ test('automatic authorization and explicit restrictions stop before triage or pr
   const { calls, deps, input } = fixture();
   expect(await dispatchModTask({ ...input, autoDelegate: false }, deps as never)).toEqual({ mode: 'direct', reason: 'authorization_required' });
   expect(await dispatchModTask({ ...input, autoDelegate: undefined }, deps as never)).toEqual({ mode: 'direct', reason: 'authorization_required' });
+  expect(await dispatchModTask({ ...input, permissionMode: 'plan' }, deps as never)).toEqual({ mode: 'direct', reason: 'plan_mode' });
   for (const task of ['Implemente o parser. Não utilize outros agentes.', 'Implemente o parser. Não faça nenhuma alteração.']) {
     expect(await dispatchModTask({ ...input, task }, deps as never)).toEqual({ mode: 'direct', reason: 'user_requested_direct' });
   }
