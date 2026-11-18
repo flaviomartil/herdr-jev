@@ -17,7 +17,7 @@ const response = (state: string) => ({ id: ID, run: { id: ID, stages: [
   { role: 'reviewer', client: 'claude', model: 'claude-opus-5-5', state: 'queued' },
 ] } })
 
-test('queued prompts are sent in order after a failed run', async ($, on) => {
+test('queued prompts are sent in order after a failed run', { options: { autoDelegate: true } }, async ($, on) => {
   const stdins: string[] = []
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': active } })
   seen.runHook = async (argv, init) => {
@@ -31,7 +31,7 @@ test('queued prompts are sent in order after a failed run', async ($, on) => {
   expect(stdins).toEqual(['first queued', 'second queued'])
 })
 
-test('an unconfirmed (unknown) run holds the queue so nothing runs in parallel with it', async ($, on) => {
+test('an unconfirmed (unknown) run holds the queue so nothing runs in parallel with it', { options: { autoDelegate: true } }, async ($, on) => {
   const stdins: string[] = []
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': active } })
   seen.runHook = async (argv, init) => {
@@ -45,7 +45,7 @@ test('an unconfirmed (unknown) run holds the queue so nothing runs in parallel w
   expect(stdins).toEqual([])
 })
 
-test('queued prompts are sent in order after the active turn is interrupted', async ($, on) => {
+test('queued prompts are sent in order after the active turn is interrupted', { options: { autoDelegate: true } }, async ($, on) => {
   const stdins: string[] = []
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': active } })
   seen.runHook = async (argv, init) => {

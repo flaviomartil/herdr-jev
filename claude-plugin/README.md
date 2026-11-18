@@ -11,7 +11,7 @@ claude plugin marketplace add /home/user/projects/personal/herdr-jev --scope use
 claude plugin install harness@herdr-jev --scope user
 ```
 
-Com `autoDelegate=true`, prompts humanos recebem estado `planning` antes do início do turno principal. Triagem, sondagens e lançamento são agendados fora do hook, cujo orçamento fixo no Claude é de dez segundos. O advisor deve aguardar a decisão antes de editar. Tarefas moderadas e arquiteturais usam o perfil do modelo exato da sessão, a ordem de destinos em `harness.yml` e sondagens nativas de disponibilidade. Modelo desconhecido, tarefa simples ou destino indisponível mantém execução direta. Eventos internos, comandos e trabalhadores não iniciam outra delegação.
+A delegação automática é opt-in: `autoDelegate` tem padrão `false`. Com `autoDelegate=true`, prompts humanos recebem estado `planning` antes do início do turno principal. Triagem, sondagens e lançamento são agendados fora do hook, cujo orçamento fixo no Claude é de dez segundos. O advisor deve aguardar a decisão antes de editar. Tarefas moderadas e arquiteturais usam o perfil do modelo exato da sessão, a ordem de destinos em `harness.yml` e sondagens nativas de disponibilidade. Modelo desconhecido, tarefa simples ou destino indisponível mantém execução direta. Eventos internos, comandos e trabalhadores não iniciam outra delegação.
 
 Instruções explícitas como `não delegue`, `sem delegação`, `do not delegate`, `read only` e `apenas leitura` mantêm execução direta. O pipeline automático é de implementação; pedidos explícitos de leitura não iniciam um peer com acesso de escrita. Consults automáticos usam o transporte Claude existente; um perfil com consult em outro CLI recebe execução direta com motivo `consult_adapter_unavailable`.
 

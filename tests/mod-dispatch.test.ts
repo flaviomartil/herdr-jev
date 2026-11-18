@@ -32,7 +32,7 @@ function fixture() {
     command: (_argv: string[]) => { calls.push('record'); return { id, decision, activation: 'active' }; },
     pipeline: async (_plan: unknown, options: any) => { calls.push('dispatch'); expect(options).toMatchObject({ dispatchId: id, dispatchSession: 'session', dispatchTurn: 'turn' }); return { mode: 'delegate', run: { id } }; },
   };
-  return { calls, deps, input: { task: 'Implement parser', session: 'session', turn: 'turn', model: 'claude-fable-5-1', cwd: state.stateDir } };
+  return { calls, deps, input: { autoDelegate: true, task: 'Implement parser', session: 'session', turn: 'turn', model: 'claude-fable-5-1', cwd: state.stateDir } };
 }
 
 test('automatic route preflights exact stages and persists its decision before dispatch', async () => {
@@ -300,4 +300,16 @@ test('cleanup closes only a verified worker whose native name and pane still mat
   agent = { ...agent, pane_id: 'owned' };
   await closeVerifiedModWorker(run, herdr as never);
   expect(closed).toBe(1);
+});
+
+
+test('automatic authorization and explicit restrictions stop before triage or probes', async () => {
+  const { calls, deps, input } = fixture();
+  expect(await dispatchModTask({ ...input, autoDelegate: false }, deps as never)).toEqual({ mode: 'direct', reason: 'authorization_required' });
+  expect(await dispatchModTask({ ...input, autoDelegate: undefined }, deps as never)).toEqual({ mode: 'direct', reason: 'authorization_required' });
+  expect(await dispatchModTask({ ...input, permissionMode: 'plan' }, deps as never)).toEqual({ mode: 'direct', reason: 'plan_mode' });
+  for (const task of ['Implemente o parser. Não utilize outros agentes.', 'Implemente o parser. Não faça nenhuma alteração.']) {
+    expect(await dispatchModTask({ ...input, task }, deps as never)).toEqual({ mode: 'direct', reason: 'user_requested_direct' });
+  }
+  expect(calls).toEqual([]);
 });
