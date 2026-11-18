@@ -239,6 +239,14 @@ describe("launch path stage client", () => {
     expect(launches).toEqual([]);
   });
 
+  it("requires automatic delegation authorization at the CLI boundary", () => {
+    harness = createFakeHarness("contract");
+    const result = spawnSync(process.execPath, [resolve(import.meta.dir, "../src/cli.ts"), "mod-route", "--session", "s", "--turn", "t"], { encoding: "utf8", input: "Implement parser", env: { ...process.env }, timeout: 60_000 });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ mode: "direct", reason: "authorization_required" });
+    expect(harness.calls()).toEqual([]);
+  });
+
   it("rejects malformed private mod input without logging its contents or dispatching", () => {
     harness = createFakeHarness("contract");
     for (const input of ['private-consult {', 'null', '{"task":42}', '{"task":"Implement parser","consultReport":"private-consult"}']) {

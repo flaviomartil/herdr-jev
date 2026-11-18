@@ -12,6 +12,7 @@ export interface Discovery {
   ok: boolean;
   reason?: string;
   ids: string[];
+  efforts?: Record<string, string[]>;
 }
 
 export interface RoleRepair {
@@ -23,6 +24,8 @@ export interface RoleRepair {
 
 export interface SyncReport {
   applied: boolean;
+  status: "in_sync" | "drift" | "unknown" | "validation_failed";
+  profileIssues: Array<{ profile: string; role: string; client: string; model: string; effort?: string; status: "drift" | "unknown"; reason: string }>;
   discoveries: Discovery[];
   missingInHarness: Record<string, string[]>;
   staleInHarness: Record<string, string[]>;
@@ -88,7 +91,12 @@ export function discover(client: SyncClient, deps: SyncDeps, probeClaude: string
   try {
     if (client === "codex") {
       const cache = deps.read(join(deps.home, ".codex", "models_cache.json"));
-      return cache ? done(parseCodexCache(cache), "empty_models_cache") : fail("models_cache_missing");
+      if (!cache) return fail("models_cache_missing");
+      const found = done(parseCodexCache(cache), "empty_models_cache");
+      const parsed = JSON.parse(cache) as { models?: Array<{ slug?: string; supported_reasoning_levels?: Array<{ effort?: string }> }> };
+      found.efforts = Object.fromEntries((parsed.models ?? []).filter(model => model.slug && Array.isArray(model.supported_reasoning_levels))
+        .map(model => [model.slug!, model.supported_reasoning_levels!.map(level => level.effort).filter((level): level is string => typeof level === "string")]));
+      return found;
     }
     if (client === "antigravity") {
       const result = deps.run("agy", ["models"], 45_000);
@@ -237,6 +245,66 @@ export function repairMatrix(matrix: Matrix, valid: Record<string, Set<string>>)
 const DISCOVERABLE: SyncClient[] = ["codex", "antigravity", "kimi", "opencode", "claude", "cursor", "kiro"];
 const HARNESS_PATCHED: SyncClient[] = ["codex", "antigravity", "kimi"];
 
+type Effort = "standard" | "high" | "xhigh";
+type ProfileTarget = { client?: string; model: string; effort?: Effort };
+type ProfileModel = { id: string; cli_id?: string; aliases?: string[]; efforts?: Effort[]; effort_style?: "suffix" | "flag" | "config" | "none"; effort_cli_ids?: Partial<Record<Effort, string>> };
+type HarnessYaml = {
+  clients?: Record<string, { enabled?: boolean }>;
+  models?: Record<string, { effort_style?: ProfileModel["effort_style"]; models?: ProfileModel[] }>;
+  delegation?: { profiles?: Array<{ id: string; client: string; advisor: string; executor: ProfileTarget; reviewer: ProfileTarget; consult?: ProfileTarget; grounded_response?: { presenter: string }; routes?: Record<string, { executor?: ProfileTarget[]; reviewer?: ProfileTarget[] }> }> };
+};
+
+function checkProfiles(yaml: string, discoveries: Discovery[]): SyncReport["profileIssues"] {
+  const data = Bun.YAML.parse(yaml) as HarnessYaml;
+  const issues: SyncReport["profileIssues"] = [];
+  const checked = new Set<string>();
+  for (const profile of data.delegation?.profiles ?? []) {
+    if (data.clients?.[profile.client]?.enabled !== true) continue;
+    const check = (role: string, target: ProfileTarget | undefined) => {
+      if (!target?.model) return;
+      const client = target.client ?? profile.client;
+      const effort = target.effort;
+      const key = JSON.stringify([profile.id, role, client, target.model, effort]);
+      if (checked.has(key)) return;
+      checked.add(key);
+      const entry = (data.models?.[client]?.models ?? []).find(model =>
+        [model.id, model.cli_id, ...(model.aliases ?? []), ...Object.values(model.effort_cli_ids ?? {})].includes(target.model));
+      const issue = (status: "drift" | "unknown", reason: string) => issues.push({ profile: profile.id, role, client, model: target.model, ...(effort ? { effort } : {}), status, reason });
+      if (!entry) { issue("drift", "model_not_cataloged"); return; }
+      if (effort && !(entry.efforts ?? ["standard", "high", "xhigh"]).includes(effort)) { issue("drift", "unsupported_effort"); return; }
+      const discovery = discoveries.find(found => found.client === client);
+      if (!discovery?.ok) { issue("unknown", "discovery_unavailable"); return; }
+      const style = entry.effort_style ?? data.models?.[client]?.effort_style ?? "none";
+      const named = target.model === entry.id || entry.aliases?.includes(target.model);
+      const encoded = named ? undefined : (Object.entries(entry.effort_cli_ids ?? {}) as Array<[Effort, string]>).find(([, id]) => id === target.model)?.[0];
+      const level = effort ?? encoded;
+      const cliId = style === "suffix" && level ? entry.effort_cli_ids?.[level] ?? entry.cli_id ?? entry.id : entry.cli_id ?? entry.id;
+      if (!cliId || !discovery.ids.includes(cliId)) { issue("drift", "model_or_effort_not_discovered"); return; }
+      if (effort && (style === "config" || style === "flag")) {
+        const levels = discovery.efforts?.[cliId];
+        if (!levels) issue("unknown", "effort_discovery_unavailable");
+        else if (!levels.includes(effort === "standard" ? "medium" : effort)) issue("drift", "effort_not_discovered");
+      }
+    };
+    check("advisor", { model: profile.advisor });
+    for (const role of ["executor", "reviewer", "consult"] as const) check(role, profile[role]);
+    if (profile.grounded_response?.presenter) check("presenter", { model: profile.grounded_response.presenter });
+    for (const [route, value] of Object.entries(profile.routes ?? {}))
+      for (const role of ["executor", "reviewer"] as const)
+        for (const target of value[role] ?? []) check(`routes.${route}.${role}`, target);
+  }
+  return issues;
+}
+
+function syncStatus(report: SyncReport): SyncReport["status"] {
+  if (report.validation?.ok === false) return "validation_failed";
+  if ((Object.keys(report.missingInHarness).length || !report.applied && report.repairs.length) ||
+    Object.keys(report.staleInHarness).length || report.unresolved.length || report.invalidOverrides.length ||
+    report.profileIssues.some(issue => issue.status === "drift")) return "drift";
+  if (report.discoveries.some(found => !found.ok) || report.profileIssues.some(issue => issue.status === "unknown")) return "unknown";
+  return "in_sync";
+}
+
 export function syncModels(options: { apply?: boolean; probeClaude?: boolean; clients?: SyncClient[] } = {}, deps: SyncDeps = defaultSyncDeps()): SyncReport {
   const harnessPath = join(deps.harnessRoot, "harness.yml");
   const original = deps.read(harnessPath);
@@ -260,8 +328,8 @@ export function syncModels(options: { apply?: boolean; probeClaude?: boolean; cl
     if (HARNESS_PATCHED.includes(found.client)) {
       const tokens = catalogTokens(yaml, found.client);
       const missing = found.ids.filter((id) => !tokens.has(id));
-      const { entries, names: added } = harnessEntries(found.client, missing);
-      if (added.length) missingInHarness[found.client] = added;
+      const { entries } = harnessEntries(found.client, missing);
+      if (missing.length) missingInHarness[found.client] = missing;
       yaml = insertCatalogEntries(yaml, found.client, entries);
     }
     if (found.client !== "opencode") {
@@ -285,7 +353,8 @@ export function syncModels(options: { apply?: boolean; probeClaude?: boolean; cl
     }
   }
 
-  const report: SyncReport = { applied: false, discoveries, missingInHarness, staleInHarness, repairs, unresolved, invalidOverrides, harnessPath, matrixPath: deps.matrixPath };
+  const report: SyncReport = { applied: false, status: "unknown", profileIssues: checkProfiles(original, discoveries), discoveries, missingInHarness, staleInHarness, repairs, unresolved, invalidOverrides, harnessPath, matrixPath: deps.matrixPath };
+  report.status = syncStatus(report);
   if (!options.apply) return report;
 
   if (yaml !== original) {
@@ -297,6 +366,7 @@ export function syncModels(options: { apply?: boolean; probeClaude?: boolean; cl
     if (!check.ok) {
       deps.write(harnessPath, original);
       if (deps.read(checksums) !== undefined) deps.run("python3", [checksums, "--write"], 120_000);
+      report.status = syncStatus(report);
       return report;
     }
   }
@@ -305,19 +375,27 @@ export function syncModels(options: { apply?: boolean; probeClaude?: boolean; cl
     deps.write(deps.matrixPath, `${JSON.stringify(matrix, null, 2)}\n`);
   }
   report.applied = true;
+  for (const found of discoveries) {
+    if (!found.ok || !HARNESS_PATCHED.includes(found.client)) continue;
+    const missing = found.ids.filter(id => !catalogTokens(yaml, found.client).has(id));
+    if (missing.length) report.missingInHarness[found.client] = missing;
+    else delete report.missingInHarness[found.client];
+  }
+  report.profileIssues = checkProfiles(yaml, discoveries);
+  report.status = syncStatus(report);
   return report;
 }
 
 export function formatSyncReport(report: SyncReport): string {
   const lines: string[] = [];
   for (const found of report.discoveries) lines.push(found.ok ? `${found.client}: ${found.ids.length} live models` : `${found.client}: skipped (${found.reason})`);
-  for (const [client, ids] of Object.entries(report.missingInHarness)) lines.push(`${report.applied ? "added to" : "missing in"} harness.yml [${client}]: ${ids.join(", ")}`);
+  for (const [client, ids] of Object.entries(report.missingInHarness)) lines.push(`missing in harness.yml [${client}]: ${ids.join(", ")}`);
   for (const [client, ids] of Object.entries(report.staleInHarness)) lines.push(`cataloged but not live [${client}]: ${ids.join(", ")}`);
   for (const fix of report.repairs) lines.push(`${report.applied ? "repaired" : "would repair"} ${fix.client}.${fix.role}: ${fix.from} -> ${fix.to}`);
   for (const item of report.unresolved) lines.push(`needs manual choice ${item.client}.${item.role}: ${item.model} is not live and no fallback is`);
   for (const item of report.invalidOverrides) lines.push(`user override not live: ${item.key} = ${item.model}`);
   if (report.validation) lines.push(`harness validate: ${report.validation.ok ? "ok" : `failed, harness.yml restored (${report.validation.output})`}`);
-  const drift = Object.keys(report.missingInHarness).length + report.repairs.length;
-  lines.push(drift === 0 ? "catalogs in sync" : report.applied ? "catalogs updated" : "drift found: rerun with --apply");
+  for (const issue of report.profileIssues) lines.push(`profile ${issue.profile}.${issue.role}: ${issue.client}/${issue.model}${issue.effort ? `/${issue.effort}` : ""}: ${issue.status} (${issue.reason})`);
+  lines.push(`sync status: ${report.status}`);
   return lines.join("\n");
 }

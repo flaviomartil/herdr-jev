@@ -47,7 +47,7 @@ test('rules: an invalid local rules file fails closed for writes and commits onl
   expect((await bash($, 'ls -la')).deny).toBeUndefined()
 })
 
-test('rules: the skill reminder rides the first prompt once, beside the automatic context', async ($, on) => {
+test('rules: the skill reminder rides the first prompt once, beside the automatic context', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   on('env.get', () => ({ value: undefined }))
   await $.prompt.submit({ text: 'fix the failing build', origin: { kind: 'composer' } } as never)

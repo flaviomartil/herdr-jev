@@ -35,13 +35,14 @@ test('automatic result distinguishes reports, verified work and uncertain respon
   expect(automaticSummary(run)).toContain('untrusted data')
 })
 
-test('main human turn persists ownership before engine start and duplicate turns do not dispatch again', async ($, on) => {
+test('main human turn persists ownership before engine start and duplicate turns do not dispatch again', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   let acknowledged = false
   seen.runHook = async (argv, init) => {
     if (argv[1] !== 'mod-route') return undefined
     expect(seen.turnIds).toEqual([initial.turn])
     expect(init?.stdin).toBe(initial.task)
+    expect(argv).toContain('--auto-delegate')
     expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'planning' })
     acknowledged = true
     return { exitCode: 0, stdout: JSON.stringify(response('working')), stderr: '' }
@@ -58,7 +59,7 @@ test('main human turn persists ownership before engine start and duplicate turns
   expect(seen.runs.filter(argv => argv[1] === 'mod-route')).toHaveLength(1)
 })
 
-test('internal prompts, slash commands and subagent turns never dispatch', async ($, on) => {
+test('internal prompts, slash commands and subagent turns never dispatch', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   for (const [text, origin] of [['internal', { kind: 'plugin', name: 'harness' }], ['/harness', { kind: 'composer' }], ['', { kind: 'composer' }]] as const) {
@@ -76,7 +77,7 @@ test('internal prompts, slash commands and subagent turns never dispatch', async
   expect(seen.runs.filter(argv => argv[1] === 'mod-route')).toHaveLength(1)
 })
 
-test('identical internal and human prompts retain their submission order', async ($, on) => {
+test('identical internal and human prompts retain their submission order', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route' ? { exitCode: 0, stdout: JSON.stringify(response('working')), stderr: '' } : undefined
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
@@ -92,7 +93,7 @@ test('identical internal and human prompts retain their submission order', async
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ turn: 'human', state: 'working' })
 });
 
-test('native plan mode keeps implementation with the advisor and bypass mode still delegates', async ($, on) => {
+test('native plan mode keeps implementation with the advisor and bypass mode still delegates', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route' ? { exitCode: 0, stdout: JSON.stringify(response('working')), stderr: '' } : undefined
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
@@ -111,7 +112,7 @@ test('native plan mode keeps implementation with the advisor and bypass mode sti
   expect(seen.runs.filter(argv => argv[1] === 'mod-route')).toHaveLength(1)
 });
 
-test('entering plan mode before scheduled dispatch prevents the writing launch', async ($, on) => {
+test('entering plan mode before scheduled dispatch prevents the writing launch', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
   await $.prompt.submit({ text: initial.task, origin: { kind: 'composer' } } as never)
@@ -123,7 +124,7 @@ test('entering plan mode before scheduled dispatch prevents the writing launch',
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'direct', reason: 'plan_mode' })
 });
 
-test('a completed old collection cannot overwrite a new human task', async ($, on) => {
+test('a completed old collection cannot overwrite a new human task', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'verified' } } })
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
@@ -147,7 +148,7 @@ test('a completed old collection cannot overwrite a new human task', async ($, o
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ turn: 'new-human', state: 'working' })
 });
 
-test('an accepted consult cannot be overwritten by an earlier status response', async ($, on) => {
+test('an accepted consult cannot be overwritten by an earlier status response', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'unknown' } } })
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
@@ -182,7 +183,7 @@ test('an accepted consult cannot be overwritten by an earlier status response', 
   expect(seen.spawns).toHaveLength(0)
 });
 
-test('an existing manual plan waits while automatic implementation is active', async ($, on) => {
+test('an existing manual plan waits while automatic implementation is active', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route' ? { exitCode: 0, stdout: JSON.stringify(response('working')), stderr: '' } : undefined
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
@@ -196,7 +197,7 @@ test('an existing manual plan waits while automatic implementation is active', a
   expect(seen.spawns).toHaveLength(before)
 });
 
-test('manual UI run and rerun respect automatic ownership', { options: { autoRun: false } }, async ($, on) => {
+test('manual UI run and rerun respect automatic ownership', { options: { autoRun: false, autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
   await makePlan($, { objective: 'Manual parser', tasks: [{ title: 'Implement parser' }] })
@@ -216,7 +217,7 @@ test('manual UI run and rerun respect automatic ownership', { options: { autoRun
   await pane.unmount()
 });
 
-test('a Claude consult may specify its model without an optional cliModel', async ($, on) => {
+test('a Claude consult may specify its model without an optional cliModel', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'consult', id: ID, target: { client: 'claude', model: 'claude-fable-5-1', effort: 'xhigh' } }), stderr: '' } : undefined
@@ -229,7 +230,7 @@ test('a Claude consult may specify its model without an optional cliModel', asyn
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'consulting', consultAgent: 'agent-1' })
 });
 
-for (const rejected of ['register', 'spawn']) test(`a rejected consult ${rejected} fails visibly without stranding the queue`, async ($, on) => {
+for (const rejected of ['register', 'spawn']) test(`a rejected consult ${rejected} fails visibly without stranding the queue`, { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   if (rejected === 'register') seen.failRegister = true
   else seen.denySpawn = ['harness:consultant']
@@ -252,7 +253,7 @@ for (const rejected of ['register', 'spawn']) test(`a rejected consult ${rejecte
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'working', turn: 'next-turn' })
 });
 
-test('an uncertain consult spawn remains fenced during recovery', async ($, on) => {
+test('an uncertain consult spawn remains fenced during recovery', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.throwSpawn = 'transport lost'
   seen.runHook = async argv => ['mod-route', 'mod-status'].includes(argv[1]!)
@@ -271,7 +272,7 @@ test('an uncertain consult spawn remains fenced during recovery', async ($, on) 
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'unknown', reason: 'consult_requires_reconciliation' })
 });
 
-test('a failed consult reports its failure without requesting an acceptance', async ($, on) => {
+test('a failed consult reports its failure without requesting an acceptance', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'consult', id: ID, target: { client: 'claude', model: 'claude-fable-5-1', effort: 'xhigh' } }), stderr: '' } : undefined
@@ -287,7 +288,7 @@ test('a failed consult reports its failure without requesting an acceptance', as
   expect(seen.submitted.some(text => text.includes('harness_delegate'))).toBe(false)
 });
 
-test('a lost route response recovers the recorded consult before any consult launch', async ($, on) => {
+test('a lost route response recovers the recorded consult before any consult launch', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route'
     ? { exitCode: 1, stdout: '', stderr: 'lost response' }
@@ -301,7 +302,7 @@ test('a lost route response recovers the recorded consult before any consult lau
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'consulting', consultAgent: 'agent-1' })
 });
 
-test('recovery launches a recorded consult only when its native launch has not been claimed', async ($, on) => {
+test('recovery launches a recorded consult only when its native launch has not been claimed', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'consulting' } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'consult', id: ID, target: { client: 'claude', model: 'claude-fable-5-1', effort: 'xhigh' } }), stderr: '' } : undefined
@@ -313,7 +314,7 @@ test('recovery launches a recorded consult only when its native launch has not b
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'consulting', consultLaunchAttempted: true, consultAgent: 'agent-1' })
 });
 
-test('an uncertain claimed consult never starts a replacement consultant during recovery', async ($, on) => {
+test('an uncertain claimed consult never starts a replacement consultant during recovery', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'unknown', consultLaunchAttempted: true } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'consult', id: ID, target: { client: 'claude', model: 'claude-fable-5-1', effort: 'xhigh' } }), stderr: '' } : undefined
@@ -325,7 +326,7 @@ test('an uncertain claimed consult never starts a replacement consultant during 
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'unknown', reason: 'consult_requires_reconciliation' })
 });
 
-test('verification cancelled before its timer persists and resumes with the same session', async ($, on) => {
+test('verification cancelled before its timer persists and resumes with the same session', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'returned' } } })
   seen.runHook = async argv => argv[1] === 'mod-collect'
     ? { exitCode: 0, stdout: JSON.stringify(response('verified')), stderr: '' } : undefined
@@ -341,7 +342,7 @@ test('verification cancelled before its timer persists and resumes with the same
   expect(seen.runs.filter(argv => argv[1] === 'mod-collect')).toHaveLength(1)
 });
 
-test('restoring an interrupted verification observes until a fresh explicit reconciliation', async ($, on) => {
+test('restoring an interrupted verification observes until a fresh explicit reconciliation', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': {
     ...initial, id: ID, state: 'verifying', verifyRequested: true, verificationAttempted: true,
   } } })
@@ -362,7 +363,7 @@ test('restoring an interrupted verification observes until a fresh explicit reco
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'verified', verifyRequested: false })
 })
 
-test('plan mode observes a queued implementation and permits recovery after leaving plan mode', async ($, on) => {
+test('plan mode observes a queued implementation and permits recovery after leaving plan mode', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'unknown' } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify(response('queued')), stderr: '' }
@@ -383,7 +384,7 @@ test('plan mode observes a queued implementation and permits recovery after leav
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'working' })
 });
 
-test('plan mode prevents ordinary collection from submitting a pending implementation prompt', async ($, on) => {
+test('plan mode prevents ordinary collection from submitting a pending implementation prompt', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
   seen.runHook = async argv => argv[1] === 'mod-collect'
     ? { exitCode: 0, stdout: JSON.stringify(response('working')), stderr: '' } : undefined
@@ -400,7 +401,7 @@ test('plan mode prevents ordinary collection from submitting a pending implement
   expect(seen.runs.filter(argv => argv[1] === 'mod-collect')).toHaveLength(1)
 });
 
-test('explicit reconciliation resumes a recorded queued implementation and retains its later verification', async ($, on) => {
+test('explicit reconciliation resumes a recorded queued implementation and retains its later verification', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'unknown' } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify(response('queued')), stderr: '' }
@@ -414,7 +415,7 @@ test('explicit reconciliation resumes a recorded queued implementation and retai
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'working', verificationAttempted: false, verifyRequested: true })
 })
 
-test('declining a completed consult releases the next queued request', async ($, on) => {
+test('declining a completed consult releases the next queued request', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'consult_ready', consultReport: 'Recommendation' } } })
   seen.runHook = async argv => argv[1] === 'mod-route' ? { exitCode: 0, stdout: JSON.stringify({ mode: 'direct', reason: 'simple_work' }), stderr: '' } : undefined
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
@@ -427,7 +428,7 @@ test('declining a completed consult releases the next queued request', async ($,
   expect(seen.spawns).toHaveLength(0)
 });
 
-test('losing an accepted consult dispatch response never launches the consultant again', async ($, on) => {
+test('losing an accepted consult dispatch response never launches the consultant again', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'consult_ready', consultReport: 'Recommendation' } } })
   seen.runHook = async argv => {
     if (argv[1] === 'mod-route') return { exitCode: 1, stdout: '', stderr: 'lost response' }
@@ -445,7 +446,7 @@ test('losing an accepted consult dispatch response never launches the consultant
   expect(seen.spawns).toHaveLength(0)
 });
 
-test('accepting a consult persists before its dispatch timer and survives session end', async ($, on) => {
+test('accepting a consult persists before its dispatch timer and survives session end', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'consult_ready', consultReport: 'Recommendation' } } })
   seen.runHook = async argv => {
     if (argv[1] === 'mod-collect') return { exitCode: 0, stdout: JSON.stringify(response('working')), stderr: '' }
@@ -472,7 +473,7 @@ test('accepting a consult persists before its dispatch timer and survives sessio
   expect(seen.spawns).toHaveLength(0)
 });
 
-test('a headless verification request during planning runs after the pending dispatch', async ($, on) => {
+test('a headless verification request during planning runs after the pending dispatch', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, reason: 'dispatch_pending' } } })
   seen.runHook = async argv => {
     if (argv[1] === 'mod-route') return { exitCode: 0, stdout: JSON.stringify(response('reported')), stderr: '' }
@@ -490,7 +491,7 @@ test('a headless verification request during planning runs after the pending dis
   expect(seen.runs.filter(argv => argv[1] === 'mod-collect')).toHaveLength(1)
 });
 
-test('explicit verification collects the run ID recovered in the same headless call', async ($, on) => {
+test('explicit verification collects the run ID recovered in the same headless call', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, state: 'unknown', reason: 'dispatch_requires_reconciliation' } } })
   seen.runHook = async argv => {
     if (argv[1] === 'mod-status') return { exitCode: 0, stdout: JSON.stringify(response('reported')), stderr: '' }
@@ -510,7 +511,7 @@ test('explicit verification collects the run ID recovered in the same headless c
   expect(seen.spawns).toHaveLength(0)
 });
 
-test('a consultant completing before spawn returns still delivers its recommendation', async ($, on) => {
+test('a consultant completing before spawn returns still delivers its recommendation', { options: { autoDelegate: true } }, async ($, on) => {
   let completed = Promise.resolve()
   const seen = wire(on)
   seen.spawnHook = async agentId => { completed = finish($, agentId, 'Read-only recommendation'); await settle() }
@@ -525,7 +526,7 @@ test('a consultant completing before spawn returns still delivers its recommenda
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'consult_ready', consultAgent: 'agent-1', consultReport: 'Read-only recommendation' })
 });
 
-test('a clear during dispatch does not drop the next session first task', async ($, on) => {
+test('a clear during dispatch does not drop the next session first task', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
@@ -553,7 +554,7 @@ test('a clear during dispatch does not drop the next session first task', async 
   expect(seen.runs.filter(argv => argv[1] === 'mod-route')).toHaveLength(2)
 });
 
-test('explicit collection while working does not consume the later verification attempt', async ($, on) => {
+test('explicit collection while working does not consume the later verification attempt', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
   let calls = 0
   seen.runHook = async argv => argv[1] === 'mod-collect'
@@ -579,7 +580,7 @@ test('automatic delegation disabled preserves ordinary tool execution', { option
   expect(await $.tool.call({ tool: 'Bash', command: 'pwd', tool_use_id: 'ordinary' })).toMatchObject({ result: 'ok' })
 })
 
-test('a finished collection command failure gets one automatic verification retry without dispatch', async ($, on) => {
+test('a finished collection command failure gets one automatic verification retry without dispatch', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'returned' } } })
   let attempts = 0
   seen.runHook = async argv => argv[1] === 'mod-status'
@@ -598,7 +599,7 @@ test('a finished collection command failure gets one automatic verification retr
   expect(seen.runs.some(argv => argv[1] === 'mod-route')).toBe(false)
 });
 
-test('uncertain dispatch recovers persistent status and never resubmits', async ($, on) => {
+test('uncertain dispatch recovers persistent status and never resubmits', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on)
   seen.runHook = async argv => argv[1] === 'mod-route'
     ? { exitCode: 1, stdout: '', stderr: 'timeout' }
@@ -614,7 +615,7 @@ test('uncertain dispatch recovers persistent status and never resubmits', async 
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ id: ID, state: 'unknown' })
 })
 
-test('an absent restored dispatch retains its queue while the original command can still complete', async ($, on) => {
+test('an absent restored dispatch retains its queue while the original command can still complete', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, state: 'planning', queuedAt: 800000 } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'unknown', recorded: false }), stderr: '' } : undefined
@@ -630,7 +631,7 @@ test('an absent restored dispatch retains its queue while the original command c
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ pending: [expect.objectContaining({ turn: 'queued-after-restore' })] })
 })
 
-test('confirmed absent dispatch after its deadline releases later human turns', async ($, on) => {
+test('confirmed absent dispatch after its deadline releases later human turns', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, state: 'unknown', queuedAt: 700000 } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'unknown', recorded: false }), stderr: '' }
@@ -647,7 +648,7 @@ test('confirmed absent dispatch after its deadline releases later human turns', 
   expect(seen.runs.filter(argv => argv[1] === 'mod-route')).toHaveLength(1)
 });
 
-test('a recorded decision without a run expires safely before accepting another task', async ($, on) => {
+test('a recorded decision without a run expires safely before accepting another task', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'unknown', queuedAt: 700000 } } })
   seen.runHook = async argv => argv[1] === 'mod-status'
     ? { exitCode: 0, stdout: JSON.stringify({ mode: 'unknown', id: ID, recorded: true, runMissing: true }), stderr: '' } : undefined
@@ -659,7 +660,7 @@ test('a recorded decision without a run expires safely before accepting another 
   expect(seen.runs.some(argv => argv[1] === 'mod-route')).toBe(false)
 });
 
-test('restored queued work dispatches with its captured repository and advisor model', async ($, on) => {
+test('restored queued work dispatches with its captured repository and advisor model', { options: { autoDelegate: true } }, async ($, on) => {
   const captured = { turn: 'queued-turn', task: 'Implement queued parser', cwd: '/original/queued/repo', model: 'claude-opus-5-5' }
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working', pending: [captured] } } })
   seen.runHook = async argv => argv[1] === 'mod-collect' ? { exitCode: 0, stdout: JSON.stringify(response('verified')), stderr: '' }
@@ -676,7 +677,7 @@ test('restored queued work dispatches with its captured repository and advisor m
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ ...captured, state: 'direct' })
 });
 
-for (const error of [undefined, 'verification_failed']) test(`a queued request advances after collection ${error ?? 'success'}`, async ($, on) => {
+for (const error of [undefined, 'verification_failed']) test(`a queued request advances after collection ${error ?? 'success'}`, { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
   let release!: () => void
   const held = new Promise<void>(resolve => { release = resolve })
@@ -704,7 +705,7 @@ for (const error of [undefined, 'verification_failed']) test(`a queued request a
   expect(seen.runs.filter(argv => argv[1] === 'mod-collect')).toHaveLength(1)
 });
 
-test('restored task belongs to its session and timer collects without spawning', async ($, on) => {
+test('restored task belongs to its session and timer collects without spawning', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { session: 'restored', store: {
     'harness:auto:other:current': { ...initial, id: ID, state: 'working' },
     'harness:auto:restored:current': { ...initial, id: ID, state: 'working' },
@@ -721,7 +722,7 @@ test('restored task belongs to its session and timer collects without spawning',
   expect(seen.saved.get('harness:auto:restored:current')).toMatchObject({ state: 'returned' })
 })
 
-test('headless sessions restore state without a recurring collection timer', async ($, on) => {
+test('headless sessions restore state without a recurring collection timer', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
   await seen.clock.advance(10000)
@@ -729,7 +730,7 @@ test('headless sessions restore state without a recurring collection timer', asy
   expect(seen.runs.some(argv => argv[1] === 'mod-collect')).toBe(false)
 })
 
-test('clearing into a new session never restores the old session atom', async ($, on) => {
+test('clearing into a new session never restores the old session atom', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: false })
   await $.session.end({ reason: 'clear', sessionId: 'sess-1' } as never)
@@ -740,7 +741,7 @@ test('clearing into a new session never restores the old session atom', async ($
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'working' })
 });
 
-test('verification requested during a headless collection runs after that collection', async ($, on) => {
+test('verification requested during a headless collection runs after that collection', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'working' } } })
   let release!: () => void
   const hold = new Promise<void>(resolve => { release = resolve })
@@ -763,7 +764,7 @@ test('verification requested during a headless collection runs after that collec
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'verified' })
 });
 
-test('manual collection schedules long verification outside the tool hook and deduplicates polling', async ($, on) => {
+test('manual collection schedules long verification outside the tool hook and deduplicates polling', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { 'harness:auto:sess-1:current': { ...initial, id: ID, state: 'returned' } } })
   let release!: () => void
   const hold = new Promise<void>(resolve => { release = resolve })
@@ -787,7 +788,7 @@ test('manual collection schedules long verification outside the tool hook and de
   expect(seen.saved.get('harness:auto:sess-1:current')).toMatchObject({ state: 'verified' })
 })
 
-test('the five harness tools are registered at session start before the automatic restore reads the store', async ($, on) => {
+test('the five harness tools are registered at session start before the automatic restore reads the store', { options: { autoDelegate: true } }, async ($, on) => {
   on('store.get', { key: /^harness:auto:/ }, (_$, e, next) => {
     seen.registered.push(`store:${e.key}`)
     return next(e)
@@ -801,4 +802,15 @@ test('the five harness tools are registered at session start before the automati
     expect(at).toBeGreaterThanOrEqual(0)
     expect(at).toBeLessThan(read)
   }
+})
+
+
+test('automatic delegation defaults to off', async ($, on) => {
+  const seen = wire(on)
+  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+  await $.prompt.submit({ text: initial.task, origin: { kind: 'composer' } } as never)
+  await $.turn.start({ text: initial.task, turnId: initial.turn })
+  await seen.clock.advance(1)
+  await settle()
+  expect(seen.runs.some(argv => argv[1] === 'mod-route')).toBe(false)
 })

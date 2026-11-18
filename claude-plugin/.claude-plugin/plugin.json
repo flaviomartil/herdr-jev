@@ -24,7 +24,7 @@
       "type": "boolean",
       "title": "Automatic shared delegation",
       "description": "Triages user turns and starts the shared Herdr-Jev execution plan, including external CLIs. Keeps tools observational; unknown dispatches are retained for reconciliation.",
-      "default": true
+      "default": false
     },
     "herdrJevBin": {
       "type": "string",

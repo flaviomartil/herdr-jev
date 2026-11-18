@@ -24,6 +24,7 @@ export interface ModRequest {
   model?: string;
   cwd: string;
   shadow?: boolean;
+  autoDelegate?: boolean;
   consultReviewed?: boolean;
   consultReport?: string;
 }
@@ -64,11 +65,12 @@ export async function dispatchModTask(input: ModRequest, deps: {
 } = {}) {
   if (input.consultReport !== undefined && (!input.consultReviewed || typeof input.consultReport !== "string" || Buffer.byteLength(input.consultReport) > 16_384)) throw new Error("invalid_consult_report");
   if (typeof input.task !== "string" || !input.task.trim() || Buffer.byteLength(input.task) > 16_384 || ![input.session, input.turn].every((id) => /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,159}$/.test(id))) throw new Error("invalid_mod_request");
+  if (input.autoDelegate !== true && !input.shadow) return { mode: "direct", reason: "authorization_required" };
   const scopeCheckTask = input.task.replace(/\b(?:(?:do not|don['’]?t|never)\s+(?:edit|modify|change|touch)|(?:n[aã]o|nunca)\s+(?:altere|modifique|edite))\s+(?:"[\w./\\-]+\.[a-z0-9]+"|'[\w./\\-]+\.[a-z0-9]+'|[\w./\\-]+\.[a-z0-9]+)(?=\s*(?:[.;]|$))/gi, "");
   if (/^\s*(?:how|what|why|where|when|como|por que|o que)\b/i.test(input.task)) return { mode: "direct", reason: "read_only_task" };
-  if (/\b(?:(?:do not|don['’]?t|never)\s+(?:make|apply|perform|introduce)|without\s+(?:making|applying|performing|introducing))\s+(?:(?:any|further)\s+)?(?:changes|edits|modifications|writes)\b|\b(?:n[aã]o|nunca)\s+(?:fa[cç]a|realize|aplique)\s+(?:quaisquer\s+)?(?:altera[cç][oõ]es|modifica[cç][oõ]es|escritas)\b/i.test(scopeCheckTask)) return { mode: "direct", reason: "user_requested_direct" };
+  if (/\b(?:(?:do not|don['’]?t|never)\s+(?:make|apply|perform|introduce)|without\s+(?:making|applying|performing|introducing))\s+(?:(?:any|further)\s+)?(?:changes|edits|modifications|writes)\b|\b(?:n[aã]o|nunca)\s+(?:fa[cç]a|realize|aplique)\s+(?:(?:quaisquer|nenhuma)\s+)?(?:altera[cç](?:[aã]o|[oõ]es)|modifica[cç](?:[aã]o|[oõ]es)|escritas)\b/i.test(scopeCheckTask)) return { mode: "direct", reason: "user_requested_direct" };
   if (/\b(?:(?:do not|don['’]?t|never)\s+(?:delegate|spawn|launch|start|edit|modify|write|change|create|touch|run|execute|test)|no\s+(?:delegation|agents?|subagents?|workers?|writes?|edits?|changes?|modifications?)|(?:n[aã]o|nunca)\s+(?:delegue|delegar|crie|inicie|lance|altere|modifique|escreva|edite|rode|execute|teste)|sem\s+(?:delega[cç][aã]o|agentes?|altera[cç][oõ]es)|without\s+(?:using\s+(?:any\s+)?(?:agents?|subagents?|workers?)|delegating|delegation|spawning|launching|starting|editing|writing|modifying|changing|touching|running|executing|testing))\b/i.test(scopeCheckTask)) return { mode: "direct", reason: "user_requested_direct" };
-  if (/\b(?:(?:do not|don['’]?t|never)\s+(?:use|employ)\s+(?:any\s+)?(?:agents?|subagents?|workers?)|(?:n[aã]o|nunca)\s+(?:use|utilize)\s+(?:agentes?|subagentes?))\b/i.test(input.task)) return { mode: "direct", reason: "user_requested_direct" };
+  if (/\b(?:(?:do not|don['’]?t|never)\s+(?:use|employ)\s+(?:any\s+)?(?:agents?|subagents?|workers?)|(?:n[aã]o|nunca)\s+(?:use|utilize)\s+(?:(?:outros?|quaisquer)\s+)?(?:agentes?|subagentes?|workers?))\b/i.test(input.task)) return { mode: "direct", reason: "user_requested_direct" };
   const intent = input.task.replace(/"[^"]*"|`[^`]*`|“[^”]*”|(?:^|[\s(])'[^'\n]*'|‘[^’]*’/g, " ");
   const writing = /\b(?:implement|build|add|create|fix|change|modify|refactor|update|implemente|implementar|construa|adicione|crie|corrija|altere|modifique|refatore|atualize)\b/i.exec(intent);
   if (/\b(?:in|using|em|no)\s+(?:read[ -]only|(?:somente|apenas|s[oó])\s+leitura)\s+(?:mode|modo)\b/i.test(input.task)) return { mode: "direct", reason: "user_requested_direct" };

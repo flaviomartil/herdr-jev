@@ -427,9 +427,10 @@ program.command("mod-route")
   .option("--model <id>", "Exact advisor model")
   .option("--cwd <path>", "Repository", process.cwd())
   .option("--shadow", "Record the decision without launching or probing models")
+  .option("--auto-delegate", "Explicit authorization for automatic delegation")
   .option("--consult-reviewed", "Advisor has read the required consult")
   .option("--request-json-stdin", "Read the task and accepted consult recommendation as private JSON stdin")
-  .action(async (options: { session: string; turn: string; model?: string; cwd: string; shadow?: boolean; consultReviewed?: boolean; requestJsonStdin?: boolean }) => {
+  .action(async (options: { session: string; turn: string; model?: string; cwd: string; shadow?: boolean; autoDelegate?: boolean; consultReviewed?: boolean; requestJsonStdin?: boolean }) => {
     const text = readFileSync(0, "utf8");
     if (Buffer.byteLength(text) > 200_000) throw new Error("invalid_mod_request");
     let input: { task: string; consultReport?: string } = { task: text };

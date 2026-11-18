@@ -24,7 +24,7 @@ const run = async ($: Engine, command: 'queue' | 'before', args: string) =>
 const tasks = (seen: ReturnType<typeof wire>) =>
   ((seen.saved.get(KEY) as Automatic | undefined)?.pending ?? []).map(one => one.task)
 
-test('/queue lists the queued prompts in order', async ($, on) => {
+test('/queue lists the queued prompts in order', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { [KEY]: active } })
   await start($)
   const text = await run($, 'queue', '')
@@ -34,13 +34,13 @@ test('/queue lists the queued prompts in order', async ($, on) => {
   expect(seen.spawns).toHaveLength(0)
 })
 
-test('/queue says when nothing is queued', async ($, on) => {
+test('/queue says when nothing is queued', { options: { autoDelegate: true } }, async ($, on) => {
   wire(on, { store: { [KEY]: { ...active, pending: [] } } })
   await start($)
   expect(await run($, 'queue', '')).toBe('Queue is empty.')
 })
 
-test('/before puts a task first in the queue', async ($, on) => {
+test('/before puts a task first in the queue', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { [KEY]: active } })
   await start($)
   const text = await run($, 'before', 'fix the login bug')
@@ -49,7 +49,7 @@ test('/before puts a task first in the queue', async ($, on) => {
   expect(seen.spawns).toHaveLength(0)
 })
 
-test('/before without a task or without an active run changes nothing', async ($, on) => {
+test('/before without a task or without an active run changes nothing', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { [KEY]: { ...active, state: 'verified', pending: [] } } })
   await start($)
   expect(await run($, 'before', '  ')).toContain('Usage')
@@ -57,7 +57,7 @@ test('/before without a task or without an active run changes nothing', async ($
   expect(tasks(seen)).toEqual([])
 })
 
-test('/queue rm removes the numbered item', async ($, on) => {
+test('/queue rm removes the numbered item', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { [KEY]: active } })
   await start($)
   expect(await run($, 'queue', 'rm 1')).toContain('first queued')
@@ -66,7 +66,7 @@ test('/queue rm removes the numbered item', async ($, on) => {
   expect(tasks(seen)).toEqual(['second queued'])
 })
 
-test('/queue edit replaces the text of the numbered item', async ($, on) => {
+test('/queue edit replaces the text of the numbered item', { options: { autoDelegate: true } }, async ($, on) => {
   const seen = wire(on, { store: { [KEY]: active } })
   await start($)
   expect(await run($, 'queue', 'edit 2 second, but with tests')).toContain('second, but with tests')
@@ -84,7 +84,7 @@ const drive = async (seen: ReturnType<typeof wire>) => {
   }
 }
 
-test('/queue rm and edit refuse an item that was dispatched after the listing instead of shifting', async ($, on) => {
+test('/queue rm and edit refuse an item that was dispatched after the listing instead of shifting', { options: { autoDelegate: true } }, async ($, on) => {
   let release = () => undefined as void
   const held = new Promise<void>(resolve => { release = resolve })
   const seen = wire(on, { store: { [KEY]: active } })
@@ -110,7 +110,7 @@ test('/queue rm and edit refuse an item that was dispatched after the listing in
   await drive(seen)
 })
 
-test('an item removed while a collection holds an older copy of the run stays removed', async ($, on) => {
+test('an item removed while a collection holds an older copy of the run stays removed', { options: { autoDelegate: true } }, async ($, on) => {
   let release = () => undefined as void
   const held = new Promise<void>(resolve => { release = resolve })
   let collecting = false

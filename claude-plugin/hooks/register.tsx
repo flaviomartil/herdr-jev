@@ -1556,6 +1556,7 @@ async function saveAutomatic($: EngineInterface, run: Automatic, replace = false
 }
 
 async function startAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, turn: string, task: string, timeoutMs: number, consultReviewed = false): Promise<void> {
+  if (options.autoDelegate !== true) return
   const session = await $.session.id()
   const previous = await read($, automaticAtom)
   if (previous?.turn !== turn || previous.state !== 'planning') return
@@ -1570,7 +1571,7 @@ async function startAutomatic($: EngineInterface, options: PluginOptions, gate: 
   const config = cliConfig(options, cwd)
   let raw: unknown
   try {
-    raw = await automaticCall(runPort($), config, ['mod-route', '--session', session, '--turn', turn,
+    raw = await automaticCall(runPort($), config, ['mod-route', '--auto-delegate', '--session', session, '--turn', turn,
       ...(model ? ['--model', model] : []), '--cwd', cwd, ...(consultReviewed ? ['--consult-reviewed', ...(run.consultReport ? ['--request-json-stdin'] : [])] : [])], timeoutMs,
       consultReviewed && run.consultReport ? JSON.stringify({ task, consultReport: run.consultReport }) : task)
     run = automaticResult(run, raw)
@@ -1684,6 +1685,7 @@ async function collectAutomatic($: EngineInterface, options: PluginOptions, gate
 type AutomaticRuntime = { dispatchTimer: Timer | null; dispatching: boolean; collectTimer: Timer | null; collecting: boolean; pendingVerify: boolean }
 
 async function queueAutomatic($: EngineInterface, options: PluginOptions, gate: Gate, runtime: AutomaticRuntime, turn: string, task: string, consultReviewed = false, context?: Pick<Automatic, 'cwd' | 'model'>, drain = false): Promise<void> {
+  if (options.autoDelegate !== true) return
   const previous = await read($, automaticAtom)
   const pendingDispatch = previous?.turn === turn && previous.state === 'planning' && previous.reason === 'dispatch_pending'
   if (!consultReviewed && previous?.turn === turn && !pendingDispatch) return
@@ -1823,7 +1825,7 @@ export const register: Register = (on, options) => {
       await update($, automaticAtom, () => null)
       await update($, automaticPromptsAtom, () => [])
     })
-    if (options.autoDelegate !== false) {
+    if (options.autoDelegate === true) {
       await attempt('restore automatic delegation', $, async () => {
         const saved = await $.store.get(`harness:auto:${await $.session.id()}:current`)
         if (isRecord(saved) && typeof saved.turn === 'string' && typeof saved.cwd === 'string' && typeof saved.task === 'string'
@@ -2034,7 +2036,7 @@ export const register: Register = (on, options) => {
     resetTurnCard()
     await attempt('turn card hide', $, () => hideTurnCard($))
     if (isWaiting() && e.origin?.kind !== 'plugin') await attempt('cancel wait on prompt', $, () => cancelWait($, options))
-    let eligible = options.autoDelegate !== false && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
+    let eligible = options.autoDelegate === true && ['composer', 'bridge', 'sdk'].includes(e.origin?.kind ?? '')
       && !e.attachments?.length && e.text.trim().length > 0 && e.text.length <= 16384 && !e.text.trim().startsWith('/')
     if (eligible) eligible = (await $.env.get('HERDR_JEV_MOD_WORKER')) !== '1'
     await attempt('queue automatic origin', $, () => update($, automaticPromptsAtom, rows => [...rows.slice(-31), { text: e.text, eligible }]))
@@ -2065,7 +2067,7 @@ export const register: Register = (on, options) => {
       eligible = rows[0]!.text === e.text && rows[0]!.eligible
       return rows.slice(1)
     })
-    if (eligible && options.autoDelegate !== false && await read($, permissionModeAtom) !== 'plan' && Object.keys(await read($, workersAtom)).length === 0) {
+    if (eligible && options.autoDelegate === true && await read($, permissionModeAtom) !== 'plan' && Object.keys(await read($, workersAtom)).length === 0) {
       await attempt('queue automatic delegation', $, () => queueAutomatic($, options, gate, automaticRuntime, e.turnId, e.text))
     }
     return next(e)
@@ -2105,7 +2107,7 @@ export const register: Register = (on, options) => {
 
   on('tool.call', { tool: TOOL_COLLECT }, async ($, e) => {
     if (e.agentId !== undefined) return { result: 'harness_collect: main session only.' }
-    if (options.autoDelegate === false) return { result: 'Automatic delegation disabled; inspect existing runs with herdr-jev run-status.' }
+    if (options.autoDelegate !== true) return { result: 'Automatic delegation disabled; inspect existing runs with herdr-jev run-status.' }
     const verify = (e as { verify?: unknown }).verify === true
     const run = await read($, automaticAtom)
     if (verify && run) await saveAutomatic($, { ...run, verifyRequested: true })
@@ -2117,7 +2119,7 @@ export const register: Register = (on, options) => {
     if (e.agentId !== undefined) return { result: 'harness_delegate: main session only.' }
     if (Array.isArray((e as unknown as { tasks?: unknown }).tasks)) return { result: await delegateBatch($, e as unknown as Record<string, unknown>, options) }
     const run = await read($, automaticAtom)
-    if (options.autoDelegate === false || run?.state !== 'consult_ready') return { result: 'Read a completed consult with harness_status first.' }
+    if (options.autoDelegate !== true || run?.state !== 'consult_ready') return { result: 'Read a completed consult with harness_status first.' }
     if ((e as { accept?: unknown }).accept === false) {
       await saveAutomatic($, { ...run, state: 'direct', reason: 'consult_declined' })
       await advanceAutomatic($, options, gate, automaticRuntime)
