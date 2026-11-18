@@ -71,6 +71,7 @@ import { parseListLimit, peerBroadcastFailed } from "./cli-support.js";
 import { studio, studioEventPane } from "./herdr/studio.js";
 import { changeEffort } from "./herdr/effort.js";
 import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
+import { watchPullRequest } from "./herdr/pr-watch.js";
 import { reportProgress } from "./herdr/progress.js";
 
 import { spawnSync } from "node:child_process";
@@ -162,6 +163,16 @@ inbox.command("list").option("--project <path>").option("--all").option("--statu
   });
 inbox.command("seen <id>").action(async (id: string) => { console.log(JSON.stringify(await historyCommand(["work-seen", "--work", id]))); });
 inbox.command("done <id>").action(async (id: string) => { console.log(JSON.stringify(await historyCommand(["work-state", "--work", id, "--status", "done"]))); });
+inbox.command("watch-pr <pull-request>")
+  .description("Watch one GitHub pull request and send state changes to the Harness inbox")
+  .requiredOption("--session <id>", "Indexed session that owns the inbox events")
+  .option("--once", "Poll once and exit")
+  .option("--interval <seconds>", "Seconds between polls", "90")
+  .action(async (target: string, options: { session: string; once?: boolean; interval: string }) => {
+    console.log(JSON.stringify(await watchPullRequest({
+      target, session: options.session, once: options.once, intervalSeconds: Number(options.interval),
+    })));
+  });
 
 program
   .command("overview")
