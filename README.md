@@ -448,6 +448,20 @@ Review the open work on {{branch}}.
 
 The state directory is `HERDR_JEV_STATE_DIR` (or `HERDR_PLUGIN_STATE_DIR`), defaulting to `~/.local/state/herdr-jev`. See [docs/standup.md](docs/standup.md) for the full reference.
 
+### Pull request alerts in the Harness inbox
+
+Watch an explicit GitHub PR from a terminal and attach its alerts to an indexed Harness session. The command uses authenticated `gh` and the existing `flock` reservation helper.
+
+```sh
+herdr-jev inbox watch-pr 'owner/repository#42' --session codex:<session-id>
+herdr-jev inbox watch-pr https://github.com/owner/repository/pull/42 --session codex:<session-id> --once
+herdr-jev inbox list
+```
+
+The watcher sends alerts for failed checks, required reviews, requested changes and merges. The first poll reports attention already needed. Later polls report each observed transition once per PR and session, including a check failure that recurs after recovery. The default interval is 90 seconds. Use `--interval` for 10 to 3600 seconds or `--once` for a single poll. The foreground watcher exits when the PR closes or merges.
+
+The cursor lives in the existing Herdr-Jev state directory. Restarting the watcher retries any pending inbox delivery with the same event ID. The command reads PR status from GitHub and writes its alerts to the Harness inbox.
+
 ### notify
 
 `herdr-jev notify` raises one deduplicated notification for an agent that needs a human. It is normally called by the Jev Office.
