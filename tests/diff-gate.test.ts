@@ -900,9 +900,69 @@ describe("herdr-jev diff-gate", () => {
         );
         expect(code).toBe(0);
         expect(captured[0]).toContain("status=passed");
+        expect(captured[0]).toContain("structural metadata hygiene pre-filter only; ship does not replace code review.");
       } finally {
         console.log = origLog;
       }
+
+      const deletedSecretDiff = [
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--- a/src/a.ts",
+        "+++ b/src/a.ts",
+        "@@ -1,2 +1,2 @@",
+        "-const oldTok = 'ghp_1234567890abcdefghijklmnop';",
+        " const unchanged = 1;",
+        "+const newSafe = 2;",
+      ].join("\n");
+      const redactedDelMock = makeEvaluateMock("ship", 0.95);
+      const redactedDelRes = await runDiffGate(
+        { diffText: deletedSecretDiff, message: "cleanup old token", includeRedactedDiff: true },
+        { evaluate: redactedDelMock.evaluate },
+      );
+      expect(redactedDelRes.exitCode).toBe(2);
+      expect(redactedDelRes.status).toBe("blocked_secrets");
+      expect(redactedDelRes.reason).toBe("secrets_detected");
+      expect(redactedDelMock.getCalls()).toBe(0);
+
+      const contextSecretDiff = [
+        "diff --git a/src/a.ts b/src/a.ts",
+        "--- a/src/a.ts",
+        "+++ b/src/a.ts",
+        "@@ -1,2 +1,3 @@",
+        " const nearby = 'ghp_1234567890abcdefghijklmnop';",
+        " const unchanged = 1;",
+        "+const added = 2;",
+      ].join("\n");
+      const redactedCtxMock = makeEvaluateMock("ship", 0.95);
+      const redactedCtxRes = await runDiffGate(
+        { diffText: contextSecretDiff, message: "update nearby line", includeRedactedDiff: true },
+        { evaluate: redactedCtxMock.evaluate },
+      );
+      expect(redactedCtxRes.exitCode).toBe(2);
+      expect(redactedCtxRes.status).toBe("blocked_secrets");
+      expect(redactedCtxRes.reason).toBe("secrets_detected");
+      expect(redactedCtxMock.getCalls()).toBe(0);
+
+      const binaryDiff = [
+        "diff --git a/assets/logo.png b/assets/logo.png",
+        "index 1111111..2222222 100644",
+        "Binary files a/assets/logo.png and b/assets/logo.png differ",
+      ].join("\n");
+      const binaryMock = makeEvaluateMock("ship", 0.92);
+      const binaryRes = await runDiffGate(
+        { diffText: binaryDiff, message: "assets: update logo" },
+        { evaluate: binaryMock.evaluate },
+      );
+      expect(binaryRes.exitCode).toBe(0);
+      expect(binaryRes.valid).toBe(true);
+      expect(binaryMock.getCalls()).toBe(1);
+
+      const flagRefRes = await runDiffGate(
+        { base: "--help", cwd: `${import.meta.dir}/..` },
+        { evaluate: makeEvaluateMock("ship", 0.95).evaluate },
+      );
+      expect(flagRefRes.exitCode).toBe(2);
+      expect(flagRefRes.reason).toBe("invalid_base_ref");
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }

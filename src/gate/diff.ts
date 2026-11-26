@@ -357,6 +357,28 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
   return inspectUnifiedDiff(rawDiff).files;
 }
 
+function scanLineForSecrets(
+  file: string,
+  line: number,
+  text: string,
+  pushFinding: (file: string, line: number, rule: string) => void,
+): void {
+  let matchedSpecific = false;
+  for (const { rule, pattern } of SECRET_RULES) {
+    if (pattern.test(text)) {
+      pushFinding(file, line, rule);
+      matchedSpecific = true;
+    }
+  }
+  if (!matchedSpecific) {
+    if (redactShapes(text) !== text) {
+      pushFinding(file, line, "secret_shape");
+    } else if (KEYED_SECRET_NAME.test(text) && redact(text) !== text) {
+      pushFinding(file, line, "generic_secret");
+    }
+  }
+}
+
 export function scanDiffAdditions(rawDiff: string): SecretFinding[] {
   const parsed = parseUnifiedDiff(rawDiff);
   const findings: SecretFinding[] = [];
@@ -378,19 +400,98 @@ export function scanDiffAdditions(rawDiff: string): SecretFinding[] {
     }
 
     for (const added of file.additions) {
-      let matchedSpecific = false;
-      for (const { rule, pattern } of SECRET_RULES) {
-        if (pattern.test(added.text)) {
-          pushFinding(file.path, added.line, rule);
-          matchedSpecific = true;
+      scanLineForSecrets(file.path, added.line, added.text, pushFinding);
+    }
+  }
+
+  return findings;
+}
+
+export function scanDiffAllLines(rawDiff: string): SecretFinding[] {
+  const findings: SecretFinding[] = [];
+  const seen = new Set<string>();
+
+  const pushFinding = (file: string, line: number, rule: string) => {
+    const safeFile = pathText(file, 200);
+    const key = `${safeFile}:${line}:${rule}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    findings.push({ file: safeFile, line, rule });
+  };
+
+  const normalized = rawDiff.replace(/\r\n?/g, "\n");
+  const trimmedTrailing = normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized;
+  const lines = trimmedTrailing.length === 0 ? [] : trimmedTrailing.split("\n");
+
+  let currentFile = "unknown";
+  let sawHunkInFile = false;
+  let inHunk = false;
+  let remainingOld = 0;
+  let remainingNew = 0;
+  let oldLine = 1;
+  let newLine = 1;
+
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      sawHunkInFile = false;
+      remainingOld = 0;
+      remainingNew = 0;
+      const match = /^diff --git (?:"([^"]+)"|(\S+)) (?:"([^"]+)"|(\S+))$/.exec(line);
+      const bPath = match ? (match[3] ?? match[4] ?? "") : "";
+      currentFile = (bPath.startsWith("b/") ? bPath.slice(2) : bPath) || "unknown";
+      if (isSensitivePath(currentFile)) {
+        pushFinding(currentFile, 1, "sensitive_path");
+      }
+      continue;
+    }
+
+    if (!inHunk && !sawHunkInFile && line.startsWith("+++ ")) {
+      const target = unquoteGitPath(line.slice(4));
+      if (target !== "/dev/null") {
+        currentFile = (target.startsWith("b/") ? target.slice(2) : target) || currentFile;
+        if (isSensitivePath(currentFile)) {
+          pushFinding(currentFile, 1, "sensitive_path");
         }
       }
-      if (!matchedSpecific) {
-        if (redactShapes(added.text) !== added.text) {
-          pushFinding(file.path, added.line, "secret_shape");
-        } else if (KEYED_SECRET_NAME.test(added.text) && redact(added.text) !== added.text) {
-          pushFinding(file.path, added.line, "generic_secret");
+      continue;
+    }
+
+    if (!inHunk && line.startsWith("@@ ")) {
+      sawHunkInFile = true;
+      const hunkMatch = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/.exec(line);
+      if (hunkMatch) {
+        oldLine = Number(hunkMatch[1]);
+        remainingOld = Number(hunkMatch[2] ?? "1");
+        newLine = Number(hunkMatch[3]);
+        remainingNew = Number(hunkMatch[4] ?? "1");
+        inHunk = remainingOld > 0 || remainingNew > 0;
+        const trailer = hunkMatch[5]?.trim();
+        if (trailer) {
+          scanLineForSecrets(currentFile, newLine, trailer, pushFinding);
         }
+      }
+      continue;
+    }
+
+    if (inHunk) {
+      if (line.startsWith("+")) {
+        scanLineForSecrets(currentFile, newLine, line.slice(1), pushFinding);
+        newLine += 1;
+        if (remainingNew > 0) remainingNew -= 1;
+      } else if (line.startsWith("-")) {
+        scanLineForSecrets(currentFile, oldLine, line.slice(1), pushFinding);
+        oldLine += 1;
+        if (remainingOld > 0) remainingOld -= 1;
+      } else if (line.startsWith(" ") || line === "") {
+        scanLineForSecrets(currentFile, newLine, line.slice(1), pushFinding);
+        oldLine += 1;
+        newLine += 1;
+        if (remainingOld > 0) remainingOld -= 1;
+        if (remainingNew > 0) remainingNew -= 1;
+      }
+      if (remainingOld === 0 && remainingNew === 0) {
+        inHunk = false;
       }
     }
   }
@@ -615,7 +716,7 @@ export function buildJevState(
 
 function readGitCommitMessage(cwd: string, base?: string): string {
   const args = base
-    ? ["log", "--format=%s", "-n", "5", `${base}..HEAD`]
+    ? ["log", "--format=%s", "-n", "5", "--end-of-options", `${base}..HEAD`]
     : ["log", "-1", "--format=%s"];
   const res = spawnSync("git", args, { cwd, encoding: "utf-8" });
   if (res.status !== 0 || !res.stdout) return "";
@@ -656,25 +757,25 @@ function loadGitDiff(
   const base = options.base ?? resolveDefaultBaseRef(cwd);
   const verify = base === EMPTY_TREE_SHA
     ? { status: 0 }
-    : spawnSync("git", ["rev-parse", "--verify", base], { cwd, encoding: "utf-8" });
+    : spawnSync("git", ["rev-parse", "--verify", "--end-of-options", base], { cwd, encoding: "utf-8" });
   if (verify.status !== 0) {
     return { ok: false, truncated: false, reason: "invalid_base_ref" };
   }
 
   let res = base === EMPTY_TREE_SHA
-    ? spawnSync("git", ["diff", "--no-color", "--unified=3", EMPTY_TREE_SHA, "HEAD"], {
+    ? spawnSync("git", ["diff", "--no-color", "--unified=3", "--end-of-options", EMPTY_TREE_SHA, "HEAD"], {
         cwd,
         encoding: "utf-8",
         maxBuffer,
       })
-    : spawnSync("git", ["diff", "--no-color", "--unified=3", `${base}...HEAD`], {
+    : spawnSync("git", ["diff", "--no-color", "--unified=3", "--end-of-options", `${base}...HEAD`], {
         cwd,
         encoding: "utf-8",
         maxBuffer,
       });
 
   if (res.status !== 0 && base !== EMPTY_TREE_SHA && (res.error as NodeJS.ErrnoException | undefined)?.code !== "ENOBUFS") {
-    res = spawnSync("git", ["diff", "--no-color", "--unified=3", base], {
+    res = spawnSync("git", ["diff", "--no-color", "--unified=3", "--end-of-options", base], {
       cwd,
       encoding: "utf-8",
       maxBuffer,
@@ -947,7 +1048,9 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
     return errorResult(assertVerdict, minP, "invalid_diff_format", startedAt);
   }
 
-  const secrets = scanDiffAdditions(rawDiff);
+  const secrets = options.includeRedactedDiff
+    ? scanDiffAllLines(rawDiff)
+    : scanDiffAdditions(rawDiff);
   if (secrets.length > 0) {
     return errorResult(assertVerdict, minP, "secrets_detected", startedAt, {
       status: "blocked_secrets",
@@ -1072,6 +1175,7 @@ export function formatDiffGateHuman(result: DiffGateResult): string {
     );
   }
   lines.push(`latency_ms=${result.latencyMs} jev_ms=${result.jevMs ?? "n/a"} valid=${result.valid} fallback=${result.fallback} truncated=${result.truncated}`);
+  lines.push("note: structural metadata hygiene pre-filter only; ship does not replace code review.");
   return lines.join("\n");
 }
 

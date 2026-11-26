@@ -1372,7 +1372,7 @@ program.command("router")
   });
 
 program.command("diff-gate")
-  .description("Fast Jev gate over local git diff with secret blocking (exit 0 pass, 1 blocked verdict, 2 invalid/error)")
+  .description("Fast Jev metadata hygiene pre-filter over local git diff with secret blocking (not a code review; exit 0 pass, 1 blocked verdict, 2 invalid/error)")
   .option("--base <ref>", "Base git ref to diff against HEAD")
   .option("--staged", "Inspect staged diff instead of branch diff")
   .option("--stdin", "Read unified diff from stdin")
