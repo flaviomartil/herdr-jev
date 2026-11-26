@@ -490,6 +490,74 @@ describe("herdr-jev diff-gate", () => {
     expect(modeRes.valid).toBe(true);
     expect(mock.getCalls()).toBe(1);
 
+    const callsBeforeSurplus = mock.getCalls();
+    const hunkWithExtraAddedLine = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,0 +1,1 @@",
+      "+const ok = 1;",
+      '+const leaked = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";',
+    ].join("\n");
+    const extraAddedRes = await runDiffGate(
+      { diffText: hunkWithExtraAddedLine, message: "fix: add line" },
+      { evaluate: mock.evaluate },
+    );
+    expect(extraAddedRes.exitCode).toBe(2);
+    expect(extraAddedRes.valid).toBe(false);
+    expect(extraAddedRes.reason).toBe("invalid_diff_format");
+
+    const hunkWithExtraDeletedLine = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,1 +1,0 @@",
+      "-old1",
+      "-old2",
+    ].join("\n");
+    const extraDeletedRes = await runDiffGate(
+      { diffText: hunkWithExtraDeletedLine, message: "fix: delete line" },
+      { evaluate: mock.evaluate },
+    );
+    expect(extraDeletedRes.exitCode).toBe(2);
+    expect(extraDeletedRes.valid).toBe(false);
+    expect(extraDeletedRes.reason).toBe("invalid_diff_format");
+
+    const hunkWithExtraContextLine = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old",
+      "+new",
+      " extra",
+    ].join("\n");
+    const extraContextRes = await runDiffGate(
+      { diffText: hunkWithExtraContextLine, message: "fix: context overflow" },
+      { evaluate: mock.evaluate },
+    );
+    expect(extraContextRes.exitCode).toBe(2);
+    expect(extraContextRes.valid).toBe(false);
+    expect(extraContextRes.reason).toBe("invalid_diff_format");
+    expect(mock.getCalls()).toBe(callsBeforeSurplus);
+
+    const noNewlineValidDiff = [
+      "diff --git a/src/x.ts b/src/x.ts",
+      "--- a/src/x.ts",
+      "+++ b/src/x.ts",
+      "@@ -1,1 +1,1 @@",
+      "-a",
+      "+b",
+      "\\ No newline at end of file",
+    ].join("\n");
+    const noNewlineRes = await runDiffGate(
+      { diffText: noNewlineValidDiff, message: "fix: no newline" },
+      { evaluate: mock.evaluate },
+    );
+    expect(noNewlineRes.exitCode).toBe(0);
+    expect(noNewlineRes.valid).toBe(true);
+    expect(mock.getCalls()).toBe(callsBeforeSurplus + 1);
+
     const extDiff = [
       "diff --git a/src/internal.secret_marker_ext b/src/internal.secret_marker_ext",
       "--- a/src/internal.secret_marker_ext",

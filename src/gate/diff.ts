@@ -188,13 +188,14 @@ interface InspectedDiff {
   hasModeOrMetaChange: boolean;
 }
 
-const MODE_OR_META_LINE = /^(?:old mode |new mode |new file mode |deleted file mode |rename (?:from|to) |copy (?:from|to) |Binary files )/;
+const MODE_OR_META_LINE = /^(?:old mode |new mode |new file mode |deleted file mode |rename (?:from|to) |copy (?:from|to) |similarity index |dissimilarity index |Binary files )/;
 
 export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
   const files: ParsedDiffFile[] = [];
   let current: ParsedDiffFile | null = null;
   let newLine = 0;
   let inHunk = false;
+  let justClosedHunk = false;
   let remainingOld = 0;
   let remainingNew = 0;
   let hasIncompleteHunk = false;
@@ -210,6 +211,7 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
         hasIncompleteHunk = true;
       }
       inHunk = false;
+      justClosedHunk = false;
       remainingOld = 0;
       remainingNew = 0;
       const match = /^diff --git (?:"([^"]+)"|(\S+)) (?:"([^"]+)"|(\S+))$/.exec(line);
@@ -260,11 +262,18 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
 
       if (inHunk && remainingOld === 0 && remainingNew === 0) {
         inHunk = false;
+        justClosedHunk = true;
       }
       if (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ") || line === "") {
         continue;
       }
     }
+
+    if (justClosedHunk && line.startsWith("\\")) {
+      justClosedHunk = false;
+      continue;
+    }
+    justClosedHunk = false;
 
     if (line.startsWith("+++ ")) {
       const target = unquoteGitPath(line.slice(4));
@@ -312,6 +321,8 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
       }
       continue;
     }
+
+    hasIncompleteHunk = true;
   }
 
   if (inHunk && (remainingOld > 0 || remainingNew > 0)) {
