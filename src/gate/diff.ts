@@ -385,7 +385,7 @@ export function scanDiffAdditions(rawDiff: string): SecretFinding[] {
   const seen = new Set<string>();
 
   const pushFinding = (file: string, line: number, rule: string) => {
-    const safeFile = pathText(file, 200);
+    const safeFile = redact(pathText(file, 200));
     const key = `${safeFile}:${line}:${rule}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -412,7 +412,7 @@ export function scanDiffAllLines(rawDiff: string): SecretFinding[] {
   const seen = new Set<string>();
 
   const pushFinding = (file: string, line: number, rule: string) => {
-    const safeFile = pathText(file, 200);
+    const safeFile = redact(pathText(file, 200));
     const key = `${safeFile}:${line}:${rule}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -443,6 +443,7 @@ export function scanDiffAllLines(rawDiff: string): SecretFinding[] {
       if (isSensitivePath(currentFile)) {
         pushFinding(currentFile, 1, "sensitive_path");
       }
+      scanLineForSecrets(currentFile, 1, line, pushFinding);
       continue;
     }
 
@@ -454,6 +455,7 @@ export function scanDiffAllLines(rawDiff: string): SecretFinding[] {
           pushFinding(currentFile, 1, "sensitive_path");
         }
       }
+      scanLineForSecrets(currentFile, 1, line, pushFinding);
       continue;
     }
 
@@ -493,7 +495,10 @@ export function scanDiffAllLines(rawDiff: string): SecretFinding[] {
       if (remainingOld === 0 && remainingNew === 0) {
         inHunk = false;
       }
+      continue;
     }
+
+    scanLineForSecrets(currentFile, 1, line, pushFinding);
   }
 
   return findings;
@@ -1165,7 +1170,7 @@ export function formatDiffGateHuman(result: DiffGateResult): string {
     `diff-gate status=${result.status} exit=${result.exitCode} gate=${result.gate ?? "none"} verdict=${result.verdict ?? "none"} p=${result.verdictProbability !== null ? result.verdictProbability.toFixed(3) : "n/a"} assert=${result.assert} min_p=${result.minP.toFixed(2)} reason=${redact(result.reason)}`,
   ];
   if (result.secrets.length > 0) {
-    const locations = result.secrets.map((s) => `${pathText(s.file, 120)}:${s.line}[${s.rule}]`).join(", ");
+    const locations = result.secrets.map((s) => `${redact(pathText(s.file, 120))}:${s.line}[${s.rule}]`).join(", ");
     lines.push(`secrets: ${locations}`);
   }
   if (result.summary) {

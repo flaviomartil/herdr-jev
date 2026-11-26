@@ -963,6 +963,42 @@ describe("herdr-jev diff-gate", () => {
       );
       expect(flagRefRes.exitCode).toBe(2);
       expect(flagRefRes.reason).toBe("invalid_base_ref");
+
+      const headerPathSecretDiff = [
+        "diff --git a/src/ghp_1234567890abcdefghijklmnop.ts b/src/ghp_1234567890abcdefghijklmnop.ts",
+        "--- a/src/ghp_1234567890abcdefghijklmnop.ts",
+        "+++ b/src/ghp_1234567890abcdefghijklmnop.ts",
+        "@@ -1,0 +1,1 @@",
+        "+const clean = true;",
+      ].join("\n");
+      const headerPathMock = makeEvaluateMock("ship", 0.95);
+      const headerPathRes = await runDiffGate(
+        { diffText: headerPathSecretDiff, message: "chore: clean file", includeRedactedDiff: true },
+        { evaluate: headerPathMock.evaluate },
+      );
+      expect(headerPathRes.exitCode).toBe(2);
+      expect(headerPathRes.status).toBe("blocked_secrets");
+      expect(headerPathRes.reason).toBe("secrets_detected");
+      expect(headerPathMock.getCalls()).toBe(0);
+      expect(JSON.stringify(headerPathRes)).not.toContain("ghp_1234567890");
+      expect(formatDiffGateHuman(headerPathRes)).not.toContain("ghp_1234567890");
+
+      const renameHeaderSecretDiff = [
+        "diff --git a/tmp/ghp_1234567890abcdefghijklmnop.ts b/src/clean.ts",
+        "rename from tmp/ghp_1234567890abcdefghijklmnop.ts",
+        "rename to src/clean.ts",
+      ].join("\n");
+      const renameMock = makeEvaluateMock("ship", 0.95);
+      const renameRes = await runDiffGate(
+        { diffText: renameHeaderSecretDiff, message: "chore: rename file", includeRedactedDiff: true },
+        { evaluate: renameMock.evaluate },
+      );
+      expect(renameRes.exitCode).toBe(2);
+      expect(renameRes.status).toBe("blocked_secrets");
+      expect(renameRes.reason).toBe("secrets_detected");
+      expect(renameMock.getCalls()).toBe(0);
+      expect(JSON.stringify(renameRes)).not.toContain("ghp_1234567890");
+      expect(formatDiffGateHuman(renameRes)).not.toContain("ghp_1234567890");
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }

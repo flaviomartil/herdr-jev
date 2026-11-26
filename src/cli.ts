@@ -1381,7 +1381,7 @@ program.command("diff-gate")
   .option("--min-p <probability>", "Minimum verdict probability in [0, 1]", "0.7")
   .option("--max-bytes <bytes>", "Maximum raw diff size in bytes", "64000")
   .option("--timeout-ms <ms>", "Jev request deadline in milliseconds")
-  .option("--include-redacted-diff", "Include redacted diff excerpt alongside structured summary")
+  .option("--include-redacted-diff", "Opt-in: attach redacted diff excerpt (sends file paths and diff context off-machine)")
   .option("--json", "JSON output")
   .action(async (options: any) => {
     const { diffGateCli } = await import("./gate/diff.js");
