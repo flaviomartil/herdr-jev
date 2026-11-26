@@ -357,6 +357,22 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
   return inspectUnifiedDiff(rawDiff).files;
 }
 
+function lineHasSecret(text: string): boolean {
+  for (const { pattern } of SECRET_RULES) {
+    if (pattern.test(text)) return true;
+  }
+  if (redactShapes(text) !== text) return true;
+  if (KEYED_SECRET_NAME.test(text) && redact(text) !== text) return true;
+  return false;
+}
+
+function sanitizeFindingPath(file: string, maxLen = 200): string {
+  if (lineHasSecret(file)) return "[redacted-path]";
+  const clipped = pathText(file, maxLen);
+  if (lineHasSecret(clipped)) return "[redacted-path]";
+  return redact(clipped);
+}
+
 function scanLineForSecrets(
   file: string,
   line: number,
@@ -385,7 +401,7 @@ export function scanDiffAdditions(rawDiff: string): SecretFinding[] {
   const seen = new Set<string>();
 
   const pushFinding = (file: string, line: number, rule: string) => {
-    const safeFile = redact(pathText(file, 200));
+    const safeFile = sanitizeFindingPath(file, 200);
     const key = `${safeFile}:${line}:${rule}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -412,7 +428,7 @@ export function scanDiffAllLines(rawDiff: string): SecretFinding[] {
   const seen = new Set<string>();
 
   const pushFinding = (file: string, line: number, rule: string) => {
-    const safeFile = redact(pathText(file, 200));
+    const safeFile = sanitizeFindingPath(file, 200);
     const key = `${safeFile}:${line}:${rule}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -1170,7 +1186,7 @@ export function formatDiffGateHuman(result: DiffGateResult): string {
     `diff-gate status=${result.status} exit=${result.exitCode} gate=${result.gate ?? "none"} verdict=${result.verdict ?? "none"} p=${result.verdictProbability !== null ? result.verdictProbability.toFixed(3) : "n/a"} assert=${result.assert} min_p=${result.minP.toFixed(2)} reason=${redact(result.reason)}`,
   ];
   if (result.secrets.length > 0) {
-    const locations = result.secrets.map((s) => `${redact(pathText(s.file, 120))}:${s.line}[${s.rule}]`).join(", ");
+    const locations = result.secrets.map((s) => `${sanitizeFindingPath(s.file, 120)}:${s.line}[${s.rule}]`).join(", ");
     lines.push(`secrets: ${locations}`);
   }
   if (result.summary) {

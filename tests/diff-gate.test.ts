@@ -999,6 +999,26 @@ describe("herdr-jev diff-gate", () => {
       expect(renameMock.getCalls()).toBe(0);
       expect(JSON.stringify(renameRes)).not.toContain("ghp_1234567890");
       expect(formatDiffGateHuman(renameRes)).not.toContain("ghp_1234567890");
+
+      const googleApiKeyHeaderDiff = [
+        "diff --git a/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts b/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts",
+        "--- a/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts",
+        "+++ b/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts",
+        "@@ -1,0 +1,1 @@",
+        "+const clean = true;",
+      ].join("\n");
+      const googlePathMock = makeEvaluateMock("ship", 0.95);
+      const googlePathRes = await runDiffGate(
+        { diffText: googleApiKeyHeaderDiff, message: "chore: clean file", includeRedactedDiff: true },
+        { evaluate: googlePathMock.evaluate },
+      );
+      expect(googlePathRes.exitCode).toBe(2);
+      expect(googlePathRes.status).toBe("blocked_secrets");
+      expect(googlePathRes.reason).toBe("secrets_detected");
+      expect(googlePathRes.secrets[0]?.file).toBe("[redacted-path]");
+      expect(googlePathMock.getCalls()).toBe(0);
+      expect(JSON.stringify(googlePathRes)).not.toContain("AIzaSy");
+      expect(formatDiffGateHuman(googlePathRes)).not.toContain("AIzaSy");
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }
