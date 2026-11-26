@@ -110,6 +110,8 @@ describe("herdr-jev diff-gate", () => {
     const awsKey = "AKIA" + "IOSFODNN7EXAMPLE";
     const ghPat = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
     const pemLine = "-----BEGIN " + "PRIVATE KEY-----";
+    const envPassVar = "API_" + "PASSWORD";
+    const envPassVal = "SuperSecret" + "Pass99!";
     const diffWithSecrets = [
       "diff --git a/.env.production b/.env.production",
       "new file mode 100644",
@@ -119,7 +121,7 @@ describe("herdr-jev diff-gate", () => {
       `+AWS_KEY=${awsKey}`,
       `+GITHUB_TOKEN=${ghPat}`,
       `+${pemLine}`,
-      "+API_PASSWORD=\"SuperSecretPass99!\"",
+      `+${envPassVar}="${envPassVal}"`,
     ].join("\n");
 
     const mock = makeEvaluateMock("ship", 0.99);
@@ -491,13 +493,15 @@ describe("herdr-jev diff-gate", () => {
     expect(mock.getCalls()).toBe(1);
 
     const callsBeforeSurplus = mock.getCalls();
+    const extraPrefix = "ghp_";
+    const extraToken = `${extraPrefix}ABCDEFGHIJKLMNOPQRSTUVWXYZ123456`;
     const hunkWithExtraAddedLine = [
       "diff --git a/src/a.ts b/src/a.ts",
       "--- a/src/a.ts",
       "+++ b/src/a.ts",
       "@@ -1,0 +1,1 @@",
       "+const ok = 1;",
-      '+const leaked = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";',
+      `+const leaked = "${extraToken}";`,
     ].join("\n");
     const extraAddedRes = await runDiffGate(
       { diffText: hunkWithExtraAddedLine, message: "fix: add line" },
@@ -870,12 +874,21 @@ describe("herdr-jev diff-gate", () => {
       });
 
     try {
+      const ghPrefix = "ghp_";
+      const sampleGhTail = "1234567890abcdefghijklmnop";
+      const sampleGh = `${ghPrefix}${sampleGhTail}`;
+      const sampleGhCheck = `${ghPrefix}1234567890`;
+      const googlePrefix = "AIza";
+      const sampleGoogleTail = "SyDummyGoogleKey1234567890abcdef123";
+      const sampleGoogle = `${googlePrefix}${sampleGoogleTail}`;
+      const sampleGoogleCheck = `${googlePrefix}Sy`;
+
       const secretRun = runCli(
         ["--stdin", "--json"],
-        "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,0 +1,1 @@\n+const k = 'ghp_1234567890abcdefghijklmnop';\n",
+        `diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,0 +1,1 @@\n+const k = '${sampleGh}';\n`,
       );
       expect(secretRun.status).toBe(2);
-      expect(secretRun.stdout).not.toContain("ghp_1234567890");
+      expect(secretRun.stdout).not.toContain(sampleGhCheck);
       expect(JSON.parse(secretRun.stdout).reason).toBe("secrets_detected");
 
       const truncRun = runCli(["--stdin", "--json", "--max-bytes", "20"], CLEAN_FIX_DIFF);
@@ -910,7 +923,7 @@ describe("herdr-jev diff-gate", () => {
         "--- a/src/a.ts",
         "+++ b/src/a.ts",
         "@@ -1,2 +1,2 @@",
-        "-const oldTok = 'ghp_1234567890abcdefghijklmnop';",
+        `-const oldTok = '${sampleGh}';`,
         " const unchanged = 1;",
         "+const newSafe = 2;",
       ].join("\n");
@@ -929,7 +942,7 @@ describe("herdr-jev diff-gate", () => {
         "--- a/src/a.ts",
         "+++ b/src/a.ts",
         "@@ -1,2 +1,3 @@",
-        " const nearby = 'ghp_1234567890abcdefghijklmnop';",
+        ` const nearby = '${sampleGh}';`,
         " const unchanged = 1;",
         "+const added = 2;",
       ].join("\n");
@@ -965,9 +978,9 @@ describe("herdr-jev diff-gate", () => {
       expect(flagRefRes.reason).toBe("invalid_base_ref");
 
       const headerPathSecretDiff = [
-        "diff --git a/src/ghp_1234567890abcdefghijklmnop.ts b/src/ghp_1234567890abcdefghijklmnop.ts",
-        "--- a/src/ghp_1234567890abcdefghijklmnop.ts",
-        "+++ b/src/ghp_1234567890abcdefghijklmnop.ts",
+        `diff --git a/src/${sampleGh}.ts b/src/${sampleGh}.ts`,
+        `--- a/src/${sampleGh}.ts`,
+        `+++ b/src/${sampleGh}.ts`,
         "@@ -1,0 +1,1 @@",
         "+const clean = true;",
       ].join("\n");
@@ -980,12 +993,12 @@ describe("herdr-jev diff-gate", () => {
       expect(headerPathRes.status).toBe("blocked_secrets");
       expect(headerPathRes.reason).toBe("secrets_detected");
       expect(headerPathMock.getCalls()).toBe(0);
-      expect(JSON.stringify(headerPathRes)).not.toContain("ghp_1234567890");
-      expect(formatDiffGateHuman(headerPathRes)).not.toContain("ghp_1234567890");
+      expect(JSON.stringify(headerPathRes)).not.toContain(sampleGhCheck);
+      expect(formatDiffGateHuman(headerPathRes)).not.toContain(sampleGhCheck);
 
       const renameHeaderSecretDiff = [
-        "diff --git a/tmp/ghp_1234567890abcdefghijklmnop.ts b/src/clean.ts",
-        "rename from tmp/ghp_1234567890abcdefghijklmnop.ts",
+        `diff --git a/tmp/${sampleGh}.ts b/src/clean.ts`,
+        `rename from tmp/${sampleGh}.ts`,
         "rename to src/clean.ts",
       ].join("\n");
       const renameMock = makeEvaluateMock("ship", 0.95);
@@ -997,13 +1010,13 @@ describe("herdr-jev diff-gate", () => {
       expect(renameRes.status).toBe("blocked_secrets");
       expect(renameRes.reason).toBe("secrets_detected");
       expect(renameMock.getCalls()).toBe(0);
-      expect(JSON.stringify(renameRes)).not.toContain("ghp_1234567890");
-      expect(formatDiffGateHuman(renameRes)).not.toContain("ghp_1234567890");
+      expect(JSON.stringify(renameRes)).not.toContain(sampleGhCheck);
+      expect(formatDiffGateHuman(renameRes)).not.toContain(sampleGhCheck);
 
       const googleApiKeyHeaderDiff = [
-        "diff --git a/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts b/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts",
-        "--- a/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts",
-        "+++ b/src/AIzaSyDummyGoogleKey1234567890abcdef123.ts",
+        `diff --git a/src/${sampleGoogle}.ts b/src/${sampleGoogle}.ts`,
+        `--- a/src/${sampleGoogle}.ts`,
+        `+++ b/src/${sampleGoogle}.ts`,
         "@@ -1,0 +1,1 @@",
         "+const clean = true;",
       ].join("\n");
@@ -1017,8 +1030,8 @@ describe("herdr-jev diff-gate", () => {
       expect(googlePathRes.reason).toBe("secrets_detected");
       expect(googlePathRes.secrets[0]?.file).toBe("[redacted-path]");
       expect(googlePathMock.getCalls()).toBe(0);
-      expect(JSON.stringify(googlePathRes)).not.toContain("AIzaSy");
-      expect(formatDiffGateHuman(googlePathRes)).not.toContain("AIzaSy");
+      expect(JSON.stringify(googlePathRes)).not.toContain(sampleGoogleCheck);
+      expect(formatDiffGateHuman(googlePathRes)).not.toContain(sampleGoogleCheck);
     } finally {
       rmSync(tempHome, { recursive: true, force: true });
     }
