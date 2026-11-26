@@ -1371,4 +1371,35 @@ program.command("router")
     process.exit(await routerMain(action, options));
   });
 
+program.command("diff-gate")
+  .description("Fast Jev gate over local git diff with secret blocking (exit 0 pass, 1 blocked verdict, 2 invalid/error)")
+  .option("--base <ref>", "Base git ref to diff against HEAD")
+  .option("--staged", "Inspect staged diff instead of branch diff")
+  .option("--stdin", "Read unified diff from stdin")
+  .option("--message <text>", "Commit or PR description to check against diff summary")
+  .option("--assert <verdict>", "Expected verdict (ship|revise|block)", "ship")
+  .option("--min-p <probability>", "Minimum verdict probability in [0, 1]", "0.7")
+  .option("--max-bytes <bytes>", "Maximum raw diff size in bytes", "64000")
+  .option("--timeout-ms <ms>", "Jev request deadline in milliseconds")
+  .option("--include-redacted-diff", "Include redacted diff excerpt alongside structured summary")
+  .option("--json", "JSON output")
+  .action(async (options: any) => {
+    const { diffGateCli } = await import("./gate/diff.js");
+    const minP = Number(options.minP);
+    const maxBytes = Number(options.maxBytes);
+    const timeoutMs = options.timeoutMs !== undefined ? Number(options.timeoutMs) : undefined;
+    process.exit(await diffGateCli({
+      base: options.base,
+      staged: Boolean(options.staged),
+      stdin: Boolean(options.stdin),
+      message: options.message,
+      assertVerdict: options.assert,
+      minP,
+      maxBytes,
+      timeoutMs,
+      includeRedactedDiff: Boolean(options.includeRedactedDiff),
+      json: Boolean(options.json),
+    }));
+  });
+
 program.parse(process.argv);
