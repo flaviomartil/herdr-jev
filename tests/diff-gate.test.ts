@@ -154,7 +154,7 @@ describe("herdr-jev diff-gate", () => {
       "diff --git a/src/auth.ts b/src/auth.ts",
       "--- a/src/auth.ts",
       "+++ b/src/auth.ts",
-      "@@ -1,2 +1,2 @@",
+      "@@ -1,1 +1,1 @@",
       `-const key = "${removedSecret}";`,
       "+const key = process.env.SERVICE_KEY ?? '';",
     ].join("\n");
@@ -231,7 +231,7 @@ describe("herdr-jev diff-gate", () => {
 
   test("returns exit 2 when diff exceeds maxBytes and does not call Jev", async () => {
     const mock = makeEvaluateMock("ship", 0.95);
-    const largeDiff = CLEAN_FIX_DIFF + "\n+" + "x".repeat(500);
+    const largeDiff = `${CLEAN_FIX_DIFF}\n@@ -10,0 +11,1 @@\n+// ${"x".repeat(500)}`;
     const result = await runDiffGate(
       { diffText: largeDiff, maxBytes: 128, message: "oversize" },
       { evaluate: mock.evaluate },
@@ -249,7 +249,7 @@ describe("herdr-jev diff-gate", () => {
       "diff --git a/src/proprietary.ts b/src/proprietary.ts",
       "--- a/src/proprietary.ts",
       "+++ b/src/proprietary.ts",
-      "@@ -1,2 +1,3 @@",
+      "@@ -1,2 +1,4 @@",
       " export function compute(v: number): number {",
       `+  const ${proprietaryMarker} = v * 3.14159;`,
       `+  return ${proprietaryMarker};`,
@@ -453,11 +453,48 @@ describe("herdr-jev diff-gate", () => {
     expect(badText.reason).toBe("invalid_diff_format");
     expect(mock.getCalls()).toBe(0);
 
+    const hunkWithoutBody = await runDiffGate(
+      {
+        diffText: "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,2 @@",
+        message: "fix: empty hunk",
+      },
+      { evaluate: mock.evaluate },
+    );
+    expect(hunkWithoutBody.exitCode).toBe(2);
+    expect(hunkWithoutBody.valid).toBe(false);
+    expect(hunkWithoutBody.reason).toBe("invalid_diff_format");
+    expect(mock.getCalls()).toBe(0);
+
+    const hunkWithoutDeclaredAddition = await runDiffGate(
+      {
+        diffText: "diff --git a/x.ts b/x.ts\n--- a/x.ts\n+++ b/x.ts\n@@ -1,1 +1,2 @@\n const a = 1;",
+        message: "fix: truncated hunk",
+      },
+      { evaluate: mock.evaluate },
+    );
+    expect(hunkWithoutDeclaredAddition.exitCode).toBe(2);
+    expect(hunkWithoutDeclaredAddition.valid).toBe(false);
+    expect(hunkWithoutDeclaredAddition.reason).toBe("invalid_diff_format");
+    expect(mock.getCalls()).toBe(0);
+
+    const modeOnlyDiff = [
+      "diff --git a/scripts/run.sh b/scripts/run.sh",
+      "old mode 100644",
+      "new mode 100755",
+    ].join("\n");
+    const modeRes = await runDiffGate(
+      { diffText: modeOnlyDiff, message: "chore: mark script executable" },
+      { evaluate: mock.evaluate },
+    );
+    expect(modeRes.exitCode).toBe(0);
+    expect(modeRes.valid).toBe(true);
+    expect(mock.getCalls()).toBe(1);
+
     const extDiff = [
       "diff --git a/src/internal.secret_marker_ext b/src/internal.secret_marker_ext",
       "--- a/src/internal.secret_marker_ext",
       "+++ b/src/internal.secret_marker_ext",
-      "@@ -1,1 +1,2 @@",
+      "@@ -1,0 +1,1 @@",
       "+const ok = 1;",
     ].join("\n");
     const extMock = makeEvaluateMock("ship", 0.9);
@@ -529,13 +566,13 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/app/services/adaptador_openai_v3.py b/app/services/adaptador_openai_v3.py",
           "--- a/app/services/adaptador_openai_v3.py",
           "+++ b/app/services/adaptador_openai_v3.py",
-          "@@ -10,3 +10,2 @@",
+          "@@ -10,1 +10,1 @@",
           "-    kwargs['response_format'] = strict_schema",
           "+    kwargs.pop('response_format', None)",
           "diff --git a/app/services/modelos_primario_v3.py b/app/services/modelos_primario_v3.py",
           "--- a/app/services/modelos_primario_v3.py",
           "+++ b/app/services/modelos_primario_v3.py",
-          "@@ -140,2 +140,2 @@",
+          "@@ -140,1 +140,1 @@",
           "-    modo = payload['modo_bloco']",
           "+    modo = payload.get('modo_bloco', 'basicos')",
         ].join("\n"),
@@ -560,7 +597,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/tests/quota.test.ts b/tests/quota.test.ts",
           "--- a/tests/quota.test.ts",
           "+++ b/tests/quota.test.ts",
-          "@@ -1,1 +1,4 @@",
+          "@@ -1,0 +1,3 @@",
           "+test('expires quota', () => {",
           "+  expect(1).toBe(1);",
           "+});",
@@ -577,7 +614,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/src/routes/run.ts b/src/routes/run.ts",
           "--- a/src/routes/run.ts",
           "+++ b/src/routes/run.ts",
-          "@@ -1,1 +1,2 @@",
+          "@@ -1,0 +1,2 @@",
           "+import { execSync } from 'node:child_process';",
           "+export const out = (cmd: string) => execSync(cmd);",
         ].join("\n"),
@@ -594,7 +631,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/src/eval.ts b/src/eval.ts",
           "--- a/src/eval.ts",
           "+++ b/src/eval.ts",
-          "@@ -1,1 +1,2 @@",
+          "@@ -1,0 +1,1 @@",
           "+export const run = (src: string) => eval(src);",
         ].join("\n"),
         verdict: "block",
@@ -610,7 +647,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/src/auth/middleware.ts b/src/auth/middleware.ts",
           "--- a/src/auth/middleware.ts",
           "+++ b/src/auth/middleware.ts",
-          "@@ -1,2 +1,2 @@",
+          "@@ -1,1 +1,1 @@",
           "-if (!verifyJwt(req)) throw new Error('unauthorized');",
           "+export const authBypass = req.headers['x-bypass'] === '1';",
         ].join("\n"),
@@ -627,7 +664,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/src/db/report.sql b/src/db/report.sql",
           "--- a/src/db/report.sql",
           "+++ b/src/db/report.sql",
-          "@@ -1,1 +1,2 @@",
+          "@@ -1,0 +1,1 @@",
           "+SELECT id, name FROM jobs WHERE active = true;",
         ].join("\n"),
         verdict: "ship",
@@ -642,7 +679,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml",
           "--- a/.github/workflows/ci.yml",
           "+++ b/.github/workflows/ci.yml",
-          "@@ -1,1 +1,3 @@",
+          "@@ -1,0 +1,2 @@",
           "+on: [pull_request]",
           "+jobs: { test: { runs-on: ubuntu-latest } }",
         ].join("\n"),
@@ -658,7 +695,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/src/index.ts b/src/index.ts",
           "--- a/src/index.ts",
           "+++ b/src/index.ts",
-          "@@ -1,2 +1,2 @@",
+          "@@ -1,1 +1,1 @@",
           "-// old header",
           "+// updated header",
         ].join("\n"),
@@ -674,7 +711,7 @@ describe("herdr-jev diff-gate", () => {
           "diff --git a/src/telemetry.ts b/src/telemetry.ts",
           "--- a/src/telemetry.ts",
           "+++ b/src/telemetry.ts",
-          "@@ -1,1 +1,2 @@",
+          "@@ -1,0 +1,1 @@",
           "+export const ping = (u: string) => fetch(u);",
         ].join("\n"),
         verdict: "revise",
@@ -733,7 +770,7 @@ describe("herdr-jev diff-gate", () => {
     try {
       const secretRun = runCli(
         ["--stdin", "--json"],
-        "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,1 @@\n+const k = 'ghp_1234567890abcdefghijklmnop';\n",
+        "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,0 +1,1 @@\n+const k = 'ghp_1234567890abcdefghijklmnop';\n",
       );
       expect(secretRun.status).toBe(2);
       expect(secretRun.stdout).not.toContain("ghp_1234567890");

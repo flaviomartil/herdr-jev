@@ -182,56 +182,41 @@ function unquoteGitPath(rawPath: string): string {
   return trimmed;
 }
 
-export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
+interface InspectedDiff {
+  files: ParsedDiffFile[];
+  hasIncompleteHunk: boolean;
+  hasModeOrMetaChange: boolean;
+}
+
+const MODE_OR_META_LINE = /^(?:old mode |new mode |new file mode |deleted file mode |rename (?:from|to) |copy (?:from|to) |Binary files )/;
+
+export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
   const files: ParsedDiffFile[] = [];
   let current: ParsedDiffFile | null = null;
   let newLine = 0;
   let inHunk = false;
   let remainingOld = 0;
   let remainingNew = 0;
+  let hasIncompleteHunk = false;
+  let hasModeOrMetaChange = false;
 
-  const lines = rawDiff.replace(/\r\n?/g, "\n").split("\n");
+  const normalized = rawDiff.replace(/\r\n?/g, "\n");
+  const trimmedTrailing = normalized.endsWith("\n") ? normalized.slice(0, -1) : normalized;
+  const lines = trimmedTrailing.length === 0 ? [] : trimmedTrailing.split("\n");
+
   for (const line of lines) {
-    if (inHunk && (remainingOld > 0 || remainingNew > 0) && !line.startsWith("diff --git ")) {
-      if (line.startsWith("+")) {
-        const content = line.slice(1);
-        const lineNo = newLine > 0 ? newLine : (current?.additions.length ?? 0) + 1;
-        current?.additions.push({ line: lineNo, text: content });
-        newLine += 1;
-        remainingNew = Math.max(0, remainingNew - 1);
-      } else if (line.startsWith("-")) {
-        current?.deletions.push(line.slice(1));
-        remainingOld = Math.max(0, remainingOld - 1);
-      } else if (line.startsWith(" ")) {
-        newLine += 1;
-        remainingOld = Math.max(0, remainingOld - 1);
-        remainingNew = Math.max(0, remainingNew - 1);
-      } else if (line.startsWith("\\")) {
-        continue;
-      } else if (line === "" && (remainingOld > 0 || remainingNew > 0)) {
-        newLine += 1;
-        remainingOld = Math.max(0, remainingOld - 1);
-        remainingNew = Math.max(0, remainingNew - 1);
-      } else {
-        inHunk = false;
-      }
-      if (inHunk && remainingOld === 0 && remainingNew === 0) {
-        inHunk = false;
-      }
-      if (inHunk || line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) {
-        continue;
-      }
-    }
-
     if (line.startsWith("diff --git ")) {
+      if (inHunk && (remainingOld > 0 || remainingNew > 0)) {
+        hasIncompleteHunk = true;
+      }
       inHunk = false;
       remainingOld = 0;
       remainingNew = 0;
       const match = /^diff --git (?:"([^"]+)"|(\S+)) (?:"([^"]+)"|(\S+))$/.exec(line);
       const bPath = match ? (match[3] ?? match[4] ?? "") : "";
-      const normalized = bPath.startsWith("b/") ? bPath.slice(2) : bPath;
+      const normalizedPath = bPath.startsWith("b/") ? bPath.slice(2) : bPath;
       current = {
-        path: normalized || "unknown",
+        path: normalizedPath || "unknown",
         hunks: 0,
         additions: [],
         deletions: [],
@@ -239,6 +224,46 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
       files.push(current);
       newLine = 0;
       continue;
+    }
+
+    if (inHunk && (remainingOld > 0 || remainingNew > 0)) {
+      if (line.startsWith("+")) {
+        if (remainingNew === 0) {
+          hasIncompleteHunk = true;
+        } else {
+          const lineNo = newLine > 0 ? newLine : (current?.additions.length ?? 0) + 1;
+          current?.additions.push({ line: lineNo, text: line.slice(1) });
+          newLine += 1;
+          remainingNew -= 1;
+        }
+      } else if (line.startsWith("-")) {
+        if (remainingOld === 0) {
+          hasIncompleteHunk = true;
+        } else {
+          current?.deletions.push(line.slice(1));
+          remainingOld -= 1;
+        }
+      } else if (line.startsWith(" ") || line === "") {
+        if (remainingOld === 0 || remainingNew === 0) {
+          hasIncompleteHunk = true;
+        } else {
+          newLine += 1;
+          remainingOld -= 1;
+          remainingNew -= 1;
+        }
+      } else if (line.startsWith("\\")) {
+        continue;
+      } else {
+        hasIncompleteHunk = true;
+        inHunk = false;
+      }
+
+      if (inHunk && remainingOld === 0 && remainingNew === 0) {
+        inHunk = false;
+      }
+      if (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ") || line === "") {
+        continue;
+      }
     }
 
     if (line.startsWith("+++ ")) {
@@ -255,12 +280,12 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
       continue;
     }
 
-    if (
-      line.startsWith("--- ") ||
-      line.startsWith("index ") ||
-      line.startsWith("new file ") ||
-      line.startsWith("deleted file ")
-    ) {
+    if (MODE_OR_META_LINE.test(line)) {
+      hasModeOrMetaChange = true;
+      continue;
+    }
+
+    if (line.startsWith("--- ") || line.startsWith("index ")) {
       continue;
     }
 
@@ -271,15 +296,33 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
       }
       current.hunks += 1;
       const hunkMatch = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-      remainingOld = hunkMatch ? Number(hunkMatch[2] ?? "1") : 1;
-      newLine = hunkMatch ? Number(hunkMatch[3]) : 1;
-      remainingNew = hunkMatch ? Number(hunkMatch[4] ?? "1") : 1;
-      inHunk = remainingOld > 0 || remainingNew > 0;
+      if (!hunkMatch) {
+        hasIncompleteHunk = true;
+        inHunk = false;
+        continue;
+      }
+      remainingOld = Number(hunkMatch[2] ?? "1");
+      newLine = Number(hunkMatch[3]);
+      remainingNew = Number(hunkMatch[4] ?? "1");
+      if (remainingOld === 0 && remainingNew === 0) {
+        hasIncompleteHunk = true;
+        inHunk = false;
+      } else {
+        inHunk = true;
+      }
       continue;
     }
   }
 
-  return files;
+  if (inHunk && (remainingOld > 0 || remainingNew > 0)) {
+    hasIncompleteHunk = true;
+  }
+
+  return { files, hasIncompleteHunk, hasModeOrMetaChange };
+}
+
+export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
+  return inspectUnifiedDiff(rawDiff).files;
 }
 
 export function scanDiffAdditions(rawDiff: string): SecretFinding[] {
@@ -494,13 +537,11 @@ export function sanitizeExtensionForJev(extension: string): string {
   return KNOWN_SAFE_EXTENSIONS.has(cleanExt) ? cleanExt : "other";
 }
 
-export function hasValidUnifiedDiffStructure(rawDiff: string, parsed = parseUnifiedDiff(rawDiff)): boolean {
-  if (parsed.length === 0) return false;
-  if (parsed.some((f) => f.hunks > 0)) return true;
-  return (
-    /^diff --git /m.test(rawDiff) &&
-    /^(?:new file mode|deleted file mode|rename (?:from|to)|Binary files)/m.test(rawDiff)
-  );
+export function hasValidUnifiedDiffStructure(rawDiff: string, _parsed?: ParsedDiffFile[]): boolean {
+  const inspected = inspectUnifiedDiff(rawDiff);
+  if (inspected.files.length === 0 || inspected.hasIncompleteHunk) return false;
+  if (inspected.files.some((f) => f.hunks > 0)) return true;
+  return /^diff --git /m.test(rawDiff) && inspected.hasModeOrMetaChange;
 }
 
 export function buildJevState(
