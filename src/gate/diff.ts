@@ -196,6 +196,9 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
   let newLine = 0;
   let inHunk = false;
   let justClosedHunk = false;
+  let sawHunkInFile = false;
+  let sawOldHeader = false;
+  let sawNewHeader = false;
   let remainingOld = 0;
   let remainingNew = 0;
   let hasIncompleteHunk = false;
@@ -212,6 +215,9 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
       }
       inHunk = false;
       justClosedHunk = false;
+      sawHunkInFile = false;
+      sawOldHeader = false;
+      sawNewHeader = false;
       remainingOld = 0;
       remainingNew = 0;
       const match = /^diff --git (?:"([^"]+)"|(\S+)) (?:"([^"]+)"|(\S+))$/.exec(line);
@@ -275,7 +281,12 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
     }
     justClosedHunk = false;
 
-    if (line.startsWith("+++ ")) {
+    if (!sawHunkInFile && line.startsWith("+++ ")) {
+      if (sawNewHeader) {
+        hasIncompleteHunk = true;
+        continue;
+      }
+      sawNewHeader = true;
       const target = unquoteGitPath(line.slice(4));
       if (target !== "/dev/null") {
         const cleaned = target.startsWith("b/") ? target.slice(2) : target;
@@ -289,16 +300,26 @@ export function inspectUnifiedDiff(rawDiff: string): InspectedDiff {
       continue;
     }
 
-    if (MODE_OR_META_LINE.test(line)) {
+    if (!sawHunkInFile && MODE_OR_META_LINE.test(line)) {
       hasModeOrMetaChange = true;
       continue;
     }
 
-    if (line.startsWith("--- ") || line.startsWith("index ")) {
+    if (!sawHunkInFile && line.startsWith("--- ")) {
+      if (sawOldHeader) {
+        hasIncompleteHunk = true;
+        continue;
+      }
+      sawOldHeader = true;
+      continue;
+    }
+
+    if (!sawHunkInFile && line.startsWith("index ")) {
       continue;
     }
 
     if (line.startsWith("@@ ")) {
+      sawHunkInFile = true;
       if (!current) {
         current = { path: "unknown", hunks: 0, additions: [], deletions: [] };
         files.push(current);

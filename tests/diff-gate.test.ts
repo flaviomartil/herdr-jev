@@ -558,6 +558,40 @@ describe("herdr-jev diff-gate", () => {
     expect(noNewlineRes.valid).toBe(true);
     expect(mock.getCalls()).toBe(callsBeforeSurplus + 1);
 
+    const callsAfterNoNewline = mock.getCalls();
+    const headerLikeAddAfterHunk = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,0 +1,1 @@",
+      "+const ok = 1;",
+      "+++ b/src/hijacked.ts",
+    ].join("\n");
+    const headerLikeAddRes = await runDiffGate(
+      { diffText: headerLikeAddAfterHunk, message: "fix: header-like surplus add" },
+      { evaluate: mock.evaluate },
+    );
+    expect(headerLikeAddRes.exitCode).toBe(2);
+    expect(headerLikeAddRes.valid).toBe(false);
+    expect(headerLikeAddRes.reason).toBe("invalid_diff_format");
+
+    const headerLikeDelAfterHunk = [
+      "diff --git a/src/a.ts b/src/a.ts",
+      "--- a/src/a.ts",
+      "+++ b/src/a.ts",
+      "@@ -1,1 +1,0 @@",
+      "-const old = 1;",
+      "--- a/src/hijacked.ts",
+    ].join("\n");
+    const headerLikeDelRes = await runDiffGate(
+      { diffText: headerLikeDelAfterHunk, message: "fix: header-like surplus del" },
+      { evaluate: mock.evaluate },
+    );
+    expect(headerLikeDelRes.exitCode).toBe(2);
+    expect(headerLikeDelRes.valid).toBe(false);
+    expect(headerLikeDelRes.reason).toBe("invalid_diff_format");
+    expect(mock.getCalls()).toBe(callsAfterNoNewline);
+
     const extDiff = [
       "diff --git a/src/internal.secret_marker_ext b/src/internal.secret_marker_ext",
       "--- a/src/internal.secret_marker_ext",
