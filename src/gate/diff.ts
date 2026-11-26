@@ -105,6 +105,11 @@ const DEFAULT_MAX_BYTES = 64_000;
 const MAX_REDACTED_DIFF_CHARS = 8_000;
 const DEFAULT_MIN_P = 0.7;
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+const KNOWN_SAFE_EXTENSIONS = new Set([
+  "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rs", "go", "java", "cs",
+  "sh", "bash", "zsh", "sql", "json", "yaml", "yml", "toml", "ini", "cfg",
+  "md", "mdx", "txt", "html", "css", "scss", "lock",
+]);
 
 export type CommitKind = "feat" | "fix" | "refactor" | "docs" | "test" | "chore" | "other" | "none";
 
@@ -483,6 +488,21 @@ export function classifyCommitMessageKind(message: string): CommitKind {
   return "other";
 }
 
+export function sanitizeExtensionForJev(extension: string): string {
+  const cleanExt = extension.trim().toLowerCase();
+  if (!cleanExt) return "none";
+  return KNOWN_SAFE_EXTENSIONS.has(cleanExt) ? cleanExt : "other";
+}
+
+export function hasValidUnifiedDiffStructure(rawDiff: string, parsed = parseUnifiedDiff(rawDiff)): boolean {
+  if (parsed.length === 0) return false;
+  if (parsed.some((f) => f.hunks > 0)) return true;
+  return (
+    /^diff --git /m.test(rawDiff) &&
+    /^(?:new file mode|deleted file mode|rename (?:from|to)|Binary files)/m.test(rawDiff)
+  );
+}
+
 export function buildJevState(
   summary: DiffStructuredSummary,
   rawDiff: string,
@@ -490,11 +510,11 @@ export function buildJevState(
 ): string {
   const declaredKind = classifyCommitMessageKind(summary.message);
   const categories = [...new Set(summary.files.map((f) => f.category))];
-  const extensions = [...new Set(summary.files.map((f) => f.extension).filter(Boolean))];
+  const extensions = [...new Set(summary.files.map((f) => sanitizeExtensionForJev(f.extension)).filter((e) => e !== "none"))];
   const totalHunks = summary.files.reduce((acc, f) => acc + f.hunks, 0);
   const fileProfiles = summary.files.map((f) => ({
     category: f.category,
-    extension: f.extension || "none",
+    extension: sanitizeExtensionForJev(f.extension),
     additions: f.additions,
     deletions: f.deletions,
     hunks: f.hunks,
@@ -629,6 +649,44 @@ function isFiniteProb(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
+function getScoreMaxLevel(q: Extract<JevQuestion, { type: "score" }>): number {
+  const levels = Array.isArray(q.criteria) ? q.criteria : Object.keys(q.criteria ?? {});
+  return Math.max(0, levels.length - 1);
+}
+
+function validateScoreAnswer(
+  q: Extract<JevQuestion, { type: "score" }>,
+  rawAns: { score?: unknown; probabilities?: unknown } | undefined,
+): number | null {
+  if (!rawAns || typeof rawAns !== "object") return null;
+  const maxLevel = getScoreMaxLevel(q);
+
+  if (rawAns.probabilities !== undefined) {
+    const probs = rawAns.probabilities;
+    if (!probs || typeof probs !== "object" || Array.isArray(probs)) return null;
+    const entries = Object.entries(probs as Record<string, unknown>);
+    if (entries.length === 0) return null;
+    let sum = 0;
+    for (const [k, v] of entries) {
+      if (!/^(?:0|[1-9]\d*)$/.test(k)) return null;
+      const lvl = Number(k);
+      if (!Number.isInteger(lvl) || lvl < 0 || lvl > maxLevel) return null;
+      if (!isFiniteProb(v)) return null;
+      sum += v;
+    }
+    if (sum < 0.95 || sum > 1.05) return null;
+    const scoreVal = scoreQuantile(probs as Record<string, number>, 0.6);
+    if (!Number.isFinite(scoreVal) || scoreVal < 0 || scoreVal > maxLevel) return null;
+    return scoreVal;
+  }
+
+  if (typeof rawAns.score === "number" && Number.isFinite(rawAns.score)) {
+    if (rawAns.score < 0 || rawAns.score > maxLevel) return null;
+    return rawAns.score;
+  }
+  return null;
+}
+
 function parseClientOutcome(
   questions: Record<string, JevQuestion>,
   answersData: Record<string, any> | undefined,
@@ -663,14 +721,9 @@ function parseClientOutcome(
         raw: rawAns,
       };
     } else if (q.type === "score") {
-      const probs = rawAns.probabilities as Record<string, number> | undefined;
-      const hasProbs = Boolean(probs && typeof probs === "object" && Object.keys(probs).length > 0);
-      if (!hasProbs && (typeof rawAns.score !== "number" || !Number.isFinite(rawAns.score))) {
-        return null;
-      }
-      const scoreVal = hasProbs ? scoreQuantile(probs!, 0.6) : (rawAns.score as number);
-      if (!Number.isFinite(scoreVal)) return null;
-      const conf = isFiniteProb(rawAns.confidence) ? rawAns.confidence : scoreVal;
+      const scoreVal = validateScoreAnswer(q, rawAns);
+      if (scoreVal === null) return null;
+      const conf = isFiniteProb(rawAns.confidence) ? rawAns.confidence : scoreVal / Math.max(1, getScoreMaxLevel(q));
       parsed[key] = {
         type: "score",
         value: scoreVal,
@@ -727,13 +780,15 @@ function validateAndExtractDimensions(
         ...(isFiniteProb(prob) ? { probability: prob } : {}),
       };
     } else if (q.type === "score") {
-      if (typeof ans.value !== "number" || !Number.isFinite(ans.value)) return null;
-      const hasRawScore = typeof raw?.score === "number" && Number.isFinite(raw.score);
-      const hasProbs = Boolean(raw?.probabilities && Object.keys(raw.probabilities).length > 0);
-      if (!hasRawScore && !hasProbs) return null;
+      const maxLevel = getScoreMaxLevel(q);
+      if (typeof ans.value !== "number" || !Number.isFinite(ans.value) || ans.value < 0 || ans.value > maxLevel) {
+        return null;
+      }
+      const validated = validateScoreAnswer(q, raw);
+      if (validated === null) return null;
       dimensions[key] = {
         type: "score",
-        value: ans.value,
+        value: validated,
         confidence: Number.isFinite(ans.confidence) ? ans.confidence : 0,
       };
     }
@@ -812,6 +867,11 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
 
   if (Buffer.byteLength(rawDiff, "utf-8") > maxBytes) {
     return errorResult(assertVerdict, minP, "diff_truncated", startedAt, { truncated: true });
+  }
+
+  const parsed = parseUnifiedDiff(rawDiff);
+  if (!hasValidUnifiedDiffStructure(rawDiff, parsed)) {
+    return errorResult(assertVerdict, minP, "invalid_diff_format", startedAt);
   }
 
   const secrets = scanDiffAdditions(rawDiff);

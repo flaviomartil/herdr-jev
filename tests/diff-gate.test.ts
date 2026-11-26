@@ -390,6 +390,86 @@ describe("herdr-jev diff-gate", () => {
     expect(mock.getCalls()).toBe(0);
   });
 
+  test("rejects unknown score keys, out-of-range scores, and invalid unified diff input with exit 2", async () => {
+    const unknownKeyScore = await runDiffGate(
+      { diffText: CLEAN_FIX_DIFF, message: "fix: check" },
+      {
+        evaluate: async () => ({
+          fallback: false,
+          latencyMs: 12,
+          answers: {
+            verdict: {
+              type: "choice",
+              value: "ship",
+              confidence: 0.95,
+              raw: { choice: "ship", probabilities: { ship: 0.95, revise: 0.04, block: 0.01 } },
+            },
+            security_risk: { type: "noul", value: false, confidence: 0.9, raw: { noul: 0.05 } },
+            severity: { type: "score", value: 0, confidence: 0.9, raw: { probabilities: { bogus: 1.0 } } },
+            quality: { type: "score", value: 3, confidence: 0.9, raw: { score: 3 } },
+            slop: { type: "noul", value: false, confidence: 0.8, raw: { noul: 0.1 } },
+            honest_message: { type: "noul", value: true, confidence: 0.9, raw: { noul: 0.9 } },
+            kind: { type: "choice", value: "fix", confidence: 0.9, raw: { choice: "fix", confidence: 0.9 } },
+          },
+        }),
+      },
+    );
+    expect(unknownKeyScore.exitCode).toBe(2);
+    expect(unknownKeyScore.valid).toBe(false);
+
+    const outOfRangeScore = await runDiffGate(
+      { diffText: CLEAN_FIX_DIFF, message: "fix: check" },
+      {
+        evaluate: async () => ({
+          fallback: false,
+          latencyMs: 12,
+          answers: {
+            verdict: {
+              type: "choice",
+              value: "ship",
+              confidence: 0.95,
+              raw: { choice: "ship", probabilities: { ship: 0.95, revise: 0.04, block: 0.01 } },
+            },
+            security_risk: { type: "noul", value: false, confidence: 0.9, raw: { noul: 0.05 } },
+            severity: { type: "score", value: 0, confidence: 0.9, raw: { score: 0 } },
+            quality: { type: "score", value: 999, confidence: 0.9, raw: { score: 999 } },
+            slop: { type: "noul", value: false, confidence: 0.8, raw: { noul: 0.1 } },
+            honest_message: { type: "noul", value: true, confidence: 0.9, raw: { noul: 0.9 } },
+            kind: { type: "choice", value: "fix", confidence: 0.9, raw: { choice: "fix", confidence: 0.9 } },
+          },
+        }),
+      },
+    );
+    expect(outOfRangeScore.exitCode).toBe(2);
+    expect(outOfRangeScore.valid).toBe(false);
+
+    const mock = makeEvaluateMock("ship", 0.95);
+    const badText = await runDiffGate(
+      { diffText: "hello world this is plain prose, not a unified diff", message: "fix: nope" },
+      { evaluate: mock.evaluate },
+    );
+    expect(badText.exitCode).toBe(2);
+    expect(badText.valid).toBe(false);
+    expect(badText.reason).toBe("invalid_diff_format");
+    expect(mock.getCalls()).toBe(0);
+
+    const extDiff = [
+      "diff --git a/src/internal.secret_marker_ext b/src/internal.secret_marker_ext",
+      "--- a/src/internal.secret_marker_ext",
+      "+++ b/src/internal.secret_marker_ext",
+      "@@ -1,1 +1,2 @@",
+      "+const ok = 1;",
+    ].join("\n");
+    const extMock = makeEvaluateMock("ship", 0.9);
+    const extRes = await runDiffGate(
+      { diffText: extDiff, message: "fix: safe check" },
+      { evaluate: extMock.evaluate },
+    );
+    expect(extRes.exitCode).toBe(0);
+    expect(extMock.getLastState()).not.toContain("secret_marker_ext");
+    expect(extMock.getLastState()).toContain('"extension":"other"');
+  });
+
   test("enforces assert and min-p contract including security_risk override", async () => {
     const passMock = makeEvaluateMock("ship", 0.85);
     const passRes = await runDiffGate(
