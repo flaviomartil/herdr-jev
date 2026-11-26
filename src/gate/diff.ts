@@ -102,34 +102,37 @@ interface ParsedDiffFile {
 
 const VALID_VERDICTS: readonly DiffVerdict[] = ["ship", "revise", "block"];
 const DEFAULT_MAX_BYTES = 64_000;
+const MAX_REDACTED_DIFF_CHARS = 8_000;
 const DEFAULT_MIN_P = 0.7;
 const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
+export type CommitKind = "feat" | "fix" | "refactor" | "docs" | "test" | "chore" | "other" | "none";
+
 export const DIFF_GATE_QUESTIONS: Record<string, JevQuestion> = {
   verdict: choice(
-    "Classify the readiness verdict for this code change summary before human or frontier review.",
+    "Classify the readiness verdict from this structural change metadata (no secrets were found locally). Clean scoped source/test fixes without risk signals should be ship; risky patterns without security danger should be revise; dangerous execution, eval, or auth bypass should be block.",
     {
-      ship: "Focused, consistent, safe, and free of obvious defects or unaddressed risks.",
-      revise: "Intent is valid, but issues such as missing validation, risky fallback, weak tests, or message mismatch need fixes.",
-      block: "Dangerous, introduces security exposure, breaks integrity invariants, or leaves critical behavior unsound.",
+      ship: "Routine, bounded source, SQL, CI, or test change with no risk signals or integrity issues.",
+      revise: "Non-fatal quality or hygiene concern such as missing validation, silent fallback, outbound network addition, comment-only churn, or large untested deletion.",
+      block: "Dangerous runtime pattern such as shell execution, dynamic eval, or auth/permission bypass.",
     },
   ),
   security_risk: noul(
-    "Does this summary indicate potential security exposure such as command execution, dynamic evaluation, weakened auth/permissions, or credential handling risk?",
+    "Do the structural signals indicate concrete security danger (adds_shell_exec, adds_dynamic_eval, or modifies_auth_or_permissions)? Note: local secret scan already passed with 0 findings.",
   ),
   severity: score(
-    "Rate the worst potential defect severity indicated by this change summary (select None if clean).",
+    "Rate the worst potential defect severity indicated by this change metadata (select None when risk signals are absent).",
     ["None", "Nit", "Should fix", "Block merge"],
   ),
   quality: score(
-    "Rate overall structural engineering quality reflected by scope, modularity, checks, and test coverage.",
+    "Rate overall structural engineering quality reflected by scope, bounded size, categories, and risk signals.",
     ["Broken", "Sloppy", "Acceptable", "Solid", "Exemplary"],
   ),
   slop: noul(
-    "Does this change appear to be low-substance churn, superficial edits, or noisy boilerplate without meaningful engineering value?",
+    "Does the structural metadata show low-substance churn such as only_whitespace_or_comments or empty value?",
   ),
   honest_message: noul(
-    "Do the commit/change message and the structural file/signal summary align accurately?",
+    "Do the declared change kind and structural file categories/signals align plausibly (not e.g. declared docs while adding shell execution in source)?",
   ),
   kind: choice(
     "Identify the primary category of this software change.",
@@ -178,10 +181,47 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
   const files: ParsedDiffFile[] = [];
   let current: ParsedDiffFile | null = null;
   let newLine = 0;
+  let inHunk = false;
+  let remainingOld = 0;
+  let remainingNew = 0;
 
   const lines = rawDiff.replace(/\r\n?/g, "\n").split("\n");
   for (const line of lines) {
+    if (inHunk && (remainingOld > 0 || remainingNew > 0) && !line.startsWith("diff --git ")) {
+      if (line.startsWith("+")) {
+        const content = line.slice(1);
+        const lineNo = newLine > 0 ? newLine : (current?.additions.length ?? 0) + 1;
+        current?.additions.push({ line: lineNo, text: content });
+        newLine += 1;
+        remainingNew = Math.max(0, remainingNew - 1);
+      } else if (line.startsWith("-")) {
+        current?.deletions.push(line.slice(1));
+        remainingOld = Math.max(0, remainingOld - 1);
+      } else if (line.startsWith(" ")) {
+        newLine += 1;
+        remainingOld = Math.max(0, remainingOld - 1);
+        remainingNew = Math.max(0, remainingNew - 1);
+      } else if (line.startsWith("\\")) {
+        continue;
+      } else if (line === "" && (remainingOld > 0 || remainingNew > 0)) {
+        newLine += 1;
+        remainingOld = Math.max(0, remainingOld - 1);
+        remainingNew = Math.max(0, remainingNew - 1);
+      } else {
+        inHunk = false;
+      }
+      if (inHunk && remainingOld === 0 && remainingNew === 0) {
+        inHunk = false;
+      }
+      if (inHunk || line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) {
+        continue;
+      }
+    }
+
     if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      remainingOld = 0;
+      remainingNew = 0;
       const match = /^diff --git (?:"([^"]+)"|(\S+)) (?:"([^"]+)"|(\S+))$/.exec(line);
       const bPath = match ? (match[3] ?? match[4] ?? "") : "";
       const normalized = bPath.startsWith("b/") ? bPath.slice(2) : bPath;
@@ -210,7 +250,12 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
       continue;
     }
 
-    if (line.startsWith("--- ") || line.startsWith("index ") || line.startsWith("new file ") || line.startsWith("deleted file ")) {
+    if (
+      line.startsWith("--- ") ||
+      line.startsWith("index ") ||
+      line.startsWith("new file ") ||
+      line.startsWith("deleted file ")
+    ) {
       continue;
     }
 
@@ -220,22 +265,12 @@ export function parseUnifiedDiff(rawDiff: string): ParsedDiffFile[] {
         files.push(current);
       }
       current.hunks += 1;
-      const hunkMatch = /\+(\d+)(?:,\d+)?\s+@@/.exec(line);
-      newLine = hunkMatch ? Number(hunkMatch[1]) : 1;
+      const hunkMatch = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+      remainingOld = hunkMatch ? Number(hunkMatch[2] ?? "1") : 1;
+      newLine = hunkMatch ? Number(hunkMatch[3]) : 1;
+      remainingNew = hunkMatch ? Number(hunkMatch[4] ?? "1") : 1;
+      inHunk = remainingOld > 0 || remainingNew > 0;
       continue;
-    }
-
-    if (!current) continue;
-
-    if (line.startsWith("+") && !line.startsWith("+++")) {
-      const content = line.slice(1);
-      const lineNo = newLine > 0 ? newLine : current.additions.length + 1;
-      current.additions.push({ line: lineNo, text: content });
-      newLine += 1;
-    } else if (line.startsWith("-") && !line.startsWith("---")) {
-      current.deletions.push(line.slice(1));
-    } else if (line.startsWith(" ")) {
-      newLine += 1;
     }
   }
 
@@ -434,12 +469,53 @@ export function buildDiffSummary(rawDiff: string, message = ""): DiffStructuredS
   };
 }
 
-export function buildJevState(summary: DiffStructuredSummary, rawDiff: string, includeRedactedDiff = false): string {
+export function classifyCommitMessageKind(message: string): CommitKind {
+  const trimmed = clean(message).toLowerCase();
+  if (!trimmed) return "none";
+  const prefix = /^(feat|fix|refactor|docs|test|chore)(?:\([^)]*\))?!?:\s*/.exec(trimmed);
+  if (prefix) return prefix[1] as CommitKind;
+  if (/^(add|implement|create|support|enable)\b/.test(trimmed)) return "feat";
+  if (/^(fix|guard|resolve|prevent|handle|repair|hotfix)\b/.test(trimmed)) return "fix";
+  if (/^(refactor|extract|simplify|clean ?up|rename|move)\b/.test(trimmed)) return "refactor";
+  if (/^(docs?|document|readme)\b/.test(trimmed)) return "docs";
+  if (/^(tests?|spec)\b/.test(trimmed)) return "test";
+  if (/^(chore|ci|build|deps|bump|lint|format)\b/.test(trimmed)) return "chore";
+  return "other";
+}
+
+export function buildJevState(
+  summary: DiffStructuredSummary,
+  rawDiff: string,
+  includeRedactedDiff = false,
+): string {
+  const declaredKind = classifyCommitMessageKind(summary.message);
+  const categories = [...new Set(summary.files.map((f) => f.category))];
+  const extensions = [...new Set(summary.files.map((f) => f.extension).filter(Boolean))];
+  const totalHunks = summary.files.reduce((acc, f) => acc + f.hunks, 0);
+  const fileProfiles = summary.files.map((f) => ({
+    category: f.category,
+    extension: f.extension || "none",
+    additions: f.additions,
+    deletions: f.deletions,
+    hunks: f.hunks,
+    signals: f.signals,
+  }));
+
   const payload: Record<string, unknown> = {
-    summary,
+    declaredKind,
+    filesChanged: summary.filesChanged,
+    categories,
+    extensions,
+    additions: summary.additions,
+    deletions: summary.deletions,
+    hunks: totalHunks,
+    totalBytes: summary.totalBytes,
+    localSecretScan: "0_findings",
+    signals: summary.signals,
+    fileProfiles,
   };
   if (includeRedactedDiff) {
-    payload.redactedDiff = clip(redact(rawDiff), 8_000);
+    payload.redactedDiff = redact(rawDiff);
   }
   return redact(JSON.stringify(payload));
 }
@@ -549,18 +625,23 @@ function buildPayloadQuestions(questions: Record<string, JevQuestion>): Record<s
   return payload;
 }
 
+function isFiniteProb(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 function parseClientOutcome(
   questions: Record<string, JevQuestion>,
   answersData: Record<string, any> | undefined,
   jevMs: number,
 ): EvaluateResult | null {
-  if (!answersData) return null;
+  if (!answersData || typeof answersData !== "object") return null;
   const parsed: EvaluateResult["answers"] = {};
   for (const [key, q] of Object.entries(questions)) {
     const rawAns = answersData[key];
-    if (!rawAns) continue;
+    if (!rawAns || typeof rawAns !== "object") return null;
     if (q.type === "noul") {
-      const prob = typeof rawAns.noul === "number" ? rawAns.noul : 0.5;
+      if (!isFiniteProb(rawAns.noul)) return null;
+      const prob = rawAns.noul;
       parsed[key] = {
         type: "noul",
         value: prob >= 0.5,
@@ -568,21 +649,32 @@ function parseClientOutcome(
         raw: rawAns,
       };
     } else if (q.type === "choice") {
+      const choiceVal = rawAns.choice;
+      const probs = rawAns.probabilities as Record<string, unknown> | undefined;
+      if (typeof choiceVal !== "string" || !(choiceVal in q.criteria)) return null;
+      const prob = probs?.[choiceVal];
+      const conf = isFiniteProb(prob) ? prob : isFiniteProb(rawAns.confidence) ? rawAns.confidence : null;
+      if (conf === null) return null;
+      if (key === "verdict" && !isFiniteProb(prob)) return null;
       parsed[key] = {
         type: "choice",
-        value: rawAns.choice ?? Object.keys(q.criteria)[0] ?? "",
-        confidence: rawAns.confidence ?? 0.75,
+        value: choiceVal,
+        confidence: conf,
         raw: rawAns,
       };
     } else if (q.type === "score") {
-      let scoreVal = typeof rawAns.score === "number" ? rawAns.score : 0.5;
-      if (rawAns.probabilities) {
-        scoreVal = scoreQuantile(rawAns.probabilities, 0.6);
+      const probs = rawAns.probabilities as Record<string, number> | undefined;
+      const hasProbs = Boolean(probs && typeof probs === "object" && Object.keys(probs).length > 0);
+      if (!hasProbs && (typeof rawAns.score !== "number" || !Number.isFinite(rawAns.score))) {
+        return null;
       }
+      const scoreVal = hasProbs ? scoreQuantile(probs!, 0.6) : (rawAns.score as number);
+      if (!Number.isFinite(scoreVal)) return null;
+      const conf = isFiniteProb(rawAns.confidence) ? rawAns.confidence : scoreVal;
       parsed[key] = {
         type: "score",
         value: scoreVal,
-        confidence: rawAns.confidence ?? 0.75,
+        confidence: Number.isFinite(conf) ? conf : 0,
         raw: rawAns,
       };
     }
@@ -594,26 +686,59 @@ function parseClientOutcome(
   };
 }
 
-function extractDimensions(evalResult: EvaluateResult): Record<string, DiffGateDimensionResult> {
+function validateAndExtractDimensions(
+  questions: Record<string, JevQuestion>,
+  evalResult: EvaluateResult,
+): Record<string, DiffGateDimensionResult> | null {
+  if (!evalResult || !evalResult.answers || typeof evalResult.answers !== "object") return null;
   const dimensions: Record<string, DiffGateDimensionResult> = {};
-  for (const [key, ans] of Object.entries(evalResult.answers)) {
-    const raw = ans.raw as { noul?: unknown; probabilities?: Record<string, unknown> } | undefined;
-    let probability: number | undefined;
-    if (ans.type === "noul" && typeof raw?.noul === "number" && Number.isFinite(raw.noul)) {
-      probability = raw.noul;
-    } else if (ans.type === "choice" && raw?.probabilities && typeof ans.value === "string") {
-      const p = raw.probabilities[ans.value];
-      if (typeof p === "number" && Number.isFinite(p)) {
-        probability = p;
-      }
+
+  for (const [key, q] of Object.entries(questions)) {
+    const ans = evalResult.answers[key];
+    if (!ans || ans.type !== q.type) return null;
+    const raw = ans.raw as
+      | { noul?: unknown; choice?: unknown; score?: unknown; confidence?: unknown; probabilities?: Record<string, unknown> }
+      | undefined;
+
+    if (q.type === "noul") {
+      if (!isFiniteProb(raw?.noul)) return null;
+      dimensions[key] = {
+        type: "noul",
+        value: ans.value === true,
+        confidence: Number.isFinite(ans.confidence) ? ans.confidence : Math.abs(raw.noul - 0.5) * 2,
+        probability: raw.noul,
+      };
+    } else if (q.type === "choice") {
+      if (typeof ans.value !== "string" || !(ans.value in q.criteria)) return null;
+      const prob = raw?.probabilities?.[ans.value];
+      if (key === "verdict" && !isFiniteProb(prob)) return null;
+      const resolvedProb = isFiniteProb(prob)
+        ? prob
+        : isFiniteProb(raw?.confidence)
+          ? raw.confidence
+          : isFiniteProb(ans.confidence)
+            ? ans.confidence
+            : null;
+      if (resolvedProb === null) return null;
+      dimensions[key] = {
+        type: "choice",
+        value: redact(ans.value),
+        confidence: isFiniteProb(ans.confidence) ? ans.confidence : resolvedProb,
+        ...(isFiniteProb(prob) ? { probability: prob } : {}),
+      };
+    } else if (q.type === "score") {
+      if (typeof ans.value !== "number" || !Number.isFinite(ans.value)) return null;
+      const hasRawScore = typeof raw?.score === "number" && Number.isFinite(raw.score);
+      const hasProbs = Boolean(raw?.probabilities && Object.keys(raw.probabilities).length > 0);
+      if (!hasRawScore && !hasProbs) return null;
+      dimensions[key] = {
+        type: "score",
+        value: ans.value,
+        confidence: Number.isFinite(ans.confidence) ? ans.confidence : 0,
+      };
     }
-    dimensions[key] = {
-      type: ans.type,
-      value: typeof ans.value === "string" ? redact(ans.value) : ans.value,
-      confidence: Number.isFinite(ans.confidence) ? ans.confidence : 0,
-      ...(probability !== undefined ? { probability } : {}),
-    };
   }
+
   return dimensions;
 }
 
@@ -699,6 +824,13 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
   }
 
   const summary = buildDiffSummary(rawDiff, message);
+  if (options.includeRedactedDiff && redact(rawDiff).length > MAX_REDACTED_DIFF_CHARS) {
+    return errorResult(assertVerdict, minP, "diff_truncated", startedAt, {
+      truncated: true,
+      summary,
+    });
+  }
+
   const state = buildJevState(summary, rawDiff, Boolean(options.includeRedactedDiff));
 
   let evalResult: EvaluateResult;
@@ -708,7 +840,7 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
     } catch {
       return errorResult(assertVerdict, minP, "jev_unavailable", startedAt, { fallback: true, summary });
     }
-  } else if (deps.fetch !== undefined || options.timeoutMs !== undefined) {
+  } else {
     const resolvedKey = deps.apiKey === null ? null : (deps.apiKey ?? resolveTypeSafeApiKey());
     if (!resolvedKey && !deps.fetch) {
       return errorResult(assertVerdict, minP, "missing_key", startedAt, { fallback: true, summary });
@@ -726,7 +858,11 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
         outcome.jevMs,
       );
       if (!parsed) {
-        return errorResult(assertVerdict, minP, "invalid_jev_response", startedAt, { fallback: true, summary });
+        return errorResult(assertVerdict, minP, "incomplete_or_invalid_jev_response", startedAt, {
+          fallback: false,
+          summary,
+          jevMs: Number.isFinite(outcome.jevMs) ? Math.round(outcome.jevMs) : null,
+        });
       }
       evalResult = parsed;
     } catch (error) {
@@ -737,8 +873,6 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
           : "jev_unavailable";
       return errorResult(assertVerdict, minP, reason, startedAt, { fallback: true, summary });
     }
-  } else {
-    evalResult = await evaluateQuestions(state, DIFF_GATE_QUESTIONS, deps.apiKey);
   }
 
   if (evalResult.fallback) {
@@ -746,37 +880,27 @@ export async function runDiffGate(options: DiffGateOptions = {}, deps: DiffGateD
       fallback: true,
       summary,
       jevMs: Number.isFinite(evalResult.latencyMs) ? evalResult.latencyMs : null,
-      dimensions: extractDimensions(evalResult),
     });
   }
 
-  const verdictAns = evalResult.answers.verdict;
-  if (!verdictAns || !isDiffVerdict(verdictAns.value)) {
-    return errorResult(assertVerdict, minP, "invalid_verdict", startedAt, {
+  const dimensions = validateAndExtractDimensions(DIFF_GATE_QUESTIONS, evalResult);
+  if (!dimensions) {
+    return errorResult(assertVerdict, minP, "incomplete_or_invalid_jev_response", startedAt, {
       summary,
       jevMs: Number.isFinite(evalResult.latencyMs) ? evalResult.latencyMs : null,
-      dimensions: extractDimensions(evalResult),
     });
   }
 
-  const verdict = verdictAns.value;
-  const rawVerdict = verdictAns.raw as { probabilities?: Record<string, unknown> } | undefined;
-  const rawProb = rawVerdict?.probabilities?.[verdict];
-  const verdictProbability = typeof rawProb === "number" && Number.isFinite(rawProb)
-    ? rawProb
-    : verdictAns.confidence;
-
-  if (!Number.isFinite(verdictProbability) || verdictProbability < 0 || verdictProbability > 1) {
-    return errorResult(assertVerdict, minP, "invalid_verdict_probability", startedAt, {
+  const verdict = dimensions.verdict.value as DiffVerdict;
+  const verdictProbability = dimensions.verdict.probability;
+  const securityRiskProb = dimensions.security_risk.probability;
+  if (verdictProbability === undefined || securityRiskProb === undefined) {
+    return errorResult(assertVerdict, minP, "incomplete_or_invalid_jev_response", startedAt, {
       summary,
       jevMs: Number.isFinite(evalResult.latencyMs) ? evalResult.latencyMs : null,
-      dimensions: extractDimensions(evalResult),
     });
   }
 
-  const dimensions = extractDimensions(evalResult);
-  const securityRiskProb = dimensions.security_risk?.probability
-    ?? (dimensions.security_risk?.value === true ? dimensions.security_risk.confidence : 0);
   const gate: DiffVerdict = securityRiskProb >= 0.7 ? "block" : verdict;
 
   const passed = gate === assertVerdict && verdict === assertVerdict && verdictProbability >= minP;

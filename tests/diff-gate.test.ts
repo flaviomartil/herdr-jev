@@ -258,7 +258,7 @@ describe("herdr-jev diff-gate", () => {
 
     const mock = makeEvaluateMock("ship", 0.9);
     const result = await runDiffGate(
-      { diffText: diff, message: "update compute multiplier" },
+      { diffText: diff, message: "feat: secret compute multiplier ticket-9876" },
       { evaluate: mock.evaluate },
     );
 
@@ -267,11 +267,127 @@ describe("herdr-jev diff-gate", () => {
     expect(state).not.toContain(proprietaryMarker);
     expect(state).not.toContain("3.14159");
     expect(state).not.toContain('"verdict"');
-    expect(state).toContain("src/proprietary.ts");
+    expect(state).not.toContain("src/proprietary.ts");
+    expect(state).not.toContain("ticket-9876");
+    expect(state).toContain('"declaredKind":"feat"');
 
-    const summary = buildDiffSummary(diff, "update compute multiplier");
+    const summary = buildDiffSummary(diff, "feat: secret compute multiplier ticket-9876");
     const withRawState = buildJevState(summary, diff, true);
     expect(withRawState).toContain(proprietaryMarker);
+  });
+
+  test("rejects incomplete or invalid Jev responses with exit 2 and zero silent defaults", async () => {
+    const missingSecRisk = await runDiffGate(
+      { diffText: CLEAN_FIX_DIFF, message: "fix: add finite check" },
+      {
+        evaluate: async () => ({
+          fallback: false,
+          latencyMs: 25,
+          answers: {
+            verdict: {
+              type: "choice",
+              value: "ship",
+              confidence: 0.9,
+              raw: { choice: "ship", probabilities: { ship: 0.92, revise: 0.06, block: 0.02 } },
+            },
+            severity: { type: "score", value: 0, confidence: 0.9, raw: { score: 0 } },
+            quality: { type: "score", value: 3, confidence: 0.9, raw: { score: 3 } },
+            slop: { type: "noul", value: false, confidence: 0.8, raw: { noul: 0.1 } },
+            honest_message: { type: "noul", value: true, confidence: 0.8, raw: { noul: 0.9 } },
+            kind: { type: "choice", value: "fix", confidence: 0.9, raw: { choice: "fix", confidence: 0.9 } },
+          },
+        }),
+      },
+    );
+    expect(missingSecRisk.exitCode).toBe(2);
+    expect(missingSecRisk.valid).toBe(false);
+    expect(missingSecRisk.reason).toBe("incomplete_or_invalid_jev_response");
+
+    const missingVerdictProb = await runDiffGate(
+      { diffText: CLEAN_FIX_DIFF, message: "fix: add finite check" },
+      {
+        evaluate: async () => ({
+          fallback: false,
+          latencyMs: 25,
+          answers: {
+            verdict: {
+              type: "choice",
+              value: "ship",
+              confidence: 0.75,
+              raw: { choice: "ship" },
+            },
+            security_risk: { type: "noul", value: false, confidence: 0.9, raw: { noul: 0.05 } },
+            severity: { type: "score", value: 0, confidence: 0.9, raw: { score: 0 } },
+            quality: { type: "score", value: 3, confidence: 0.9, raw: { score: 3 } },
+            slop: { type: "noul", value: false, confidence: 0.8, raw: { noul: 0.1 } },
+            honest_message: { type: "noul", value: true, confidence: 0.8, raw: { noul: 0.9 } },
+            kind: { type: "choice", value: "fix", confidence: 0.9, raw: { choice: "fix", confidence: 0.9 } },
+          },
+        }),
+      },
+    );
+    expect(missingVerdictProb.exitCode).toBe(2);
+    expect(missingVerdictProb.valid).toBe(false);
+
+    const partialFetch = (async () =>
+      new Response(JSON.stringify({ answers: { verdict: { choice: "ship" } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as any;
+    const partialRes = await runDiffGate(
+      { diffText: CLEAN_FIX_DIFF, message: "fix: check" },
+      { apiKey: "ts-test-key", fetch: partialFetch },
+    );
+    expect(partialRes.exitCode).toBe(2);
+    expect(partialRes.valid).toBe(false);
+    expect(partialRes.reason).toBe("incomplete_or_invalid_jev_response");
+  });
+
+  test("scans added lines beginning with ++ or +++ inside hunks before any network call", async () => {
+    const ghPat = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456";
+    const diffWithPlusLines = [
+      "diff --git a/src/banner.ts b/src/banner.ts",
+      "--- a/src/banner.ts",
+      "+++ b/src/banner.ts",
+      "@@ -1,1 +1,3 @@",
+      " export const ok = true;",
+      `+++ marker token=${ghPat}`,
+      "++ another added line",
+    ].join("\n");
+
+    const secrets = scanDiffAdditions(diffWithPlusLines);
+    expect(secrets.some((s) => s.rule === "github_token")).toBe(true);
+
+    const mock = makeEvaluateMock("ship", 0.95);
+    const res = await runDiffGate(
+      { diffText: diffWithPlusLines, message: "fix: banner" },
+      { evaluate: mock.evaluate },
+    );
+    expect(res.exitCode).toBe(2);
+    expect(res.status).toBe("blocked_secrets");
+    expect(mock.getCalls()).toBe(0);
+  });
+
+  test("returns exit 2 with truncated=true when includeRedactedDiff exceeds 8000 chars", async () => {
+    const mock = makeEvaluateMock("ship", 0.95);
+    const body = Array.from({ length: 220 }, (_, i) => `+export const v${i} = ${i} * 1234567890;`).join("\n");
+    const diff = [
+      "diff --git a/src/big.ts b/src/big.ts",
+      "--- a/src/big.ts",
+      "+++ b/src/big.ts",
+      "@@ -1,0 +1,220 @@",
+      body,
+    ].join("\n");
+
+    const res = await runDiffGate(
+      { diffText: diff, message: "feat: big table", maxBytes: 200_000, includeRedactedDiff: true },
+      { evaluate: mock.evaluate },
+    );
+    expect(res.exitCode).toBe(2);
+    expect(res.truncated).toBe(true);
+    expect(res.valid).toBe(false);
+    expect(res.reason).toBe("diff_truncated");
+    expect(mock.getCalls()).toBe(0);
   });
 
   test("enforces assert and min-p contract including security_risk override", async () => {
