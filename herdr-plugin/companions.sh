@@ -6,6 +6,7 @@ case "${1:-}" in
   review) jev_cli studio --review ;;
   studio-off) jev_cli studio --off ;;
   event) jev_cli studio --event ;;
+  watch-events) jev_cli_exec watch-events ;;
   sessions) jev_cli sessions pick ;;
   pending) jev_cli pending list ;;
   resume)

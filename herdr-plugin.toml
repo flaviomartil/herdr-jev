@@ -161,9 +161,8 @@ title = "Jev: Studio automatic review off"
 contexts = ["pane"]
 command = ["bash", "herdr-plugin/companions.sh", "studio-off"]
 
-[[events]]
-on = "pane.agent_status_changed"
-command = ["bash", "herdr-plugin/companions.sh", "event"]
+[[startup]]
+command = ["bash", "herdr-plugin/companions.sh", "watch-events"]
 
 [[panes]]
 id = "sessions"

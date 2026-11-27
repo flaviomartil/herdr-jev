@@ -4,6 +4,7 @@ import { createProcessCommandAdapter, type RunCommand } from "./client.js";
 import { ANSI_PATTERN, redactSecrets } from "./pane-text.js";
 import { reserveHerdrHandle } from "./reservation.js";
 import { historyCommand } from "./sessions.js";
+import { formatSidebarBadge } from "./sidebar-status.js";
 
 export const PROGRESS_TTL_MS = 300_000;
 const REASONS = ["none", "question", "approval", "error", "review"] as const;
@@ -145,8 +146,18 @@ export async function reportProgress(
       if (typeof pending.work?.id !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(pending.work.id)) throw new Error("Inbox acknowledgement invalid; inspect pending work before retrying");
       report.inbox = pending.work.id;
     }
+    const badge = formatSidebarBadge({
+      state: agent.agent_status,
+      reason: report.reason,
+      percent: report.percent,
+    });
+    const tokenArgs = [
+      ...(badge ? ["--token", `jev_badge=${badge}`] : []),
+      "--token",
+      `jev_progress=${JSON.stringify(report)}`,
+    ];
     const reported = await run([herdr, "pane", "report-metadata", targetPane, "--source", "herdr-jev",
-      "--ttl-ms", String(PROGRESS_TTL_MS), "--token", `jev_progress=${JSON.stringify(report)}`]);
+      "--ttl-ms", String(PROGRESS_TTL_MS), ...tokenArgs]);
     if (!reported.ok) throw new Error("Progress dispatch unconfirmed; any inbox event remains pending");
     return { status: "reported", pane: targetPane, report, evidence: "reported" };
   } finally { await release(); }

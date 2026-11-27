@@ -51,7 +51,7 @@ function isWithinDir(candidate: string, root: string): boolean {
   return candidate.startsWith(normalizedRoot);
 }
 
-function isAllowedTestSocketPath(candidatePath: string): boolean {
+export function isAllowedTestSocketPath(candidatePath: string): boolean {
   if (!isAbsolute(candidatePath)) return false;
   const resolved = resolveWithExistingAncestor(candidatePath);
   const allowedRoots: string[] = [resolveFakeBinDir()];

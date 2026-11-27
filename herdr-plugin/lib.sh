@@ -20,6 +20,19 @@ jev_cli() {
   fi
 }
 
+jev_cli_exec() {
+  if [ -n "${HERDR_JEV_BIN:-}" ]; then
+    exec "$HERDR_JEV_BIN" "$@"
+  elif [ -f "$PLUGIN_ROOT/src/cli.ts" ]; then
+    exec bun run "$PLUGIN_ROOT/src/cli.ts" "$@"
+  elif [ -f "$PLUGIN_ROOT/bin/herdr-jev.js" ]; then
+    exec node "$PLUGIN_ROOT/bin/herdr-jev.js" "$@"
+  else
+    echo "herdr-jev CLI not found in $PLUGIN_ROOT." >&2
+    return 127
+  fi
+}
+
 notify() {
   "$HERDR" notification show "$1" --body "$2" --sound "${3:-none}" >/dev/null 2>&1 || true
 }
