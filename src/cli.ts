@@ -69,6 +69,11 @@ import { buildAgentsView, formatAgentsTable } from "./herdr/agents.js";
 import { assertRunId, formatRunHistory, listRunHistory, mergeRunHistory } from "./orchestration/run-history.js";
 import { parseListLimit, peerBroadcastFailed } from "./cli-support.js";
 import { studio, studioEventPane } from "./herdr/studio.js";
+import { HerdrWakeWatcher, type WakeEventHint } from "./herdr/event-watcher.js";
+import { acquireFileLock, type FileLockHandle } from "./herdr/file-lock.js";
+import { resolveHerdrSocketPath } from "./herdr/socket.js";
+import { createHash } from "node:crypto";
+import { resolveStateDir } from "./herdr/state-dir.js";
 import { changeEffort } from "./herdr/effort.js";
 import { historyCommand, previewSession, sessionPicker } from "./herdr/sessions.js";
 import { watchPullRequest } from "./herdr/pr-watch.js";
@@ -92,19 +97,139 @@ program
   .description("Jev-driven multi-model triage and triad orchestration plugin for Herdr")
   .version("0.1.0");
 
+function isDoneWakeHint(hint: WakeEventHint): boolean {
+  if (hint.type !== "pane.agent_status_changed") return false;
+  const raw = hint.raw as Record<string, any>;
+  const data = (raw.data ?? raw.event ?? raw) as Record<string, any>;
+  const status = data?.agent_status ?? data?.status ?? data?.agent?.agent_status;
+  return status === "done" || status === undefined;
+}
+
+async function runStudioWakeWatcher(options: { pane?: string; debounceMs?: number; once?: boolean }): Promise<{ status: string; tracked: string[] }> {
+  const debounceMs = Number.isFinite(options.debounceMs) ? Math.max(0, options.debounceMs!) : 2000;
+  const targetFilter = options.pane;
+  const socketScope = resolveHerdrSocketPath() ?? "default";
+  const lockHash = createHash("sha256").update(socketScope).digest("hex").slice(0, 16);
+  const lockPath = join(resolveStateDir(), `watch-events-${lockHash}.lock`);
+
+  let lockHandle: FileLockHandle;
+  try {
+    lockHandle = await acquireFileLock(lockPath, { timeoutMs: 0 });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ETIMEDOUT" || code === "EEXIST") {
+      return { status: "already_running", tracked: [] };
+    }
+    throw err;
+  }
+
+  try {
+    const triggerStudioForPane = async (paneId: string) => {
+      if (!paneId || (targetFilter && paneId !== targetFilter)) return;
+      try {
+        await studio({ pane: paneId, event: true });
+      } catch {
+        // Keep the long-lived watcher alive if one pane fails or closes mid-turn.
+      }
+    };
+
+    let resolveStop: ((status: string) => void) | null = null;
+    const stopPromise = new Promise<string>((resolve) => {
+      resolveStop = resolve;
+    });
+
+    const watcher = new HerdrWakeWatcher({
+      debounceMs,
+      onResync: async (snapshot) => {
+        const root = (snapshot as Record<string, any> | null)?.snapshot ?? snapshot;
+        const agents = Array.isArray((root as any)?.agents) ? (root as any).agents : [];
+        for (const agent of agents) {
+          if (agent?.agent_status === "done" && agent?.tokens?.jev_studio_enabled === "true" && typeof agent.pane_id === "string") {
+            await triggerStudioForPane(agent.pane_id);
+          }
+        }
+      },
+      onWake: async (_keys, hints) => {
+        const completionPanes = new Set<string>();
+        for (const hint of hints) {
+          if (hint.paneId && isDoneWakeHint(hint)) {
+            completionPanes.add(hint.paneId);
+          }
+        }
+        for (const paneId of completionPanes) {
+          await triggerStudioForPane(paneId);
+        }
+      },
+      onTerminalStop: (reason) => {
+        resolveStop?.(reason || "stopped");
+      },
+    });
+
+    const started = await watcher.start();
+    if (!started.started) {
+      return { status: started.reason || "unavailable", tracked: watcher.getTrackedPaneIds() };
+    }
+    if (options.once) {
+      const tracked = watcher.getTrackedPaneIds();
+      watcher.stop();
+      return { status: "synced", tracked };
+    }
+
+    const finish = () => {
+      watcher.stop();
+      resolveStop?.("stopped");
+    };
+    process.on("SIGINT", finish);
+    process.on("SIGTERM", finish);
+    try {
+      const stopReason = await stopPromise;
+      return { status: stopReason, tracked: watcher.getTrackedPaneIds() };
+    } finally {
+      process.off("SIGINT", finish);
+      process.off("SIGTERM", finish);
+    }
+  } finally {
+    lockHandle.release();
+  }
+}
+
 program.command("studio")
   .description("Keep the current agent with shell/files and automatic review on reported completion")
   .option("--pane <id>", "Existing source agent pane")
   .option("--review", "Open or reuse the review pane")
   .option("--off", "Disable automatic review for this source")
   .option("--event", "Handle the installed Herdr status event")
-  .action(async (options: { pane?: string; review?: boolean; off?: boolean; event?: boolean }) => {
+  .option("--watch", "Subscribe to Herdr wake-hint events and run debounced studio updates")
+  .option("--debounce-ms <ms>", "Debounce window in milliseconds for --watch", "2000")
+  .option("--once", "Perform initial snapshot sync and exit when using --watch")
+  .action(async (options: { pane?: string; review?: boolean; off?: boolean; event?: boolean; watch?: boolean; debounceMs?: string; once?: boolean }) => {
+    if (options.watch) {
+      console.log(JSON.stringify(await runStudioWakeWatcher({
+        pane: options.pane,
+        debounceMs: options.debounceMs !== undefined ? Number(options.debounceMs) : 2000,
+        once: options.once,
+      })));
+      return;
+    }
     const eventPane = options.event ? studioEventPane(process.env.HERDR_PLUGIN_EVENT_JSON) : undefined;
     if (options.event && !eventPane) return;
     const context = JSON.parse(process.env.HERDR_PLUGIN_CONTEXT_JSON || "{}");
     const pane = eventPane || options.pane || process.env.HERDR_JEV_SOURCE_PANE_ID || context.focused_pane_id || process.env.HERDR_PANE_ID;
     if (!pane) throw new Error("Select the source agent pane explicitly with --pane");
     console.log(JSON.stringify(await studio({ pane, review: options.review, event: options.event, disable: options.off })));
+  });
+
+program.command("watch-events")
+  .description("Subscribe to Herdr wake-hint events and trigger debounced studio updates")
+  .option("--pane <id>", "Filter events to a single source pane")
+  .option("--debounce-ms <ms>", "Debounce window in milliseconds", "2000")
+  .option("--once", "Perform initial snapshot sync and exit")
+  .action(async (options: { pane?: string; debounceMs?: string; once?: boolean }) => {
+    console.log(JSON.stringify(await runStudioWakeWatcher({
+      pane: options.pane,
+      debounceMs: options.debounceMs !== undefined ? Number(options.debounceMs) : 2000,
+      once: options.once,
+    })));
   });
 
 program.command("effort <pane> <level>")

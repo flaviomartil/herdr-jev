@@ -1,6 +1,7 @@
 import { createProcessCommandAdapter, type RunCommand } from "./client.js";
 import { listRunHistory, runStateSummary, formatRunAge, type RunHistoryEntry } from "../orchestration/run-history.js";
 import { progressForAgent, progressAttention, PROGRESS_TTL_MS } from "./progress.js";
+import { resolveAgentRepoMetadata } from "./sidebar-status.js";
 
 function runReferencesPane(
   projection: Record<string, any>,
@@ -87,7 +88,6 @@ export async function readOverview(
   const runs = Array.isArray(runsOrStateDir)
     ? runsOrStateDir
     : listRunHistory(typeof runsOrStateDir === "string" ? runsOrStateDir : undefined);
-  const workspaces = new Map<string, string>(snapshot.workspaces.map((w: any) => [w.workspace_id, w.label]));
   const branches = new Map<string, Promise<string | null>>();
   const siblingCwds: Array<string | null> = snapshot.agents.map((a: any) => {
     const c = a.foreground_cwd || a.cwd;
@@ -95,7 +95,8 @@ export async function readOverview(
   });
   const agents = await Promise.all(snapshot.agents.map(async (agent: any) => {
     const cwd = agent.foreground_cwd || agent.cwd;
-    if (typeof cwd === "string" && !branches.has(cwd)) {
+    const repoMeta = resolveAgentRepoMetadata(agent, snapshot);
+    if (repoMeta.branch === null && typeof cwd === "string" && !branches.has(cwd)) {
       branches.set(cwd, run(["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"])
         .then((git) => git.ok ? git.stdout.trim() : null));
     }
@@ -113,7 +114,7 @@ export async function readOverview(
     const report = progressForAgent(agent, now);
     const state = agent.agent_status ?? "unknown";
     return {
-      project: workspaces.get(agent.workspace_id) ?? agent.workspace_id,
+      project: repoMeta.project ?? agent.workspace_id,
       pane: agent.pane_id,
       state,
       report: report ? { ...report, expiresAt: report.reportedAt + PROGRESS_TTL_MS } : null,
@@ -123,7 +124,7 @@ export async function readOverview(
       parent: tokens.jev_parent || null,
       role: tokens.jev_role || null,
       handle,
-      branch: typeof cwd === "string" ? await branches.get(cwd) : null,
+      branch: repoMeta.branch ?? (typeof cwd === "string" ? await branches.get(cwd) : null),
       cwd: typeof cwd === "string" ? cwd : null,
       weekly: weekly.map((key) => tokens[key]).find(Boolean) ?? null,
       context: tokens.quota_context || null,
