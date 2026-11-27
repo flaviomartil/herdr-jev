@@ -307,3 +307,108 @@ export function redactSecrets(text: string): string {
   );
   return bounded.truncated ? result + TRUNCATION_MARK : result;
 }
+
+const SGR_SEQUENCE = /\x1b\[([0-9;:]*)m/g;
+const COMPOSER_PROMPT_LINE = /^\s*[›❯]/;
+const VIM_DOUBLE_DASH_NORMAL = /--\s*NORMAL\s*--/i;
+const VIM_BADGE_NORMAL = /(?:^\s*(?:[│┃|]\s*)?NORMAL(?:\s*[·•│┃|]|\s*$)|(?:^|[·•│┃|[\(])\s*NORMAL\s*(?:$|[·•│┃|\]\)]))/i;
+const VIM_NON_PIPE_BADGE_NORMAL = /(?:^\s*NORMAL(?:\s*[·•]|\s*$)|(?:^|[·•[\(])\s*NORMAL\s*(?:$|[·•\]\)]))/i;
+
+function escapeRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripDimAndAnsi(rawLine: string): string {
+  let out = "";
+  let dim = false;
+  let gray = false;
+  let lastIndex = 0;
+
+  for (const match of rawLine.matchAll(SGR_SEQUENCE)) {
+    const idx = match.index ?? 0;
+    if (!dim && !gray && idx > lastIndex) {
+      out += rawLine.slice(lastIndex, idx);
+    }
+    lastIndex = idx + match[0].length;
+
+    const rawParams = match[1];
+    if (!rawParams) {
+      dim = false;
+      gray = false;
+      continue;
+    }
+    const tokens = rawParams.split(";");
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i]!;
+      if (token.includes(":")) {
+        const lead = Number(token.split(":")[0]);
+        if (lead === 38) gray = false;
+        continue;
+      }
+      const code = token === "" ? 0 : Number(token);
+      if (code === 0) {
+        dim = false;
+        gray = false;
+      } else if (code === 2) {
+        dim = true;
+      } else if (code === 22) {
+        dim = false;
+      } else if (code === 90) {
+        gray = true;
+      } else if (code === 39 || (code >= 30 && code <= 37) || (code >= 91 && code <= 97)) {
+        gray = false;
+      } else if (code === 38 || code === 48 || code === 58) {
+        if (code === 38) gray = false;
+        const mode = Number(tokens[i + 1]);
+        if (mode === 5) i += 2;
+        else if (mode === 2) i += 4;
+      }
+    }
+  }
+
+  if (!dim && !gray && lastIndex < rawLine.length) {
+    out += rawLine.slice(lastIndex);
+  }
+  return out.replace(ANSI_PATTERN, "");
+}
+
+export function inputLineText(rawAnsi: string, marker: string | RegExp = COMPOSER_PROMPT_LINE): string {
+  if (!rawAnsi) return "";
+  const lines = rawAnsi.replace(/\r\n/g, "\n").replace(/\r/g, "").split("\n");
+  const markerPattern =
+    typeof marker === "string"
+      ? new RegExp(`^\\s*${escapeRegExp(marker)}`)
+      : new RegExp(marker.source, marker.flags.replace(/g/g, ""));
+
+  let targetIndex = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const plain = lines[i]!.replace(ANSI_PATTERN, "");
+    if (markerPattern.test(plain)) {
+      targetIndex = i;
+      break;
+    }
+  }
+  if (targetIndex < 0) return "";
+
+  const normalText = stripDimAndAnsi(lines[targetIndex]!);
+  return normalText.replace(markerPattern, "").trim();
+}
+
+export function isVimNormalMode(rawAnsi: string): boolean {
+  if (!rawAnsi) return false;
+  const lines = rawAnsi.replace(ANSI_PATTERN, "").replace(/\r\n/g, "\n").replace(/\r/g, "").split("\n");
+  let promptIndex = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (COMPOSER_PROMPT_LINE.test(lines[i]!)) {
+      promptIndex = i;
+      break;
+    }
+  }
+  if (promptIndex >= 0) {
+    const footerLines = lines.slice(promptIndex + 1).filter((line) => line.trim() !== "");
+    return footerLines.some((line) => VIM_DOUBLE_DASH_NORMAL.test(line) || VIM_BADGE_NORMAL.test(line));
+  }
+
+  const tailLines = lines.filter((line) => line.trim() !== "").slice(-5);
+  return tailLines.some((line) => VIM_DOUBLE_DASH_NORMAL.test(line) || VIM_NON_PIPE_BADGE_NORMAL.test(line));
+}

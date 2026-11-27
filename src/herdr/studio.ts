@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import { createProcessCommandAdapter, type RunCommand } from "./client.js";
+import { canAutoHop } from "./human-gates.js";
 import { reserveHerdrHandle } from "./reservation.js";
 
 export async function studio(
@@ -37,11 +38,16 @@ export async function studio(
     }
     if (input.event && (tokens.jev_studio_enabled !== "true" || source.agent_status !== "done"
       || !session || tokens.jev_studio_session !== session || tokens.jev_studio_cwd !== cwd)) return { status: "ignored" };
+    if (input.event) {
+      const hops = Number(tokens.jev_studio_hops ?? 0);
+      if (!canAutoHop(hops)) return { status: "ignored", reason: "max-auto-hops" };
+    }
     if (!input.event) {
       if (!session) throw new Error("Studio requires a verified native session identity");
       await report("jev_studio_session", session);
       await report("jev_studio_cwd", cwd);
       await report("jev_studio_enabled", "true");
+      await report("jev_studio_hops", "0");
     }
     const live = (id: string) => snapshot.panes.find((pane: any) => pane.pane_id === id && pane.tab_id === source.tab_id);
     const open = async (key: string, plugin: string, entry: string, target: string, direction: string) => {
@@ -87,6 +93,10 @@ export async function studio(
     if (!changed && input.event) return { status: "ignored", reason: "no-changes" };
     const target = live(tokens.jev_studio_shell)?.pane_id || input.pane;
     const review = await open("jev_studio_review", "persiyanov.reviewr", "sidebar", target, "down");
+    if (input.event) {
+      const hops = Number(tokens.jev_studio_hops ?? 0);
+      await report("jev_studio_hops", String(hops + 1));
+    }
     return { status: "review-open", pane: input.pane, review, completion: "reported" };
   } finally { await release(); }
 }
