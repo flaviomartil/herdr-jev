@@ -129,7 +129,68 @@ test("focus and send go to the pane host", async () => {
   expect((await manager.focus(ctx, "dora")).ok).toBe(true);
   expect((await manager.send(ctx, "dora", "hello there")).ok).toBe(true);
   expect(log().some((l) => l.startsWith("herdr pane send-text p-") && l.endsWith("hello there"))).toBe(true);
-  expect(log().some((l) => l.startsWith("herdr pane focus p-"))).toBe(true);
+  expect(log().some((l) => l.startsWith("herdr agent focus p-"))).toBe(true);
+});
+
+test("herdrHost focus sends pane.focus RPC over Unix socket when socket path is resolved", async () => {
+  const { createServer } = await import("node:net");
+  const { rmSync } = await import("node:fs");
+  const sockDir = mkTmp("sock");
+  const socketPath = join(sockDir, "herdr.sock");
+  const received: Array<{ id?: string; method?: string; params?: Record<string, unknown> }> = [];
+  let rpcErrorMode = false;
+  const server = createServer((conn) => {
+    let buf = "";
+    conn.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      const nl = buf.indexOf("\n");
+      if (nl >= 0) {
+        const req = JSON.parse(buf.slice(0, nl));
+        received.push(req);
+        if (req.method === "ping") {
+          conn.end(`${JSON.stringify({ id: req.id, result: { type: "pong", version: "0.9.5", protocol: 22 } })}\n`);
+        } else if (rpcErrorMode) {
+          conn.end(`${JSON.stringify({ id: req.id, error: { code: "pane_not_found", message: "missing" } })}\n`);
+        } else {
+          conn.end(`${JSON.stringify({ id: req.id, result: { pane_id: req.params?.pane_id } })}\n`);
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  try {
+    const host = createHost("herdr", env({ HERDR_SOCKET_PATH: socketPath }));
+    expect(await host.focus("p-rpc-1")).toBe(true);
+    expect(received.map((r) => r.method)).toEqual(["ping", "pane.focus"]);
+    expect(received[1]).toMatchObject({ method: "pane.focus", params: { pane_id: "p-rpc-1" } });
+
+    rpcErrorMode = true;
+    expect(await host.focus("p-missing")).toBe(false);
+    expect(log().some((l) => l.startsWith("herdr agent focus p-missing"))).toBe(false);
+
+    const missingSockHost = createHost("herdr", env({ HERDR_SOCKET_PATH: join(sockDir, "missing.sock") }));
+    expect(await missingSockHost.focus("p-fallback")).toBe(true);
+    expect(log().some((l) => l.startsWith("herdr agent focus p-fallback"))).toBe(true);
+  } finally {
+    server.close();
+    rmSync(sockDir, { recursive: true, force: true });
+  }
+});
+
+test("herdrHost split closes orphan pane when pane run fails", async () => {
+  const seen: string[][] = [];
+  const host = createHost("herdr", env({ HERDR_PANE_ID: "p-origin" }), async (argv) => {
+    seen.push(argv);
+    if (argv[1] === "pane" && argv[2] === "split") {
+      return { ok: true, stdout: JSON.stringify({ result: { pane: { pane_id: "p-orphan" } } }), stderr: "" };
+    }
+    if (argv[1] === "pane" && argv[2] === "run") {
+      return { ok: false, stdout: "", stderr: "run failed" };
+    }
+    return { ok: true, stdout: "", stderr: "" };
+  });
+  expect(await host.split("echo hi", work, "orphan")).toBeNull();
+  expect(seen.some((a) => a[1] === "pane" && a[2] === "close" && a[3] === "p-orphan")).toBe(true);
 });
 
 test("tab command creates a tab and later runs split inside it", async () => {

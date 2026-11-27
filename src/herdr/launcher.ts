@@ -27,6 +27,7 @@ export interface LaunchResult {
   trackingError?: string;
   selectionRequired?: boolean;
   promptDelivered?: boolean;
+  recovery?: "closed" | "none" | "unknown";
   hint?: string;
   agentName?: string;
   paneId?: string;
@@ -45,17 +46,21 @@ export type SplitDirectionOption = "right" | "down" | "grid" | "auto";
 
 export type SplitLayoutMode = "right" | "down" | "grid";
 
+export const MIN_SPLIT_WIDTH = 36;
+export const MIN_SPLIT_HEIGHT = 10;
+
 type PaneLayoutInput = {
   result?: { layout?: PaneLayout };
   layout?: PaneLayout;
   panes?: PaneLayoutPane[];
 };
 
-type GridSplitPlan = { targetPaneId: string; direction: "right" | "down"; ratio: number };
+export type GridSplitPlan = { targetPaneId: string; direction: "right" | "down"; ratio: number; tooSmall?: true };
 type PaneRect = { x: number; y: number; width: number; height: number };
 type PaneLayoutPane = {
   pane_id?: string;
   id?: string;
+  terminal_id?: string;
   rect?: Partial<PaneRect>;
   owner?: unknown;
   owned_by?: unknown;
@@ -65,7 +70,11 @@ type PaneLayoutPane = {
 };
 type PaneLayout = { area?: Partial<PaneRect>; panes?: PaneLayoutPane[] };
 
-function layoutPanes(input: PaneLayoutInput): Array<{ id: string; rect: PaneRect; owner?: string }> {
+function meetsMinSplitSize(rect: { width: number; height: number }): boolean {
+  return rect.width >= MIN_SPLIT_WIDTH && rect.height >= MIN_SPLIT_HEIGHT;
+}
+
+function layoutPanes(input: PaneLayoutInput): Array<{ id: string; terminalId?: string; rect: PaneRect; owner?: string }> {
   const layout = input.result?.layout ?? input.layout ?? input;
   const panes: unknown = layout.panes;
   if (!Array.isArray(panes)) return [];
@@ -73,8 +82,9 @@ function layoutPanes(input: PaneLayoutInput): Array<{ id: string; rect: PaneRect
     if (!pane || typeof pane !== "object") return [];
     const id = pane.pane_id ?? pane.id;
     const rect = pane.rect;
+    const terminalId = typeof pane.terminal_id === "string" && pane.terminal_id ? pane.terminal_id : undefined;
     return id && rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number"
-      ? [{ id, rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, owner: paneOwner(pane) }] : [];
+      ? [{ id, ...(terminalId ? { terminalId } : {}), rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height }, owner: paneOwner(pane) }] : [];
   });
 }
 
@@ -88,6 +98,22 @@ function layoutPaneIds(input: PaneLayoutInput): Set<string> {
     if (typeof id === "string" && id) ids.add(id);
   }
   return ids;
+}
+
+function layoutTerminalMap(input: PaneLayoutInput): Map<string, string> {
+  const layout = input.result?.layout ?? input.layout ?? input;
+  const byTerminal = new Map<string, string>();
+  const panes: unknown = layout.panes;
+  if (!Array.isArray(panes)) return byTerminal;
+  for (const pane of panes as PaneLayoutPane[]) {
+    if (!pane || typeof pane !== "object") continue;
+    const id = pane.pane_id ?? pane.id;
+    const terminalId = pane.terminal_id;
+    if (typeof id === "string" && id && typeof terminalId === "string" && terminalId) {
+      byTerminal.set(terminalId, id);
+    }
+  }
+  return byTerminal;
 }
 
 function paneOwner(pane: PaneLayoutPane): string | undefined {
@@ -120,7 +146,11 @@ export function planGridSplit(layout: PaneLayoutInput, callerPaneId: string, wor
   const area = layoutArea(layout);
   const live = new Set(panes.map((pane) => pane.id));
   const workers = [...new Set(workerPaneIds)].filter((paneId) => live.has(paneId));
-  if (workers.length === 0) return { targetPaneId: callerPaneId, direction: "right", ratio: 0.5 };
+  if (workers.length === 0) {
+    const caller = panes.find((pane) => pane.id === callerPaneId);
+    const tooSmall = caller && !meetsMinSplitSize(caller.rect);
+    return { targetPaneId: callerPaneId, direction: "right", ratio: 0.5, ...(tooSmall ? { tooSmall: true as const } : {}) };
+  }
   const workerSet = new Set(workers);
   const candidates = [callerPaneId, ...workers].flatMap((paneId) => {
     const pane = panes.find((item) => item.id === paneId);
@@ -129,16 +159,23 @@ export function planGridSplit(layout: PaneLayoutInput, callerPaneId: string, wor
   });
   if (workers.length === 1) {
     const worker = candidates.find((candidate) => candidate.paneId === workers[0]);
-    if (worker) return { targetPaneId: worker.paneId, direction: "down", ratio: 0.5 };
+    if (worker) {
+      const allTooSmall = candidates.length > 0 && candidates.every((c) => !meetsMinSplitSize(c));
+      return { targetPaneId: worker.paneId, direction: "down", ratio: 0.5, ...(allTooSmall ? { tooSmall: true as const } : {}) };
+    }
   }
   const caller = panes.find((pane) => pane.id === callerPaneId);
   const callerNarrow = caller && typeof area?.width === "number" && caller.rect.width < area.width * 0.35;
   const eligible = callerNarrow ? candidates.filter((candidate) => candidate.paneId !== callerPaneId) : candidates;
-  const largest = (eligible.length > 0 ? eligible : candidates).reduce((current, candidate) => candidate.area > current.area ? candidate : current, candidates[0]);
+  const pool = eligible.length > 0 ? eligible : candidates;
+  const allTooSmall = pool.length > 0 && pool.every((c) => !meetsMinSplitSize(c));
+  const sizedPool = pool.filter(meetsMinSplitSize);
+  const searchPool = sizedPool.length > 0 ? sizedPool : pool;
+  const largest = searchPool.reduce((current, candidate) => candidate.area > current.area ? candidate : current, searchPool[0]);
   if (!largest) return { targetPaneId: callerPaneId, direction: "right", ratio: 0.5 };
   const direction = workers.length === 1 && largest.paneId !== callerPaneId || workers.length === 2 && largest.paneId === callerPaneId
     ? "down" : largest.width >= largest.height ? "right" : "down";
-  return { targetPaneId: largest.paneId, direction, ratio: 0.5 };
+  return { targetPaneId: largest.paneId, direction, ratio: 0.5, ...(allTooSmall ? { tooSmall: true as const } : {}) };
 }
 
 export type TrackedWorkerRecord = {
@@ -163,6 +200,8 @@ export function gridStatePath(callerPaneId: string, stateDir?: string): string {
 
 export interface GridWorkerRecord {
   paneId: string;
+  terminalId?: string | null;
+  agentSession?: string | null;
   callerPaneId?: string;
   handle?: string | null;
   cwd?: string | null;
@@ -229,6 +268,8 @@ function parseGridFile(filePath: string): ParsedGridFile {
         seen.add(paneId);
         records.push({
           paneId,
+          ...(typeof rec.terminalId === "string" && rec.terminalId ? { terminalId: rec.terminalId } : typeof rec.terminal_id === "string" && rec.terminal_id ? { terminalId: rec.terminal_id } : {}),
+          ...(typeof rec.agentSession === "string" && rec.agentSession ? { agentSession: rec.agentSession } : typeof rec.agent_session === "string" && rec.agent_session ? { agentSession: rec.agent_session } : {}),
           ...(typeof rec.callerPaneId === "string" ? { callerPaneId: rec.callerPaneId } : {}),
           handle: typeof rec.handle === "string" ? rec.handle : null,
           cwd: typeof rec.cwd === "string" ? rec.cwd : null,
@@ -348,6 +389,8 @@ function toGridRecords(workers: ReadonlyArray<string | GridWorkerRecord>): GridW
           ? { paneId }
           : {
               paneId,
+              ...(item.terminalId ? { terminalId: item.terminalId } : (item as any).terminal_id ? { terminalId: (item as any).terminal_id } : {}),
+              ...(item.agentSession ? { agentSession: item.agentSession } : (item as any).agent_session ? { agentSession: (item as any).agent_session } : {}),
               handle: item.handle ?? null,
               cwd: item.cwd ?? null,
               branch: item.branch ?? null,
@@ -784,6 +827,21 @@ export function parseHerdrPaneId(stdout: string): string | undefined {
   return /^[a-zA-Z0-9:_-]+$/.test(trimmed) ? trimmed : undefined;
 }
 
+export function parseHerdrTerminalId(stdout: string): string | undefined {
+  const trimmed = stdout.trim();
+  if (!trimmed) return undefined;
+  try {
+    const data = JSON.parse(trimmed) as {
+      result?: { pane?: { terminal_id?: unknown }; root_pane?: { terminal_id?: unknown } };
+      pane?: { terminal_id?: unknown };
+    };
+    const id = data.result?.pane?.terminal_id ?? data.result?.root_pane?.terminal_id ?? data.pane?.terminal_id;
+    if (typeof id === "string" && id.length > 0) return id;
+  } catch {
+  }
+  return undefined;
+}
+
 import { resolveBaseClientKind, resolveClientExecutable } from "../config/aliases.js";
 
 const CLAUDE_MODEL_ALIASES: Readonly<Record<string, string>> = {
@@ -1203,7 +1261,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   let splitPaneId = input.sourcePaneId;
   let splitRatio: number | undefined;
   const callerPaneId = input.sourcePaneId ?? process.env.HERDR_PANE_ID;
-  const existingRecords = callerPaneId ? readGridWorkerRecords(callerPaneId) : [];
+  let existingRecords = callerPaneId ? readGridWorkerRecords(callerPaneId) : [];
   let deadPaneIds = new Set<string>();
   if (input.layout !== "tab" && splitLayout === "grid" && callerPaneId && herdr.paneLayout) {
     const layoutResult = await herdr.paneLayout(callerPaneId);
@@ -1212,9 +1270,58 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     try { layout = JSON.parse(layoutResult.stdout); } catch { layout = null as unknown as PaneLayoutInput; }
     if (!layout || typeof layout !== "object") { releaseFence(); return { ok: false, ackStatus: "unknown", error: "Could not parse Herdr pane layout", commandText }; }
     const livePaneIds = layoutPaneIds(layout);
+    const terminalMap = layoutTerminalMap(layout);
+    const movedElsewhere = new Set<string>();
+    const missingWithTerminal = existingRecords.filter((r) => r.terminalId && !livePaneIds.has(r.paneId) && !terminalMap.has(r.terminalId));
+    if (missingWithTerminal.length > 0 && herdr.listPanes && livePaneIds.has(callerPaneId)) {
+      try {
+        const listed = await herdr.listPanes();
+        if (listed.ok) {
+          const parsedList = JSON.parse(listed.stdout);
+          const listPanes = parsedList?.result?.panes ?? parsedList?.panes;
+          if (Array.isArray(listPanes)) {
+            for (const p of listPanes) {
+              if (!p || typeof p !== "object") continue;
+              const pid = p.pane_id ?? p.id;
+              const tid = p.terminal_id;
+              if (typeof pid === "string" && pid && typeof tid === "string" && tid) {
+                if (!terminalMap.has(tid)) terminalMap.set(tid, pid);
+                movedElsewhere.add(tid);
+              }
+            }
+          }
+        }
+      } catch {
+      }
+    }
+    const movedPaneMap = new Map<string, string>();
+    for (const r of existingRecords) {
+      if (r.terminalId && !livePaneIds.has(r.paneId)) {
+        const nextPaneId = terminalMap.get(r.terminalId);
+        if (nextPaneId && nextPaneId !== r.paneId) {
+          movedPaneMap.set(r.paneId, nextPaneId);
+        }
+      }
+    }
+    if (movedPaneMap.size > 0) {
+      try {
+        const reconciled = updateGridWorkers(
+          callerPaneId,
+          (records) => records.map((r) => (movedPaneMap.has(r.paneId) ? { ...r, paneId: movedPaneMap.get(r.paneId)! } : r)),
+        );
+        existingRecords = reconciled.after;
+      } catch (error) {
+        trust.trackingError = errorText(error);
+        console.error(`[herdr-jev] Worker tracking unavailable for ${callerPaneId}: ${trust.trackingError}`);
+      }
+    }
     const liveRecords = existingRecords.filter((r) => livePaneIds.has(r.paneId));
     if (livePaneIds.has(callerPaneId)) {
-      deadPaneIds = new Set(existingRecords.filter((r) => r.layout !== "tab" && !livePaneIds.has(r.paneId)).map((r) => r.paneId));
+      deadPaneIds = new Set(
+        existingRecords
+          .filter((r) => r.layout !== "tab" && !livePaneIds.has(r.paneId) && !(r.terminalId && movedElsewhere.has(r.terminalId)))
+          .map((r) => r.paneId),
+      );
     }
     const plan = planGridSplit(layout, callerPaneId, liveRecords.map((r) => r.paneId));
     splitPaneId = plan.targetPaneId;
@@ -1242,6 +1349,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   }
 
   const paneId = parseHerdrPaneId(split.stdout);
+  const expectedTerminalId = parseHerdrTerminalId(split.stdout);
   if (!paneId) {
     return { ok: false, ackStatus: "unknown", completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: "Could not resolve pane ID from Herdr output", commandText, direction: splitDirection };
   }
@@ -1250,6 +1358,7 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
     const gitInfo = resolveGitBranchAndForkSha(workerCwd);
     const newRecord: GridWorkerRecord = {
       paneId,
+      ...(expectedTerminalId ? { terminalId: expectedTerminalId } : {}),
       handle: agentName,
       cwd: workerCwd,
       branch: gitInfo.branch,
@@ -1287,15 +1396,47 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
   if (startFailed) {
     const ackStatus = classifyHerdrCommandFailure(started);
     let paneClosed = false;
+    let recovery: "closed" | "none" | "unknown" = "none";
     if (ackStatus === "rejected") {
-      const closed = await herdr.closePane(paneId);
-      paneClosed = closed.ok || PANE_ALREADY_GONE.test(`${closed.stdout}\n${closed.stderr}`);
+      let shouldClose = true;
+      if (herdr.getPane) {
+        const paneRes = await herdr.getPane(paneId);
+        if (!paneRes.ok) {
+          if (PANE_ALREADY_GONE.test(`${paneRes.stdout}\n${paneRes.stderr}`)) {
+            paneClosed = true;
+            recovery = "closed";
+          } else {
+            recovery = "unknown";
+          }
+          shouldClose = false;
+        } else {
+          let paneObj: { pane_id?: unknown; terminal_id?: unknown; agent?: unknown; agent_session?: unknown } | undefined;
+          try {
+            const parsedPane = JSON.parse(paneRes.stdout);
+            paneObj = parsedPane?.result?.pane ?? parsedPane?.pane;
+          } catch {
+            paneObj = undefined;
+          }
+          const matchesPane = paneObj?.pane_id === paneId;
+          const matchesTerminal = !expectedTerminalId || paneObj?.terminal_id === expectedTerminalId;
+          const isOrphan = matchesPane && matchesTerminal && !paneObj?.agent && !paneObj?.agent_session;
+          if (!isOrphan) {
+            shouldClose = false;
+            recovery = "none";
+          }
+        }
+      }
+      if (shouldClose) {
+        const closed = await herdr.closePane(paneId);
+        paneClosed = closed.ok || PANE_ALREADY_GONE.test(`${closed.stdout}\n${closed.stderr}`);
+        recovery = paneClosed ? "closed" : "unknown";
+      }
       if (paneClosed && callerPaneId) {
         try { pruneGridWorkers([paneId]); } catch {}
       }
       if (paneClosed) releaseFence();
     }
-    return { ok: false, ackStatus, paneCreated: ackStatus === "unknown" || (ackStatus === "rejected" && !paneClosed), promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
+    return { ok: false, ackStatus, recovery, paneCreated: ackStatus === "unknown" || (ackStatus === "rejected" && !paneClosed), promptPending: true, agentName, completionState: "not_requested", completionObserved: false, workEvidence: "not_checked", error: `Agent start failed: ${started.stderr || started.stdout}`, paneId, commandText, direction: splitDirection };
   }
 
   if (herdr.reportSpawn) {
@@ -1347,26 +1488,35 @@ async function launchStageCore(input: LaunchInput, trust: TrustState): Promise<L
         if (agentRes && agentRes.ok && screenRes && screenRes.ok) {
           const state = readHerdrObservedState(agentRes);
           let interactiveReady = false;
-          try { interactiveReady = JSON.parse(agentRes.stdout).result?.agent?.interactive_ready === true; } catch {}
-          const idle = state === "idle" || state === "done" && interactiveReady;
-          if (idle || state === "unknown") {
-            const readyMatch = isClientPromptReady(baseClient, `${screenRes.stdout}\n${screenRes.stderr}`);
-            if (readyMatch && idle) {
-              isReady = true;
-              break;
-            }
-            if (readyMatch) {
-              unknownSince ??= clock.now();
-              const required = hasReadyPattern(baseClient) ? UNKNOWN_STATE_STABLE_MS : UNKNOWN_STATE_GRACE_MS;
-              if (clock.now() - unknownSince >= required) {
+          let launchPending = false;
+          try {
+            const agentObj = JSON.parse(agentRes.stdout).result?.agent;
+            interactiveReady = agentObj?.interactive_ready === true;
+            launchPending = agentObj?.launch_pending === true;
+          } catch {}
+          if (launchPending) {
+            unknownSince = null;
+          } else {
+            const idle = state === "idle" || state === "done" && interactiveReady;
+            if (idle || state === "unknown") {
+              const readyMatch = isClientPromptReady(baseClient, `${screenRes.stdout}\n${screenRes.stderr}`);
+              if (readyMatch && idle) {
                 isReady = true;
                 break;
+              }
+              if (readyMatch) {
+                unknownSince ??= clock.now();
+                const required = hasReadyPattern(baseClient) ? UNKNOWN_STATE_STABLE_MS : UNKNOWN_STATE_GRACE_MS;
+                if (clock.now() - unknownSince >= required) {
+                  isReady = true;
+                  break;
+                }
+              } else {
+                unknownSince = null;
               }
             } else {
               unknownSince = null;
             }
-          } else {
-            unknownSince = null;
           }
         }
       } else {

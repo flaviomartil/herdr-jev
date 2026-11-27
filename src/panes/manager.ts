@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { withFileLock } from "../herdr/file-lock.js";
+import { HerdrSocketClient, resolveHerdrSocketPath } from "../herdr/socket.js";
 import { appendEvent, isFinished, readEvents, runDir, safeRunId, stateRoot, summarize } from "./events.js";
 import type { RunSummary } from "./events.js";
 import { createHost, detectHost, processCmd, shq } from "./host.js";
@@ -68,32 +70,7 @@ function writeRegistry(ctx: Ctx, reg: Registry): void {
 }
 
 async function withLock<T>(ctx: Ctx, fn: () => Promise<T>): Promise<T> {
-  const lock = `${registryFile(ctx)}.lock`;
-  mkdirSync(dirname(lock), { recursive: true, mode: 0o700 });
-  const deadline = Date.now() + 15_000;
-  for (;;) {
-    try {
-      mkdirSync(lock);
-      break;
-    } catch {
-      try {
-        if (Date.now() - statSync(lock).mtimeMs > 20_000) rmdirSync(lock);
-      } catch {
-        void 0;
-      }
-      if (Date.now() > deadline) throw new Error("registry lock timeout");
-      await sleep(25);
-    }
-  }
-  try {
-    return await fn();
-  } finally {
-    try {
-      rmdirSync(lock);
-    } catch {
-      void 0;
-    }
-  }
+  return withFileLock(`${registryFile(ctx)}.lock`, fn);
 }
 
 const summaryOf = (ctx: Ctx, entry: Entry): RunSummary => summarize(entry.runId, readEvents(entry.runId, ctx.env));
@@ -382,9 +359,26 @@ export async function layoutSave(ctx: Ctx, cwd: string): Promise<Outcome> {
     .filter((e) => e.cwd === cwd || repoName(e.cwd) === repo)
     .map((e) => ({ runId: e.runId, name: e.name, cli: e.cli, model: e.model, effort: e.effort, cwd: e.cwd, promptFile: e.promptFile, tab: e.tab, host: e.host, state: summaryOf(ctx, e).state }));
   const tabs = Object.entries(reg.tabs).map(([feature, t]) => ({ feature, host: t.host }));
+  let nativeLayout: unknown;
+  const socketPath = resolveHerdrSocketPath(ctx.env);
+  if (socketPath) {
+    const client = new HerdrSocketClient({ socketPath, env: ctx.env });
+    try {
+      await client.ensureProtocol(22);
+      nativeLayout = await client.layoutExport();
+    } catch {
+      // Optional native layout capture; keep file save non-blocking on socket failure
+    } finally {
+      client.close();
+    }
+  }
   const file = layoutFile(ctx, repo);
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
-  writeFileSync(file, JSON.stringify({ repo, savedAt: Date.now(), tabs, entries }, null, 2), { mode: 0o600 });
+  writeFileSync(
+    file,
+    JSON.stringify({ repo, savedAt: Date.now(), tabs, entries, ...(nativeLayout !== undefined ? { nativeLayout } : {}) }, null, 2),
+    { mode: 0o600 },
+  );
   return { ok: true, message: `layout saved: ${entries.length} panes, ${tabs.length} tabs (${file})` };
 }
 

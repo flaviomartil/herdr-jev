@@ -1,7 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
+import { HerdrSocketClient, HerdrSocketError, resolveHerdrSocketPath } from "../herdr/socket.js";
 
 export type HostKind = "herdr" | "tmux" | "ghostty" | "background";
 export type PaneState = "alive" | "gone" | "unknown";
+
+const MAX_CMD_OUTPUT_BYTES = 4 * 1024 * 1024;
+const ENV_SCRUB_ARGS = ["--env", "CLAUDECODE=", "--env", "CLAUDE_CODE_SESSION_ID=", "--env", "CODEX_THREAD_ID="] as const;
 
 export interface CmdResult {
   ok: boolean;
@@ -29,22 +33,61 @@ export interface PaneHost {
   listTabs(): Promise<{ id: string; title: string }[]>;
 }
 
+function appendCapped(chunks: Buffer[], totalBytes: number, incoming: Buffer, limit: number): number {
+  if (totalBytes >= limit) return totalBytes;
+  const remaining = limit - totalBytes;
+  const slice = incoming.length > remaining ? incoming.subarray(0, remaining) : incoming;
+  chunks.push(slice);
+  return totalBytes + slice.length;
+}
+
 export const processCmd: Cmd = (argv, opts) =>
   new Promise((resolve) => {
-    const [bin, ...args] = argv as [string, ...string[]];
-    const child = spawn(bin, args, { cwd: opts?.cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => child.kill("SIGKILL"), 15_000);
-    child.stdout.on("data", (c) => (stdout += c));
-    child.stderr.on("data", (c) => (stderr += c));
+    const [bin, ...args] = argv;
+    if (!bin) {
+      resolve({ ok: false, stdout: "", stderr: "missing command" });
+      return;
+    }
+    const child = spawn(bin, args, { cwd: opts?.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+          return;
+        } catch {
+        }
+      }
+      child.kill("SIGKILL");
+    }, 15_000);
+    child.stdout.on("data", (c: Buffer) => {
+      stdoutBytes = appendCapped(stdoutChunks, stdoutBytes, c, MAX_CMD_OUTPUT_BYTES);
+    });
+    child.stderr.on("data", (c: Buffer) => {
+      stderrBytes = appendCapped(stderrChunks, stderrBytes, c, MAX_CMD_OUTPUT_BYTES);
+    });
     child.on("error", (e) => {
       clearTimeout(timer);
-      resolve({ ok: false, stdout, stderr: e.message });
+      const errText = Buffer.concat(stderrChunks, stderrBytes).toString("utf8") || e.message;
+      resolve({
+        ok: false,
+        stdout: Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8"),
+        stderr: timedOut ? `${errText}\ncommand timed out`.trim() : errText,
+      });
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ ok: code === 0, stdout, stderr });
+      const errText = Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
+      resolve({
+        ok: code === 0,
+        stdout: Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8"),
+        stderr: timedOut ? (errText ? `${errText}\ncommand timed out` : "command timed out") : errText,
+      });
     });
   });
 
@@ -80,13 +123,27 @@ export function herdrHost(env: NodeJS.ProcessEnv, cmd: Cmd = processCmd): PaneHo
     async split(command, cwd, title, opts) {
       const anchor = opts?.anchor ?? origin;
       const target = anchor ? ["--pane", anchor] : ["--current"];
-      const made = await call("pane", "split", ...target, "--direction", opts?.direction ?? "right", "--cwd", cwd, "--no-focus");
+      const made = await call(
+        "pane",
+        "split",
+        ...target,
+        "--direction",
+        opts?.direction ?? "right",
+        "--cwd",
+        cwd,
+        ...ENV_SCRUB_ARGS,
+        "--no-focus",
+      );
       if (!made.ok) return null;
       const id = findPaneIds(parseJson(made.stdout)).find((p) => p !== anchor) ?? null;
       if (!id) return null;
       await call("pane", "rename", id, title);
       const ran = await call("pane", "run", id, `sh -c ${shq(command)}`);
-      return ran.ok ? { id } : null;
+      if (!ran.ok) {
+        await call("pane", "close", id);
+        return null;
+      }
+      return { id };
     },
     async read(id) {
       const r = await call("pane", "read", id);
@@ -96,7 +153,22 @@ export function herdrHost(env: NodeJS.ProcessEnv, cmd: Cmd = processCmd): PaneHo
       return (await call("pane", "send-text", id, text)).ok && (await call("pane", "send-keys", id, "Enter")).ok;
     },
     async focus(id) {
-      return (await call("pane", "focus", id)).ok;
+      const socketPath = resolveHerdrSocketPath(env);
+      if (socketPath) {
+        const client = new HerdrSocketClient({ socketPath, env });
+        try {
+          await client.ensureProtocol(22);
+          await client.paneFocus(id);
+          return true;
+        } catch (err) {
+          if (err instanceof HerdrSocketError && err.phase === "rpc") {
+            return false;
+          }
+        } finally {
+          client.close();
+        }
+      }
+      return (await call("agent", "focus", id)).ok;
     },
     async close(id) {
       return (await call("pane", "close", id)).ok;
@@ -107,7 +179,17 @@ export function herdrHost(env: NodeJS.ProcessEnv, cmd: Cmd = processCmd): PaneHo
       return /not.?found|no such|unknown pane/i.test(r.stderr + r.stdout) ? "gone" : "unknown";
     },
     async newTab(title, cwd) {
-      const r = await call("tab", "create", "--label", title, "--cwd", cwd, "--no-focus");
+      const r = await call(
+        "tab",
+        "create",
+        "--label",
+        title,
+        "--cwd",
+        cwd,
+        ...(env.HERDR_WORKSPACE_ID ? ["--workspace", env.HERDR_WORKSPACE_ID] : []),
+        ...ENV_SCRUB_ARGS,
+        "--no-focus",
+      );
       if (!r.ok) return null;
       const json = parseJson(r.stdout) as any;
       const tabId = json?.result?.tab?.tab_id;

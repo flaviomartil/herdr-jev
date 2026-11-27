@@ -1,7 +1,10 @@
-import { mkdirSync, openSync, closeSync, rmSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { claimFence, releaseFence } from "./file-lock.js";
 import { resolveStateDir } from "./state-dir.js";
+
+const claimedSpawnNonces = new Map<string, { nonce: string; ino: number }>();
 
 function reservationPath(key: string, scope: "pane" | "state" = "pane") {
   const root = join(resolveStateDir(), "peer-locks");
@@ -11,11 +14,17 @@ function reservationPath(key: string, scope: "pane" | "state" = "pane") {
 }
 
 export function claimHerdrSpawn(key: string) {
-  closeSync(openSync(`${reservationPath(key)}.dispatch`, "wx", 0o600));
+  const lockPath = `${reservationPath(key)}.dispatch`;
+  const handle = claimFence(lockPath);
+  claimedSpawnNonces.set(lockPath, { nonce: handle.nonce, ino: handle.ino });
 }
 
 export function releaseHerdrSpawn(key: string) {
-  rmSync(`${reservationPath(key)}.dispatch`, { force: true });
+  const lockPath = `${reservationPath(key)}.dispatch`;
+  const entry = claimedSpawnNonces.get(lockPath);
+  if (!entry) return;
+  releaseFence(lockPath, entry.nonce, entry.ino);
+  claimedSpawnNonces.delete(lockPath);
 }
 
 export async function reserveHerdrHandle(key: string, scope: "pane" | "state" = "pane") {

@@ -96,4 +96,72 @@ describe("subagent worktree helper", () => {
     expect(wtCheck.stdout).toContain(repoDir + "-wt-realname");
     expect(wtCheck.stdout).toContain("wt/realname");
   });
+
+  it("uses native herdr worktree create when herdrRunner succeeds", async () => {
+    const fakeRepo = "/tmp/fake-repo";
+    const gitCalls: string[][] = [];
+    const herdrCalls: string[][] = [];
+    const mockGit = async (args: string[]) => {
+      gitCalls.push(args);
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return { ok: true, stdout: fakeRepo, stderr: "" };
+      return { ok: false, stdout: "", stderr: "" };
+    };
+    const res = await setupWorktree(
+      {
+        worktree: "native-wt",
+        gitRunner: mockGit,
+        herdrRunner: (args) => {
+          herdrCalls.push(args);
+          return {
+            status: 0,
+            stdout: JSON.stringify({ result: { worktree: { path: `${fakeRepo}-wt-native-wt`, branch: "wt/native-wt" } } }),
+            stderr: "",
+          };
+        },
+      },
+      fakeRepo,
+    );
+    expect(res).toEqual({ worktreePath: `${fakeRepo}-wt-native-wt`, worktreeBranch: "wt/native-wt" });
+    expect(herdrCalls).toHaveLength(1);
+    expect(herdrCalls[0]!.slice(0, 2)).toEqual(["worktree", "create"]);
+    expect(gitCalls.some((a) => a[0] === "worktree")).toBe(false);
+  });
+
+  it("falls back to git worktree add only on pre-mutation/unsupported herdr errors, never on timeout", async () => {
+    const fakeRepo = "/tmp/fake-repo";
+    const mockGit = async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--show-toplevel") return { ok: true, stdout: fakeRepo, stderr: "" };
+      if (args[0] === "worktree" && args[1] === "add") return { ok: true, stdout: "", stderr: "" };
+      return { ok: false, stdout: "", stderr: "" };
+    };
+
+    const enoentRes = await setupWorktree(
+      {
+        worktree: "fallback-enoent",
+        gitRunner: mockGit,
+        herdrRunner: () => {
+          const err = new Error("spawnSync herdr ENOENT") as Error & { code: string };
+          err.code = "ENOENT";
+          return { status: null, stdout: "", stderr: "", error: err };
+        },
+      },
+      fakeRepo,
+    );
+    expect(enoentRes).toEqual({ worktreePath: `${fakeRepo}-wt-fallback-enoent`, worktreeBranch: "wt/fallback-enoent" });
+
+    const timeoutRes = await setupWorktree(
+      {
+        worktree: "no-fallback-timeout",
+        gitRunner: mockGit,
+        herdrRunner: () => {
+          const err = new Error("spawnSync herdr ETIMEDOUT") as Error & { code: string };
+          err.code = "ETIMEDOUT";
+          return { status: null, stdout: "", stderr: "", error: err };
+        },
+      },
+      fakeRepo,
+    );
+    expect(timeoutRes.worktreePath).toBeNull();
+    expect(timeoutRes.error).toContain("ETIMEDOUT");
+  });
 });
