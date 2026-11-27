@@ -5,6 +5,7 @@ import {
   ResilientJevClient,
   getGlobalJevClient,
   type ResilientJevOptions,
+  type JevFailure,
   JevError,
 } from "../triage/jev-client.js";
 import {
@@ -20,7 +21,7 @@ import { decideRoute, DEFAULT_POLICY_THRESHOLDS, type PolicyThresholds, type Rou
 import { buildRoutingQuestions, routingAnswersStatus } from "./questions.js";
 
 export type RouteMode = "off" | "shadow" | "active";
-export type RouteReason = "judged" | "shortcut" | "off" | "shadow" | "invalid_answer" | "abstained" | "deadline" | "aborted" | "api" | "network" | "missing_key";
+export type RouteReason = "judged" | "shortcut" | "off" | "shadow" | "invalid_answer" | "abstained" | JevFailure;
 
 export interface RouteSummary {
   tier: RouteTurnDecision["tier"];

@@ -24,7 +24,124 @@ export function getResolvedDeadlineMs(): number {
   return Number.isFinite(envVal) && envVal > 0 ? envVal : FALLBACK_DEADLINE_MS;
 }
 
-export type JevFailure = "deadline" | "aborted" | "api" | "network" | "missing_key";
+export type JevFailure = "deadline" | "aborted" | "api" | "network" | "missing_key" | "unsafe_state";
+
+const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN\s+(?:[A-Z0-9-]+\s+)*PRIVATE KEY(?:\s+BLOCK)?-----/;
+const MAX_GUARD_CHUNK = 7500;
+const GUARD_CHUNK_STEP = 6988;
+
+const EXPLICIT_SECRET_PATTERNS: readonly RegExp[] = [
+  PRIVATE_KEY_BLOCK_PATTERN,
+  /\bsk-[A-Za-z0-9_-]{16,}\b/,
+  /\b(?:gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{20,})\b/,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/,
+  /\bglpat-[A-Za-z0-9_-]{16,}\b/,
+  /\bAIza[0-9A-Za-z_-]{20,}\b/,
+  /\bhf_[A-Za-z0-9]{16,}\b/,
+  /\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b/,
+  /\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
+  /\bBearer[ \t]+(?!\[REDACTED\])[A-Za-z0-9._~+/-]{8,}=*/i,
+  /\bBasic[ \t]+(?!\[REDACTED\])(?=[A-Za-z0-9+/=]*[0-9+/=A-Z])[A-Za-z0-9+/]{8,}={0,2}/,
+];
+
+const URL_CREDENTIALS_PATTERN = /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:\/\/([^\s:@/]+):([^\s@/]{1,512})@/g;
+
+const INLINE_SECRET_KEY =
+  "(?:[a-zA-Z0-9_.-]*(?:pass(?:word|wd|wrd|phrase)|secret|credentials?)|(?:api|access|secret|private)[_-]?key|(?:auth|access|refresh|id|session|oauth|bot|csrf)[_-]?token|token|bearer)";
+
+const INLINE_KEY_VALUE_SECRET = new RegExp(
+  `(?:^|[\\s,;({\\[])["']?${INLINE_SECRET_KEY}["']?\\s*(?:===|==|=>|:=|!==|!=|=|:)\\s*(?:"([^"\\r\\n]*)"|'([^'\\r\\n]*)'|([^\\s"';&,}\\]]+))`,
+  "gi",
+);
+
+const INLINE_FLAG_SECRET = new RegExp(
+  `(?:^|\\s)--[a-z0-9_-]*(?:password|passwd|secret|api-key|private-key|auth-token|access-token|refresh-token|credential|token)\\b\\s+(?:"([^"\\r\\n]*)"|'([^'\\r\\n]*)'|([^\\s"';&,}\\]]+))`,
+  "gi",
+);
+
+const SECRET_PROP_NAME =
+  /^(?:.*(?:pass(?:word|wd|wrd|phrase)|secret|credentials?)|(?:api|access|secret|private)[_-]?key|(?:auth|access|refresh|id|session|oauth|bot|csrf)[_-]?token|token|bearer)$/i;
+
+function isBenignTokenValue(raw: string): boolean {
+  const trimmed = raw.trim();
+  return trimmed === "" || trimmed === "[REDACTED]" || /^(?:true|false|null|undefined)$/i.test(trimmed);
+}
+
+function scanStringForSecrets(text: string): void {
+  if (!text) return;
+  for (let offset = 0; offset < text.length; offset += GUARD_CHUNK_STEP) {
+    const chunk = text.slice(offset, offset + MAX_GUARD_CHUNK);
+    for (const pattern of EXPLICIT_SECRET_PATTERNS) {
+      if (pattern.test(chunk)) {
+        throw new JevError("unsafe_state", "Refusing to send unredacted secret material to TypeSafe Jev");
+      }
+    }
+    URL_CREDENTIALS_PATTERN.lastIndex = 0;
+    for (const match of chunk.matchAll(URL_CREDENTIALS_PATTERN)) {
+      const user = match[1] ?? "";
+      const pass = match[2] ?? "";
+      const isHostAndPort = /^\d{1,5}(?:\/|$)/.test(pass) && (user === "localhost" || user.includes("."));
+      if (!isHostAndPort && !isBenignTokenValue(pass)) {
+        throw new JevError("unsafe_state", "Refusing to send unredacted secret material to TypeSafe Jev");
+      }
+    }
+    for (const pattern of [INLINE_KEY_VALUE_SECRET, INLINE_FLAG_SECRET]) {
+      pattern.lastIndex = 0;
+      for (const match of chunk.matchAll(pattern)) {
+        const value = match[1] ?? match[2] ?? match[3] ?? "";
+        if (!isBenignTokenValue(value)) {
+          throw new JevError("unsafe_state", "Refusing to send unredacted secret material to TypeSafe Jev");
+        }
+      }
+    }
+    if (offset + MAX_GUARD_CHUNK >= text.length) break;
+  }
+}
+
+function scanObjectForSecrets(value: unknown, insideSecretKey = false, seen = new WeakSet<object>()): void {
+  if (value === null || value === undefined || typeof value === "boolean") return;
+  if (typeof value === "string") {
+    if (insideSecretKey && !isBenignTokenValue(value)) {
+      throw new JevError("unsafe_state", "Refusing to send unredacted secret material to TypeSafe Jev");
+    }
+    scanStringForSecrets(value);
+    return;
+  }
+  if (typeof value !== "object") return;
+  if (seen.has(value)) return;
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      scanObjectForSecrets(item, insideSecretKey, seen);
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record).sort()) {
+    const child = record[key];
+    const isSecretProp = SECRET_PROP_NAME.test(key);
+    if (isSecretProp && typeof child === "string" && !isBenignTokenValue(child)) {
+      throw new JevError("unsafe_state", "Refusing to send unredacted secret material to TypeSafe Jev");
+    }
+    scanObjectForSecrets(child, insideSecretKey || isSecretProp, seen);
+  }
+}
+
+function normalizeStateForCheck(state: unknown): unknown {
+  if (state === null || state === undefined || typeof state !== "object") return state;
+  try {
+    return JSON.parse(JSON.stringify(state));
+  } catch {
+    return state;
+  }
+}
+
+export function assertSafeState(state: unknown): void {
+  const normalized = normalizeStateForCheck(state);
+  scanObjectForSecrets(normalized);
+}
 
 export class JevError extends Error {
   constructor(
@@ -135,16 +252,23 @@ export class ResilientJevClient {
     signal?: AbortSignal,
     onLate?: LateHandler<Q>,
   ): Promise<JevOutcome<Q>> {
-    const key = hashKey("jev", { state, questions });
+    let payloadObj: { [key: string]: JsonValue } | undefined;
+    if (typeof state === "object" && state !== null) {
+      const normalized = normalizeStateForCheck(state);
+      assertSafeState(normalized);
+      payloadObj = (normalized === state ? JSON.parse(JSON.stringify(state)) : normalized) as { [key: string]: JsonValue };
+    } else {
+      assertSafeState(state);
+    }
+    const payload = (payloadObj ?? { state: String(state) }) as { [key: string]: JsonValue };
+
+    const key = hashKey("jev", { state: payloadObj ?? state, questions });
     const cached = this.cache.get(key);
     if (cached) {
       return { ...cached, fromCache: true } as JevOutcome<Q>;
     }
 
     const client = this.getClient();
-    const payload = (typeof state === "object" && state !== null
-      ? JSON.parse(JSON.stringify(state))
-      : { state: String(state) }) as { [key: string]: JsonValue };
 
     const started = performance.now();
 
