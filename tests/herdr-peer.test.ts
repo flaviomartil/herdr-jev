@@ -500,3 +500,156 @@ process.exit(1);
   ]);
   rmSync(dir, { recursive: true, force: true });
 });
+
+test("broadcast includes --tab workers via listPanes and reconciles moved terminalId", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "herdr-tab-fanout-"));
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  process.env.HERDR_JEV_STATE_DIR = dir;
+  try {
+    const callerPane = "caller-pane";
+    writeGridWorkers(callerPane, [
+      { paneId: "tab-worker-pane", handle: "tab-agent", layout: "tab" },
+      { paneId: "old-pane-id", terminalId: "term-moved", handle: "moved-agent", layout: "grid" },
+    ]);
+
+    const prompted: string[] = [];
+    const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+    const herdr = {
+      listPanes: async () => ok(JSON.stringify({
+        result: {
+          panes: [
+            { pane_id: callerPane, terminal_id: "term-caller" },
+            { pane_id: "tab-worker-pane", terminal_id: "term-tab" },
+            { pane_id: "new-pane-id", terminal_id: "term-moved" },
+          ],
+        },
+      })),
+      paneLayout: async () => {
+        throw new Error("paneLayout should not be preferred over listPanes");
+      },
+      getAgent: async (target: string) => {
+        if (target === "tab-worker-pane" || target === "tab-agent") {
+          return ok(JSON.stringify({ result: { agent: { name: "tab-agent", pane_id: "tab-worker-pane", agent_status: "idle" } } }));
+        }
+        if (target === "new-pane-id" || target === "moved-agent") {
+          return ok(JSON.stringify({ result: { agent: { name: "moved-agent", pane_id: "new-pane-id", agent_status: "idle" } } }));
+        }
+        return { ok: false, code: 1, stdout: "", stderr: "not found" };
+      },
+      readAgent: async () => ok("ready"),
+      prompt: async (input: any) => {
+        prompted.push(input.target);
+        return ok(JSON.stringify({ state: "working" }));
+      },
+    } as unknown as HerdrClient;
+
+    const result = JSON.parse(await converseWithPeer({ all: true, text: "sync", callerPaneId: callerPane }, herdr));
+    expect(result).toEqual([
+      { agent: "tab-agent", paneId: "tab-worker-pane", acknowledged: true, state: "working" },
+      { agent: "moved-agent", paneId: "new-pane-id", acknowledged: true, state: "working" },
+    ]);
+    expect(prompted).toEqual(["tab-agent", "moved-agent"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedStateDir === undefined) delete process.env.HERDR_JEV_STATE_DIR;
+    else process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+  }
+});
+
+test("converseWithPeer holds on human draft in ANSI prompt box and allows faint placeholder", async () => {
+  const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+  let promptCalls = 0;
+
+  const withHumanDraft = {
+    getAgent: async () => ok(JSON.stringify({ result: { agent: { pane_id: "draft-pane", agent_status: "idle" } } })),
+    readAgent: async (_t: string, _l?: number, _s?: string, format?: string) => {
+      expect(format).toBe("ansi");
+      return ok("\x1b[0m❯ unfinished human message\n? for shortcuts");
+    },
+    prompt: async () => { promptCalls++; return ok(JSON.stringify({ state: "working" })); },
+  } as unknown as HerdrClient;
+
+  await expect(converseWithPeer({ target: "draft-peer", text: "hello" }, withHumanDraft)).rejects.toThrow("draft_hold");
+  expect(promptCalls).toBe(0);
+
+  const withPlaceholder = {
+    getAgent: async () => ok(JSON.stringify({ result: { agent: { pane_id: "placeholder-pane", agent_status: "idle" } } })),
+    readAgent: async () => ok("\x1b[0m❯ \x1b[2mAsk Claude to do anything\x1b[0m\n? for shortcuts"),
+    prompt: async () => { promptCalls++; return ok(JSON.stringify({ state: "working" })); },
+  } as unknown as HerdrClient;
+
+  const sent = JSON.parse(await converseWithPeer({ target: "placeholder-peer", text: "hello" }, withPlaceholder));
+  expect(sent.acknowledged).toBe(true);
+  expect(promptCalls).toBe(1);
+});
+
+test("converseWithPeer reports classified error category when prompt fails", async () => {
+  const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+  const herdr = {
+    getAgent: async () => ok(JSON.stringify({ result: { agent: { pane_id: "err-pane", agent_status: "idle" } } })),
+    readAgent: async () => ok("ready"),
+    prompt: async () => ({ ok: false, code: 1, stdout: JSON.stringify({ error: { code: "agent_not_ready", message: "warming up" } }), stderr: "" }),
+  } as unknown as HerdrClient;
+
+  await expect(converseWithPeer({ target: "err-peer", text: "hello" }, herdr)).rejects.toThrow(
+    /Message acknowledgement uncertain \(temporary_no_event:agent_not_ready\).*warming up/,
+  );
+});
+
+test("broadcastPeerMessage propagates fail-closed caller resolution in HERDR_ENV=1 and excludes by record.handle", async () => {
+  const savedHerdrEnv = process.env.HERDR_ENV;
+  const savedPaneId = process.env.HERDR_PANE_ID;
+  const savedSourcePaneId = process.env.HERDR_JEV_SOURCE_PANE_ID;
+  process.env.HERDR_ENV = "1";
+  delete process.env.HERDR_PANE_ID;
+  delete process.env.HERDR_JEV_SOURCE_PANE_ID;
+  try {
+    await expect(converseWithPeer({ all: true, text: "hello" })).rejects.toThrow("Caller pane unavailable");
+  } finally {
+    if (savedHerdrEnv === undefined) delete process.env.HERDR_ENV;
+    else process.env.HERDR_ENV = savedHerdrEnv;
+    if (savedPaneId === undefined) delete process.env.HERDR_PANE_ID;
+    else process.env.HERDR_PANE_ID = savedPaneId;
+    if (savedSourcePaneId === undefined) delete process.env.HERDR_JEV_SOURCE_PANE_ID;
+    else process.env.HERDR_JEV_SOURCE_PANE_ID = savedSourcePaneId;
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "herdr-handle-excl-"));
+  const savedStateDir = process.env.HERDR_JEV_STATE_DIR;
+  process.env.HERDR_JEV_STATE_DIR = dir;
+  try {
+    const callerPane = "caller-pane";
+    writeGridWorkers(callerPane, [
+      { paneId: "w-keep", handle: "keep-handle" },
+      { paneId: "w-skip", handle: "skip-handle" },
+    ]);
+    const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+    const prompted: string[] = [];
+    const herdr = {
+      getAgent: async (target: string) => ok(JSON.stringify({ result: { agent: { pane_id: target, agent_status: "idle" } } })),
+      readAgent: async () => ok("ready"),
+      prompt: async (input: any) => { prompted.push(input.target); return ok(JSON.stringify({ state: "working" })); },
+    } as unknown as HerdrClient;
+    const result = JSON.parse(await converseWithPeer({ all: true, text: "hi", exclude: "skip-handle", callerPaneId: callerPane }, herdr));
+    expect(result).toEqual([{ agent: "w-keep", paneId: "w-keep", acknowledged: true, state: "working" }]);
+    expect(prompted).toEqual(["w-keep"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    if (savedStateDir === undefined) delete process.env.HERDR_JEV_STATE_DIR;
+    else process.env.HERDR_JEV_STATE_DIR = savedStateDir;
+  }
+});
+
+test("converseWithPeer scopes prompt box marker detection using agent clientKind", async () => {
+  const ok = (stdout: string) => ({ ok: true, code: 0, stdout, stderr: "" });
+  let promptCalls = 0;
+  const claudePeer = {
+    getAgent: async () => ok(JSON.stringify({ result: { agent: { agent: "claude", pane_id: "claude-pane", agent_status: "idle" } } })),
+    readAgent: async () => ok("\x1b[0m› quoted codex line\n❯ \x1b[2mAsk Claude\x1b[0m"),
+    prompt: async () => { promptCalls++; return ok(JSON.stringify({ state: "working" })); },
+  } as unknown as HerdrClient;
+
+  const res = JSON.parse(await converseWithPeer({ target: "claude-peer", text: "go" }, claudePeer));
+  expect(res.acknowledged).toBe(true);
+  expect(promptCalls).toBe(1);
+});

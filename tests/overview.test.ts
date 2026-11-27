@@ -149,3 +149,56 @@ test("cleanModel and readOverview trim leading zero-width spaces and whitespace 
   const agents = await readOverview(runCommand);
   expect(agents[0].model).toBe("gpt-6.1-sol");
 });
+
+test("matchRunForPane and readOverview fail closed on ambiguous sibling CWDs without direct pane match", async () => {
+  const now = 1_000_000;
+  const runs = [
+    {
+      id: "run-shared-cwd",
+      timestampMs: now - 10_000,
+      mtimeMs: now - 10_000,
+      projection: {
+        cwd: "/tmp/shared",
+        tasks: [{ id: "implementer", state: "done" }],
+      },
+    },
+    {
+      id: "run-direct-p1",
+      timestampMs: now - 20_000,
+      mtimeMs: now - 20_000,
+      projection: {
+        cwd: "/tmp/shared",
+        tasks: [{ id: "reviewer", state: "working", attempts: [{ pane: "p1" }] }],
+      },
+    },
+  ];
+
+  expect(matchRunForPane(runs, { pane: "p2", cwd: "/tmp/shared" }, { siblingCwds: ["/tmp/shared"] })?.id).toBe("run-shared-cwd");
+  expect(matchRunForPane(runs, { pane: "p2", cwd: "/tmp/shared/" }, { siblingCwds: ["/tmp/shared"] })?.id).toBe("run-shared-cwd");
+  expect(matchRunForPane(runs, { pane: "p2", cwd: "/tmp/shared" }, { siblingCwds: ["/tmp/shared", "/tmp/shared/"] })).toBeUndefined();
+  expect(matchRunForPane(runs, { pane: "p1", cwd: "/tmp/shared" }, { siblingCwds: ["/tmp/shared", "/tmp/shared"] })?.id).toBe("run-direct-p1");
+
+  const runCommand = async (argv: readonly string[]) => ({
+    ok: true,
+    code: 0,
+    stderr: "",
+    stdout: argv.includes("snapshot")
+      ? JSON.stringify({
+          result: {
+            snapshot: {
+              workspaces: [{ workspace_id: "w1", label: "Shared" }],
+              agents: [
+                { workspace_id: "w1", pane_id: "p1", cwd: "/tmp/shared", agent: "codex", agent_status: "working", tokens: {} },
+                { workspace_id: "w1", pane_id: "p2", cwd: "/tmp/shared", agent: "claude", agent_status: "idle", tokens: {} },
+              ],
+            },
+          },
+        })
+      : "main\n",
+  });
+
+  const agents = await readOverview(runCommand, runs, now);
+  const byPane = new Map(agents.map((a) => [a.pane, a]));
+  expect(byPane.get("p1")?.run).toBe("reviewer:working 20s ago");
+  expect(byPane.get("p2")?.run).toBe("");
+});

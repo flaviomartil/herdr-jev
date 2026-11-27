@@ -385,3 +385,33 @@ test("buildAgentsView drops dead worker panes not in client and persists pruned 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("buildAgentsView avoids re-attaching ambiguous CWD runs suppressed by overviewData", async () => {
+  const workers: GridWorkerRecord[] = [
+    { paneId: "w-a", handle: "h-a", cwd: "/repo/shared" },
+    { paneId: "w-b", handle: "h-b", cwd: "/repo/shared" },
+  ];
+  const fakeGit: GitRunner = async (args) =>
+    args[0] === "rev-parse" && args[1] === "--show-toplevel"
+      ? { ok: true, stdout: "/repo/shared\n", stderr: "" }
+      : { ok: true, stdout: "", stderr: "" };
+  const runs = [
+    {
+      id: "run-shared",
+      timestampMs: 1000,
+      mtimeMs: 1000,
+      projection: { cwd: "/repo/shared", tasks: [{ id: "impl", state: "done" }] },
+    },
+  ];
+  const groups = await buildAgentsView(undefined, {
+    workers,
+    git: fakeGit,
+    overviewData: [
+      { pane: "w-a", cwd: "/repo/shared", state: "idle", agent: "codex", run: "" },
+      { pane: "w-b", cwd: "/repo/shared", state: "idle", agent: "claude", run: "" },
+    ],
+    runs,
+    now: 1000,
+  });
+  expect(groups[0].rows.map((r) => r.run)).toEqual([null, null]);
+});

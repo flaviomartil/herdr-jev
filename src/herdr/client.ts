@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { sep } from "node:path";
 import type { HerdrCommandResult } from "../types/index.js";
+import { classifyHerdrError } from "./errors.js";
 import { ANSI_PATTERN } from "./pane-text.js";
 import { isTestGuardActive } from "./state-dir.js";
 
@@ -213,9 +214,13 @@ export function readHerdrObservedState(result: HerdrCommandResult): HerdrObserve
   return null;
 }
 
+const LEGACY_UNKNOWN_FAILURE_PATTERN = /(?:transport|timeout|timed[ -]?out|econn|eof|socket|spawn|enoent|closed|agent_not_ready|agent_blocked|agent_prompt_stalled)/i;
+
 export function classifyHerdrCommandFailure(result: HerdrCommandResult): "rejected" | "unknown" {
-  const output = `${result.stdout}\n${result.stderr}`.toLowerCase();
-  return /(?:transport|timeout|timed[ -]?out|econn|eof|socket|spawn|enoent|closed|agent_not_ready|agent_blocked|agent_prompt_stalled)/.test(output) ? "unknown" : "rejected";
+  const classified = classifyHerdrError(result);
+  if (classified.code !== null) return classified.legacyAck;
+  const output = `${result.stdout}\n${result.stderr}`;
+  return LEGACY_UNKNOWN_FAILURE_PATTERN.test(output) ? "unknown" : "rejected";
 }
 
 export type PaneBlockKind = "trust" | "selection";

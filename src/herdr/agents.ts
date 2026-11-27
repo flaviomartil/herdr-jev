@@ -256,6 +256,9 @@ export async function buildAgentsView(
   }
 
   const groupsMap = new Map<string, AgentRow[]>();
+  const siblingCwds: Array<string | null> = overviewData.length > 0
+    ? overviewData.map((a) => (typeof a?.cwd === "string" ? a.cwd : null))
+    : workers.map((w) => (typeof w.cwd === "string" ? w.cwd : null));
 
   for (let i = 0; i < workers.length; i++) {
     const worker = workers[i];
@@ -309,15 +312,15 @@ export async function buildAgentsView(
     }
 
     let run: string | null = null;
-    if (overviewAgent?.run && typeof overviewAgent.run === "string" && overviewAgent.run.length > 0) {
-      run = overviewAgent.run;
+    if (overviewAgent && typeof overviewAgent.run === "string") {
+      run = overviewAgent.run.length > 0 ? overviewAgent.run : null;
     } else {
       const matched = matchRunForPane(runs, {
         pane: worker.paneId,
         handle,
         agent: client,
         cwd: workerCwd,
-      });
+      }, { siblingCwds });
       if (matched) {
         const formatted = formatOverviewRun(matched, deps?.now);
         run = formatted.length > 0 ? formatted : null;

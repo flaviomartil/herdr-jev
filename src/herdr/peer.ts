@@ -3,10 +3,12 @@ import { resolveStageSpec } from "../pipelines/matrix.js";
 import { resolveDelegatedClient, parseCrossHarnessConfig } from "../delegation/cross-harness.js";
 import { resolveBaseClientKind, BASE_CLIENTS, loadClientAliases } from "../config/aliases.js";
 import { classifyPaneBlock, createHerdrClient, readHerdrObservedState, type HerdrClient } from "./client.js";
+import { classifyHerdrError } from "./errors.js";
+import { inspectPromptBoxAnsi } from "./prompt-box.js";
 import type { ClientKind, RoleKind, ReasoningEffort } from "../types/index.js";
 import { reserveHerdrHandle } from "./reservation.js";
 import { hasExhaustedUsageQuota } from "../harness/bridge.js";
-import { readGridWorkers } from "./launcher.js";
+import { readGridWorkerRecords } from "./launcher.js";
 import { resolveHerdrContext } from "./context.js";
 
 export async function resolvePeerStage(input: { prompt: string; source: ClientKind; target?: ClientKind; role?: RoleKind; model?: string; effort?: string; crossHarness?: string }) {
@@ -68,30 +70,114 @@ export async function broadcastPeerMessage(
 
   let callerPaneId = input.callerPaneId;
   if (!callerPaneId) {
-    try {
+    if (process.env.HERDR_ENV === "1") {
       const context = await resolveHerdrContext({});
       callerPaneId = context.sourcePaneId;
-    } catch {}
-  }
-  if (!callerPaneId) {
-    callerPaneId = process.env.HERDR_PANE_ID ?? process.env.HERDR_JEV_SOURCE_PANE_ID;
+    } else {
+      try {
+        const context = await resolveHerdrContext({});
+        callerPaneId = context.sourcePaneId;
+      } catch {}
+      if (!callerPaneId) {
+        callerPaneId = process.env.HERDR_PANE_ID ?? process.env.HERDR_JEV_SOURCE_PANE_ID;
+      }
+    }
   }
   if (!callerPaneId) throw new Error("Caller pane unavailable");
 
-  let workers = readGridWorkers(callerPaneId);
-  if (herdr.paneLayout) {
-    const layoutResult = await herdr.paneLayout(callerPaneId);
-    if (layoutResult.ok) {
-      try {
-        const parsed = JSON.parse(layoutResult.stdout);
-        const layout = parsed.result?.layout ?? parsed.layout ?? parsed;
-        const panes = Array.isArray(layout.panes) ? layout.panes : [];
-        const liveIds = new Set(panes.map((p: any) => p.pane_id ?? p.id).filter(Boolean));
-        workers = workers.filter((id) => liveIds.has(id));
-      } catch {}
+  const records = readGridWorkerRecords(callerPaneId);
+  let livePaneIds: Set<string> | null = null;
+  const byTerminal = new Map<string, string>();
+  let liveScope: "all" | "tab" = "all";
+
+  const parsePaneSet = (stdout: string): { paneIds: Set<string>; terminalMap: Map<string, string> } | null => {
+    try {
+      const parsed = JSON.parse(stdout);
+      const rawPanes =
+        parsed?.result?.panes
+        ?? parsed?.panes
+        ?? parsed?.result?.layout?.panes
+        ?? parsed?.layout?.panes
+        ?? (Array.isArray(parsed?.result) ? parsed.result : Array.isArray(parsed) ? parsed : null);
+      if (!Array.isArray(rawPanes)) return null;
+      const paneIds = new Set<string>();
+      const terminalMap = new Map<string, string>();
+      for (const p of rawPanes) {
+        if (typeof p === "string" && p) {
+          paneIds.add(p);
+          continue;
+        }
+        if (!p || typeof p !== "object") continue;
+        const pid = p.pane_id ?? p.id;
+        if (typeof pid === "string" && pid) {
+          paneIds.add(pid);
+          const tid = p.terminal_id ?? p.terminalId;
+          if (typeof tid === "string" && tid) terminalMap.set(tid, pid);
+        }
+      }
+      return { paneIds, terminalMap };
+    } catch {
+      return null;
+    }
+  };
+
+  if (herdr.listPanes) {
+    try {
+      const listResult = await herdr.listPanes();
+      if (listResult.ok) {
+        const parsed = parsePaneSet(listResult.stdout);
+        if (parsed) {
+          livePaneIds = parsed.paneIds;
+          for (const [tid, pid] of parsed.terminalMap) byTerminal.set(tid, pid);
+        }
+      }
+    } catch {}
+  }
+
+  if (livePaneIds === null && herdr.paneLayout) {
+    try {
+      const layoutResult = await herdr.paneLayout(callerPaneId);
+      if (layoutResult.ok) {
+        const parsed = parsePaneSet(layoutResult.stdout);
+        if (parsed) {
+          livePaneIds = parsed.paneIds;
+          liveScope = "tab";
+          for (const [tid, pid] of parsed.terminalMap) byTerminal.set(tid, pid);
+        }
+      }
+    } catch {}
+  }
+
+  const resolvedWorkers: Array<{ paneId: string; recordHandle?: string | null }> = [];
+  const seenWorkers = new Set<string>();
+  for (const record of records) {
+    let targetId: string | null = null;
+    if (livePaneIds === null) {
+      targetId = record.paneId;
+    } else if (livePaneIds.has(record.paneId)) {
+      targetId = record.paneId;
+    } else if (record.terminalId && byTerminal.has(record.terminalId)) {
+      targetId = byTerminal.get(record.terminalId)!;
+    } else if (liveScope === "tab" && record.layout === "tab") {
+      targetId = record.paneId;
+    } else if (herdr.getAgent) {
+      const check = await herdr.getAgent(record.paneId);
+      if (check?.ok) {
+        let checkedPane = record.paneId;
+        try {
+          const parsed = JSON.parse(check.stdout);
+          const agentPane = parsed?.result?.agent?.pane_id ?? parsed?.agent?.pane_id;
+          if (typeof agentPane === "string" && agentPane) checkedPane = agentPane;
+        } catch {}
+        targetId = checkedPane;
+      }
+    }
+    if (targetId && targetId !== callerPaneId && !seenWorkers.has(targetId)) {
+      seenWorkers.add(targetId);
+      resolvedWorkers.push({ paneId: targetId, recordHandle: record.handle });
     }
   }
-  workers = workers.filter((id) => id !== callerPaneId);
+  const workers = resolvedWorkers;
 
   const excluded = new Set<string>();
   if (input.exclude) {
@@ -105,7 +191,8 @@ export async function broadcastPeerMessage(
   const results: PeerBroadcastResult[] = [];
   const deadline = Date.now() + timeoutMs;
 
-  for (const workerPaneId of workers) {
+  for (const worker of workers) {
+    const workerPaneId = worker.paneId;
     let agentName = workerPaneId;
     let paneId = workerPaneId;
     const identity = await herdr.getAgent?.(workerPaneId);
@@ -122,7 +209,12 @@ export async function broadcastPeerMessage(
     }
 
     if (paneId === callerPaneId || agentName === callerPaneId) continue;
-    if (excluded.has(agentName) || excluded.has(paneId) || excluded.has(workerPaneId)) continue;
+    if (
+      excluded.has(agentName) ||
+      excluded.has(paneId) ||
+      excluded.has(workerPaneId) ||
+      (worker.recordHandle && excluded.has(worker.recordHandle))
+    ) continue;
 
     const remainingTimeout = deadline - Date.now();
     if (remainingTimeout <= 0) {
@@ -154,6 +246,8 @@ export async function broadcastPeerMessage(
         state = "timeout";
       } else if (/blocked|trust/i.test(message)) {
         state = "blocked";
+      } else if (/draft_hold/i.test(message)) {
+        state = "draft_hold";
       } else {
         try {
           const status = await herdr.getAgent?.(sendTarget);
@@ -204,7 +298,15 @@ export async function converseWithPeer(
   const identity = await herdr.getAgent?.(target);
   if (!identity?.ok) throw new Error("Cannot resolve the existing peer");
   let pane: string | undefined;
-  try { pane = JSON.parse(identity.stdout).result?.agent?.pane_id; } catch {}
+  let clientKind: string | undefined;
+  try {
+    const parsedIdentity = JSON.parse(identity.stdout);
+    const identityAgent = parsedIdentity?.result?.agent ?? parsedIdentity?.agent;
+    pane = identityAgent?.pane_id;
+    if (typeof identityAgent?.agent === "string" && identityAgent.agent) {
+      clientKind = identityAgent.agent === "agy" ? "antigravity" : identityAgent.agent;
+    }
+  } catch {}
   if (!pane) throw new Error("Peer pane identity unavailable");
   const snapshot = async (state: ReturnType<typeof readHerdrObservedState>) => {
     const screen = await herdr.readAgent!(target, lines, state === "idle" || state === "done" ? "recent" : "visible");
@@ -227,14 +329,41 @@ export async function converseWithPeer(
     if (!input.text.trim()) throw new Error("A nonempty message is required");
     const status = await herdr.getAgent?.(target);
     const state = status?.ok ? readHerdrObservedState(status) : null;
+    if (status?.ok) {
+      try {
+        const parsedStatus = JSON.parse(status.stdout);
+        const statusAgent = parsedStatus?.result?.agent ?? parsedStatus?.agent;
+        if (typeof statusAgent?.agent === "string" && statusAgent.agent) {
+          clientKind = statusAgent.agent === "agy" ? "antigravity" : statusAgent.agent;
+        }
+      } catch {}
+    }
     if (state !== "idle" && state !== "done") throw new Error(`Peer is ${state ?? "unknown"}; read or wait before sending another turn`);
-    const before = await herdr.readAgent?.(target);
+    let before = await herdr.readAgent?.(target, undefined, undefined, "ansi");
+    if (before && !before.ok && !/agent_not_found|pane_not_found/i.test(`${before.stdout}\n${before.stderr}`)) {
+      const plainFallback = await herdr.readAgent?.(target);
+      if (plainFallback?.ok) before = plainFallback;
+    }
     if (!before?.ok) throw new Error(before?.stderr || "Peer read unavailable");
     const block = classifyPaneBlock(before);
     if (block === "trust") throw new Error("Resolve repository trust in the peer pane before messaging");
     if (block === "selection") throw new Error("Resolve the selection menu in the peer pane before messaging");
+    const hasAnsi = /\x1b\[/.test(before.stdout);
+    const hasExplicitDraft = /\[Pasted text #\d+/i.test(before.stdout) || /(?:^|\n)\s*(?:[│┃]\s*)?[❯›]\s*!/.test(before.stdout);
+    if (hasAnsi || hasExplicitDraft) {
+      const promptBox = inspectPromptBoxAnsi(before.stdout, { clientKind, agentStatus: state });
+      if (promptBox.state === "human_draft" && promptBox.shouldHold) {
+        throw new Error("Human draft present in peer prompt box (draft_hold); clear or submit it before messaging");
+      }
+    }
     const sent = await herdr.prompt({ target, text: input.text, wait: true, waitForStart: !input.wait, waitForReply: input.wait, timeoutMs });
-    if (!sent.ok) throw new Error(`Message acknowledgement uncertain; inspect the existing peer before retrying: ${sent.stderr || sent.stdout}`);
+    if (!sent.ok) {
+      const classified = classifyHerdrError(sent);
+      const detail = classified.message || sent.stderr || sent.stdout || "no acknowledgement";
+      throw new Error(
+        `Message acknowledgement uncertain (${classified.category}${classified.code ? `:${classified.code}` : ""}); inspect the existing peer before retrying: ${detail}`,
+      );
+    }
     if (!input.wait) return JSON.stringify({ target, paneId: pane, acknowledged: true, state: "working" });
     const completed = readHerdrObservedState(sent);
     if (completed !== "idle" && completed !== "done") throw new Error(`Peer response is ${completed ?? "unknown"}; inspect the existing peer`);

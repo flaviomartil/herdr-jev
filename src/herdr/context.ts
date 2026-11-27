@@ -1,9 +1,102 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createProcessCommandAdapter, type RunCommand } from "./client.js";
+import { classifyHerdrError } from "./errors.js";
 import type { DelegationInput } from "../harness/bridge.js";
 import { loadClientAliases } from "../config/aliases.js";
+
+export interface CallerAncestryResult {
+  verified: boolean;
+  skipped?: boolean;
+  shellPid?: number;
+  reason?: string;
+}
+
+function readParentPid(pid: number): number | null {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const rparen = stat.lastIndexOf(")");
+    if (rparen !== -1) {
+      const fields = stat.slice(rparen + 2).trim().split(/\s+/);
+      const ppid = Number.parseInt(fields[1] ?? "", 10);
+      if (Number.isInteger(ppid) && ppid > 0) return ppid;
+    }
+  } catch {}
+  try {
+    const res = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 2000,
+      maxBuffer: 64 * 1024,
+    });
+    if (res.status === 0) {
+      const ppid = Number.parseInt(res.stdout.trim(), 10);
+      if (Number.isInteger(ppid) && ppid > 0) return ppid;
+    }
+  } catch {}
+  return null;
+}
+
+function collectAncestorPids(
+  startPid: number,
+  getParentPid: (pid: number) => number | null = readParentPid,
+): number[] {
+  const ancestors: number[] = [];
+  const seen = new Set<number>();
+  let current: number | null = startPid;
+  for (let depth = 0; depth < 64 && current && current > 1 && !seen.has(current); depth++) {
+    seen.add(current);
+    ancestors.push(current);
+    current = getParentPid(current);
+  }
+  return ancestors;
+}
+
+/**
+ * Verify that the caller process descends from the pane's shell_pid reported by
+ * `herdr pane process-info`, skipping gracefully when the command is unavailable.
+ */
+export async function verifyCallerPaneAncestry(
+  paneId: string,
+  runCommand: RunCommand,
+  deps?: {
+    ancestorPids?: readonly number[];
+    pid?: number;
+    getParentPid?: (pid: number) => number | null;
+    herdrBin?: string;
+  },
+): Promise<CallerAncestryResult> {
+  const herdrBin = deps?.herdrBin || process.env.HERDR_BIN_PATH || "herdr";
+  const res = await runCommand([herdrBin, "pane", "process-info", "--pane", paneId]);
+  if (!res.ok) {
+    const classified = classifyHerdrError(res);
+    if (classified.code === "unknown_command" || classified.code === "unsupported") {
+      return { verified: true, skipped: true, reason: classified.code };
+    }
+    return { verified: false, skipped: false, reason: classified.code ?? "process_info_failed" };
+  }
+  let parsed: any;
+  try {
+    parsed = JSON.parse(res.stdout);
+  } catch {
+    return { verified: false, skipped: false, reason: "invalid_process_info" };
+  }
+  const shellPid = parsed?.result?.process_info?.shell_pid ?? parsed?.process_info?.shell_pid;
+  if (shellPid === undefined || shellPid === null) {
+    return { verified: true, skipped: true, reason: "missing_shell_pid" };
+  }
+  if (typeof shellPid !== "number" || !Number.isInteger(shellPid) || shellPid <= 0) {
+    return { verified: false, skipped: false, reason: "invalid_shell_pid" };
+  }
+  const ancestors = deps?.ancestorPids
+    ? [...deps.ancestorPids]
+    : collectAncestorPids(deps?.pid ?? process.pid, deps?.getParentPid);
+  if (ancestors.includes(shellPid)) {
+    return { verified: true, skipped: false, shellPid };
+  }
+  return { verified: false, skipped: false, shellPid, reason: "ancestry_mismatch" };
+}
 
 export async function resolveHerdrContext(input: {
   client?: string; model?: string; availableModels?: string[]; sourcePaneId?: string;
@@ -52,7 +145,16 @@ export async function resolveHerdrContext(input: {
           if (/^[a-zA-Z0-9:_-]+$/.test(trimmed)) currentId = trimmed;
         }
       }
-      if (!currentId && env.HERDR_PANE_ID) currentId = env.HERDR_PANE_ID;
+      if (!currentId && env.HERDR_PANE_ID) {
+        const ancestry = await verifyCallerPaneAncestry(env.HERDR_PANE_ID, runCommand, {
+          herdrBin: env.HERDR_BIN_PATH,
+        });
+        if (ancestry.verified) {
+          currentId = env.HERDR_PANE_ID;
+        } else if (!triedIds.includes(env.HERDR_PANE_ID)) {
+          triedIds.push(env.HERDR_PANE_ID);
+        }
+      }
       if (currentId) {
         agent = await tryPane(currentId);
         if (agent) sourcePaneId = currentId;
@@ -71,13 +173,21 @@ export async function resolveHerdrContext(input: {
           const targetCwd = pluginContext?.focused_pane_cwd ?? process.cwd();
           const targetClient = (input.client === "agy" ? "antigravity" : input.client) ?? "claude";
           const aliases = loadClientAliases();
-          const match = agents.find((a: any) => {
+          const normalizedTargetCwd = targetCwd ? targetCwd.replace(/\/+$/, "") || "/" : "";
+          const matches = agents.filter((a: any) => {
             const aCwd = a.foreground_cwd || a.cwd;
             const aClient = a.agent === "agy" ? "antigravity" : a.agent;
-            const cwdMatches = Boolean(aCwd && targetCwd && aCwd.replace(/\/+$/, "") === targetCwd.replace(/\/+$/, ""));
+            const normalizedACwd = aCwd ? aCwd.replace(/\/+$/, "") || "/" : "";
+            const cwdMatches = Boolean(normalizedACwd && normalizedTargetCwd && normalizedACwd === normalizedTargetCwd);
             const clientMatches = aClient === targetClient || aliases[targetClient] === aClient || a.agent === targetClient;
             return Boolean(a.pane_id && cwdMatches && clientMatches);
           });
+          if (matches.length > 1) {
+            throw new Error(
+              `Ambiguous source pane for ${targetClient} in ${targetCwd}; candidates: ${matches.map((m: any) => m.pane_id).join(", ")}. Pass --source-pane or set HERDR_JEV_SOURCE_PANE_ID`,
+            );
+          }
+          const match = matches[0];
           if (match?.pane_id) {
             agent = await tryPane(match.pane_id);
             if (agent) sourcePaneId = match.pane_id;
