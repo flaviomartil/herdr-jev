@@ -79,7 +79,7 @@ export function render(verdict: Verdict, hook: string | undefined, client: Clien
     return { code: 0, stdout: `${JSON.stringify(out)}\n`, stderr: "" };
   }
   if (verdict.decision === "warn") return { code: 0, stdout: "", stderr: `${verdict.reason}\n` };
-  if (verdict.context?.length) {
+  if (verdict.decision === "allow" && verdict.context?.length) {
     const out = { hookSpecificOutput: { hookEventName: hook ?? "UserPromptSubmit", additionalContext: verdict.context.join("\n") } };
     return { code: 0, stdout: `${JSON.stringify(out)}\n`, stderr: "" };
   }
