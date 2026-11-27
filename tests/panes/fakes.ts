@@ -22,6 +22,12 @@ printf '%s\\n' "herdr $*" >> "$FAKE_LOG"
 n=$(cat "$FAKE_DIR/herdr.n" 2>/dev/null || echo 0)
 case "$1 $2" in
   "pane split") n=$((n+1)); echo $n > "$FAKE_DIR/herdr.n"; echo "{\\"result\\":{\\"pane\\":{\\"pane_id\\":\\"p-$n\\"}}}";;
+  "pane focus")
+    case " $* " in
+      *" --direction "*) ;;
+      *) echo "error: the following required arguments were not provided: --direction <DIRECTION>" >&2; exit 2 ;;
+    esac ;;
+  "agent focus") ;;
   "tab create") echo '{"result":{"tab":{"tab_id":"t-1"},"root_pane":{"pane_id":"p-root"}}}';;
   "tab list") echo '{"result":{"tabs":[{"tab_id":"t-1","label":"feat"}]}}';;
   "pane read") if [ -n "$FAKE_PANE_GONE" ]; then echo "pane not found" >&2; exit 1; fi; echo "screen";;

@@ -76,11 +76,63 @@ export async function reportProgress(
   const release = await reserve(`progress:${input.pane}`);
   try {
     const herdr = process.env.HERDR_BIN_PATH || "herdr";
+    const envTerminalId = process.env.HERDR_TERMINAL_ID?.trim() || undefined;
+    let agent: any;
     const result = await run([herdr, "agent", "get", input.pane]);
-    if (!result.ok) throw new Error("Progress source unavailable");
-    const agent = JSON.parse(result.stdout).result?.agent;
+    if (result.ok) {
+      try {
+        agent = JSON.parse(result.stdout).result?.agent;
+      } catch {
+        throw new Error("Progress source unavailable");
+      }
+      if (agent && envTerminalId && agent.terminal_id !== envTerminalId) {
+        throw new Error("Progress requires a verified agent and terminal identity");
+      }
+    } else if (envTerminalId) {
+      let currentPaneId: string | undefined;
+      const currentRes = await run([herdr, "pane", "current"]);
+      if (currentRes.ok) {
+        try {
+          const curPane = JSON.parse(currentRes.stdout).result?.pane;
+          if (curPane?.terminal_id === envTerminalId && typeof curPane?.pane_id === "string" && curPane.pane_id) {
+            currentPaneId = curPane.pane_id;
+          }
+        } catch {
+        }
+      }
+      if (currentPaneId) {
+        const curAgentRes = await run([herdr, "agent", "get", currentPaneId]);
+        if (curAgentRes.ok) {
+          try {
+            agent = JSON.parse(curAgentRes.stdout).result?.agent;
+          } catch {
+            agent = undefined;
+          }
+        }
+      }
+      if (!agent) {
+        const listed = await run([herdr, "agent", "list"]);
+        if (listed.ok) {
+          try {
+            const parsed = JSON.parse(listed.stdout);
+            const agents = parsed?.result?.agents ?? parsed?.agents;
+            if (Array.isArray(agents)) {
+              const matches = agents.filter((a: any) => a?.terminal_id === envTerminalId);
+              if (matches.length === 1) agent = matches[0];
+            }
+          } catch {
+          }
+        }
+      }
+    }
+    if (!agent) throw new Error("Progress source unavailable");
     const source = identity(agent);
-    if (!source || agent.pane_id !== input.pane) throw new Error("Progress requires a verified agent and terminal identity");
+    const matchesPane = agent.pane_id === input.pane;
+    const matchesEnvTerminal = Boolean(envTerminalId && source?.terminalId === envTerminalId);
+    if (!source || (envTerminalId && source.terminalId !== envTerminalId) || (!matchesPane && !matchesEnvTerminal)) {
+      throw new Error("Progress requires a verified agent and terminal identity");
+    }
+    const targetPane = typeof agent.pane_id === "string" && agent.pane_id ? agent.pane_id : input.pane;
     const report: ProgressReport = { ...source, activity: cleanActivity(input.activity), percent: input.percent ?? null,
       reason: reason as ProgressReason, reportedAt: now, inbox: null };
     if (reason !== "none") {
@@ -93,9 +145,9 @@ export async function reportProgress(
       if (typeof pending.work?.id !== "string" || !/^[a-zA-Z0-9:_-]{1,128}$/.test(pending.work.id)) throw new Error("Inbox acknowledgement invalid; inspect pending work before retrying");
       report.inbox = pending.work.id;
     }
-    const reported = await run([herdr, "pane", "report-metadata", input.pane, "--source", "herdr-jev",
+    const reported = await run([herdr, "pane", "report-metadata", targetPane, "--source", "herdr-jev",
       "--ttl-ms", String(PROGRESS_TTL_MS), "--token", `jev_progress=${JSON.stringify(report)}`]);
     if (!reported.ok) throw new Error("Progress dispatch unconfirmed; any inbox event remains pending");
-    return { status: "reported", pane: input.pane, report, evidence: "reported" };
+    return { status: "reported", pane: targetPane, report, evidence: "reported" };
   } finally { await release(); }
 }

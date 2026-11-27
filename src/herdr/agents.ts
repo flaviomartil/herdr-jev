@@ -1,9 +1,10 @@
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { readGridWorkerRecords, readAllGridWorkerRecords, pruneGridWorkers, settleDeadRecords, type GridWorkerRecord } from "./launcher.js";
+import { readGridWorkerRecords, readAllGridWorkerRecords, pruneGridWorkers, settleDeadRecords, updateGridWorkers, type GridWorkerRecord } from "./launcher.js";
 import { readOverview, matchRunForPane, formatOverviewRun } from "./overview.js";
 import { listRunHistory, type RunHistoryEntry } from "../orchestration/run-history.js";
 import { createHerdrClient, type HerdrClient } from "./client.js";
+import { isTestGuardActive } from "./state-dir.js";
 import { listHarnessRunsAsync, type HarnessWorkerRun } from "../harness/bridge.js";
 
 export type AgentState = "blocked" | "working" | "idle" | "done" | "unknown";
@@ -91,7 +92,7 @@ function normalizeState(state?: string | null): AgentState {
   return "unknown";
 }
 
-function parseLivePaneIds(stdout: string): Set<string> | null {
+function parseLivePanes(stdout: string): Array<{ paneId: string; terminalId?: string }> | null {
   if (!stdout || !stdout.trim()) return null;
   let parsed: any = null;
   try {
@@ -113,10 +114,16 @@ function parseLivePaneIds(stdout: string): Set<string> | null {
       : Array.isArray(layout)
       ? layout
       : [];
-    const ids = panes
-      .map((p: any) => (typeof p === "string" ? p : p?.pane_id ?? p?.id))
-      .filter((id: any): id is string => typeof id === "string" && id.length > 0);
-    return ids.length > 0 ? new Set(ids) : null;
+    const items = panes
+      .map((p: any) => {
+        if (typeof p === "string") return p.length > 0 ? { paneId: p } : null;
+        const paneId = p?.pane_id ?? p?.id;
+        if (typeof paneId !== "string" || paneId.length === 0) return null;
+        const terminalId = typeof p?.terminal_id === "string" && p.terminal_id.length > 0 ? p.terminal_id : undefined;
+        return terminalId ? { paneId, terminalId } : { paneId };
+      })
+      .filter((item: any): item is { paneId: string; terminalId?: string } => item !== null);
+    return items.length > 0 ? items : null;
   }
   return null;
 }
@@ -138,7 +145,7 @@ export async function buildAgentsView(
   }
 
   const herdr = deps?.client ?? deps?.herdrClient ?? (deps?.workers || deps?.stateDir ? undefined : createHerdrClient());
-  let livePaneIds: Set<string> | null = null;
+  let livePanes: Array<{ paneId: string; terminalId?: string }> | null = null;
   let liveScope: "all" | "tab" = "all";
   const fallbackCaller = callerPaneId ?? process.env.HERDR_PANE_ID;
   if (herdr) {
@@ -146,13 +153,13 @@ export async function buildAgentsView(
       if (herdr.listPanes) {
         const res = await herdr.listPanes();
         if (res.ok) {
-          livePaneIds = parseLivePaneIds(res.stdout);
+          livePanes = parseLivePanes(res.stdout);
         }
       }
-      if (!livePaneIds && herdr.paneLayout && fallbackCaller) {
+      if (!livePanes && herdr.paneLayout && fallbackCaller) {
         const res = await herdr.paneLayout(fallbackCaller);
         if (res.ok) {
-          livePaneIds = parseLivePaneIds(res.stdout);
+          livePanes = parseLivePanes(res.stdout);
           liveScope = "tab";
         }
       }
@@ -160,18 +167,49 @@ export async function buildAgentsView(
     }
   }
 
-  if (livePaneIds) {
-    const live = livePaneIds;
+  if (livePanes) {
+    const live = new Set(livePanes.map((p) => p.paneId));
+    const byTerminal = new Map<string, string>();
+    for (const p of livePanes) {
+      if (p.terminalId) byTerminal.set(p.terminalId, p.paneId);
+    }
     const deadWorkers: GridWorkerRecord[] = [];
     const liveWorkers: GridWorkerRecord[] = [];
+    const movedByCaller = new Map<string, Map<string, string>>();
     for (const w of workers) {
       const caller = w.callerPaneId ?? fallbackCaller;
       const verifiable = !!caller && live.has(caller) && !(liveScope === "tab" && w.layout === "tab");
-      if (!verifiable || live.has(w.paneId)) {
+      if (live.has(w.paneId)) {
+        liveWorkers.push(w);
+      } else if (w.terminalId && byTerminal.has(w.terminalId)) {
+        const nextPaneId = byTerminal.get(w.terminalId)!;
+        liveWorkers.push({ ...w, paneId: nextPaneId });
+        if (caller && nextPaneId !== w.paneId) {
+          let moves = movedByCaller.get(caller);
+          if (!moves) {
+            moves = new Map();
+            movedByCaller.set(caller, moves);
+          }
+          moves.set(w.paneId, nextPaneId);
+        }
+      } else if (!verifiable) {
         liveWorkers.push(w);
       } else {
         deadWorkers.push(w);
       }
+    }
+    if (movedByCaller.size > 0) {
+      for (const [caller, moves] of movedByCaller) {
+        try {
+          updateGridWorkers(
+            caller,
+            (records) => records.map((r) => (moves.has(r.paneId) ? { ...r, paneId: moves.get(r.paneId)! } : r)),
+            deps?.stateDir,
+          );
+        } catch {
+        }
+      }
+      workers = liveWorkers;
     }
     if (deadWorkers.length > 0) {
       workers = liveWorkers;
@@ -223,7 +261,10 @@ export async function buildAgentsView(
     const worker = workers[i];
     const slot = i + 1;
     const overviewAgent = overviewData.find(
-      (a) => a.pane === worker.paneId || (worker.handle && a.handle === worker.handle),
+      (a) =>
+        a.pane === worker.paneId ||
+        (worker.terminalId && (a.terminalId === worker.terminalId || a.terminal_id === worker.terminalId)) ||
+        (worker.handle && a.handle === worker.handle),
     );
 
     const workerCwd = worker.cwd || overviewAgent?.cwd || process.cwd();
@@ -344,7 +385,51 @@ export function formatAgentsTable(groups: AgentProjectGroup[]): string {
   return lines.join("\n");
 }
 
-export async function setupWorktree(options: { worktree?: boolean | string; name?: string; gitRunner?: any }, finalCwd: string): Promise<{ worktreePath: string | null; worktreeBranch: string | null; error?: string }> {
+export type HerdrWorktreeRunner = (
+  args: string[],
+  cwd: string,
+) => { status: number | null; stdout: string; stderr: string; error?: Error & { code?: string } };
+
+const defaultHerdrWorktreeRunner: HerdrWorktreeRunner = (args, cwd) => {
+  const herdrBin = process.env.HERDR_BIN_PATH || "herdr";
+  const res = spawnSync(herdrBin, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+  return {
+    status: res.status,
+    stdout: res.stdout ?? "",
+    stderr: res.stderr ?? "",
+    error: res.error as (Error & { code?: string }) | undefined,
+  };
+};
+
+function isPreMutationWorktreeFallback(res: {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: Error & { code?: string };
+}): boolean {
+  if (res.error?.code === "ETIMEDOUT") return false;
+  if (res.error?.code === "ENOENT") return true;
+  const combined = `${res.stdout}\n${res.stderr}`.trim();
+  if (/\btimed[ -]?out\b/i.test(combined)) return false;
+  try {
+    const parsed = JSON.parse(combined);
+    const code = parsed?.error?.code;
+    if (code === "unknown_command" || code === "unsupported" || code === "method_not_found") return true;
+  } catch {
+  }
+  return /\b(?:unknown[ _-]command|unrecognized subcommand|unexpected argument|unsupported|not implemented|not supported)\b/i.test(
+    combined,
+  );
+}
+
+export async function setupWorktree(
+  options: { worktree?: boolean | string; name?: string; gitRunner?: any; herdrRunner?: HerdrWorktreeRunner },
+  finalCwd: string,
+): Promise<{ worktreePath: string | null; worktreeBranch: string | null; error?: string }> {
   const runner: GitRunner = options.gitRunner || defaultGitRunner;
   const toplevelRes = await execGit(runner, ["rev-parse", "--show-toplevel"], finalCwd);
   if (!toplevelRes.ok) {
@@ -360,15 +445,21 @@ export async function setupWorktree(options: { worktree?: boolean | string; name
   }
   const branchName = `wt/${slug}`;
   const targetDir = `${repoDir}-wt-${slug}`;
-  if (require("node:path").dirname(targetDir) !== require("node:path").dirname(repoDir)) {
+  if (dirname(targetDir) !== dirname(repoDir)) {
     return { worktreePath: null, worktreeBranch: null, error: `Error: targetDir must be a sibling of repoDir` };
   }
+  const herdrRunner =
+    options.herdrRunner ??
+    (!options.gitRunner && process.env.HERDR_ENV === "1" && !isTestGuardActive() ? defaultHerdrWorktreeRunner : undefined);
   const targetCommonDirRes = await execGit(runner, ["rev-parse", "--path-format=absolute", "--git-common-dir"], targetDir);
   if (targetCommonDirRes.ok && targetCommonDirRes.stdout.trim() !== "") {
     const commonDirRes = await execGit(runner, ["rev-parse", "--path-format=absolute", "--git-common-dir"], repoDir);
     if (commonDirRes.ok && targetCommonDirRes.stdout.trim() === commonDirRes.stdout.trim()) {
       const targetBranchRes = await execGit(runner, ["rev-parse", "--abbrev-ref", "HEAD"], targetDir);
       if (targetBranchRes.ok && targetBranchRes.stdout.trim() === branchName) {
+        if (herdrRunner) {
+          herdrRunner(["worktree", "open", "--cwd", repoDir, "--path", targetDir, "--branch", branchName, "--no-focus"], repoDir);
+        }
         return { worktreePath: targetDir, worktreeBranch: branchName };
       }
       return { worktreePath: null, worktreeBranch: null, error: `Error: Directory ${targetDir} is a worktree but not on branch ${branchName}` };
@@ -379,6 +470,28 @@ export async function setupWorktree(options: { worktree?: boolean | string; name
     const branchRes = await execGit(runner, ["show-ref", "--verify", `refs/heads/${branchName}`], repoDir);
     if (branchRes.ok && branchRes.stdout.trim() !== "") {
       return { worktreePath: null, worktreeBranch: null, error: `Error: Branch ${branchName} already exists` };
+    }
+    if (herdrRunner) {
+      const nativeCreate = herdrRunner(
+        ["worktree", "create", "--cwd", repoDir, "--branch", branchName, "--path", targetDir, "--no-focus"],
+        repoDir,
+      );
+      if (nativeCreate.status === 0 && !nativeCreate.error) {
+        try {
+          const parsed = JSON.parse(nativeCreate.stdout);
+          const wt = parsed?.result?.worktree ?? parsed?.worktree;
+          return {
+            worktreePath: typeof wt?.path === "string" && wt.path ? wt.path : targetDir,
+            worktreeBranch: typeof wt?.branch === "string" && wt.branch ? wt.branch : branchName,
+          };
+        } catch {
+          return { worktreePath: targetDir, worktreeBranch: branchName };
+        }
+      }
+      if (!isPreMutationWorktreeFallback(nativeCreate)) {
+        const detail = nativeCreate.error?.message || nativeCreate.stderr.trim() || nativeCreate.stdout.trim() || `exit ${nativeCreate.status}`;
+        return { worktreePath: null, worktreeBranch: null, error: `Error creating worktree via herdr: ${detail}` };
+      }
     }
     const addRes = await execGit(runner, ["worktree", "add", "-b", branchName, targetDir, "HEAD"], repoDir);
     if (!addRes.ok) {

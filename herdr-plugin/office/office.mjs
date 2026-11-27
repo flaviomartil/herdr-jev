@@ -1848,7 +1848,6 @@ async function startHire(kind) {
   if (!hire || hire.pending || !kind) return;
   const wantsWorktree = hire.worktree;
   const branch = wantsWorktree ? sanitizeBranch(hire.branch) || defaultBranch(kind) : null;
-  if (wantsWorktree) args.push('--worktree', branch);
   if (DEMO) {
     note(wantsWorktree
       ? `demo mode: would make a worktree on ${branch} and start ${kind} in it`

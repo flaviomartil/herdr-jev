@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const AMBIENT = new Set(["HERDR_PANE_ID", "HERDR_ENV", "HERDR_SOCKET_PATH"]);
+const AMBIENT = new Set(["HERDR_PANE_ID", "HERDR_TERMINAL_ID", "HERDR_ENV", "HERDR_SOCKET_PATH"]);
 
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("HERDR_JEV_") || key.startsWith("HERDR_PLUGIN_") || AMBIENT.has(key)) delete process.env[key];

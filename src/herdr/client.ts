@@ -66,8 +66,10 @@ export interface HerdrClient {
     waitForReply?: boolean;
   }): Promise<HerdrCommandResult>;
   closePane(paneId: string): Promise<HerdrCommandResult>;
-  readAgent?(target: string, lines?: number, source?: "visible" | "recent"): Promise<HerdrCommandResult>;
-  readPane?(paneId: string, lines?: number): Promise<HerdrCommandResult>;
+  getPane?(paneId: string): Promise<HerdrCommandResult>;
+  paneProcessInfo?(paneId?: string): Promise<HerdrCommandResult>;
+  readAgent?(target: string, lines?: number, source?: "visible" | "recent", format?: "plain" | "ansi"): Promise<HerdrCommandResult>;
+  readPane?(paneId: string, lines?: number, format?: "plain" | "ansi"): Promise<HerdrCommandResult>;
   getAgent?(target: string): Promise<HerdrCommandResult>;
   sendKeys?(target: string, keys: readonly string[]): Promise<HerdrCommandResult>;
   reportSpawn?(paneId: string, tokens: Record<string, string>): Promise<HerdrCommandResult>;
@@ -75,11 +77,21 @@ export interface HerdrClient {
 }
 
 export const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
+export const DEFAULT_MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
+
+function appendCapped(chunks: Buffer[], totalBytes: number, incoming: Buffer, limit: number): number {
+  if (totalBytes >= limit) return totalBytes;
+  const remaining = limit - totalBytes;
+  const slice = incoming.length > remaining ? incoming.subarray(0, remaining) : incoming;
+  chunks.push(slice);
+  return totalBytes + slice.length;
+}
 
 export function createProcessCommandAdapter(
-  options: { timeoutMs?: number; env?: NodeJS.ProcessEnv } = {},
+  options: { timeoutMs?: number; maxOutputBytes?: number; env?: NodeJS.ProcessEnv } = {},
 ): RunCommand {
   const timeoutMs = options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+  const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   return (argv) =>
     new Promise((resolve) => {
       const [command, ...args] = argv;
@@ -90,38 +102,54 @@ export function createProcessCommandAdapter(
       if (isTestGuardActive() && (command === "herdr" || command.endsWith("/herdr") || command === process.env.HERDR_BIN_PATH)) {
         if (!isTestSafeBinary(command)) {
           const cmdPath = args.join(" ");
-          const isReadOnly = /^(?:agent|pane) (?:get|list|read|layout|current)\b/.test(cmdPath);
+          const isReadOnly = /^(?:agent|pane) (?:get|list|read|layout|current|process-info)\b/.test(cmdPath);
           if (!isReadOnly) {
             resolve({ ok: false, code: 126, stdout: "", stderr: "blocked_by_test_guard" });
             return;
           }
         }
       }
-      const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
-      let stdout = "";
-      let stderr = "";
+      const child = spawn(command, args, { detached: true, stdio: ["ignore", "pipe", "pipe"], env: options.env ?? process.env });
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
       let timedOut = false;
       const nativeTimeout = Number(args[args.indexOf("--timeout") + 1]);
       const deadline = args.includes("--timeout") && Number.isSafeInteger(nativeTimeout) && nativeTimeout > 0
         ? Math.max(timeoutMs, nativeTimeout + 2000) : timeoutMs;
       const timer = setTimeout(() => {
         timedOut = true;
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, "SIGKILL");
+            return;
+          } catch {
+          }
+        }
         child.kill("SIGKILL");
       }, deadline);
 
       child.stdout?.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString("utf8");
+        stdoutBytes = appendCapped(stdoutChunks, stdoutBytes, chunk, maxOutputBytes);
       });
       child.stderr?.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString("utf8");
+        stderrBytes = appendCapped(stderrChunks, stderrBytes, chunk, maxOutputBytes);
       });
       child.on("error", (error) => {
         clearTimeout(timer);
-        resolve({ ok: false, code: 1, stdout, stderr: String(error) });
+        resolve({
+          ok: false,
+          code: 1,
+          stdout: Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8"),
+          stderr: String(error),
+        });
       });
       child.on("close", (code) => {
         clearTimeout(timer);
         const exit = code ?? 1;
+        const stdout = Buffer.concat(stdoutChunks, stdoutBytes).toString("utf8");
+        const stderr = Buffer.concat(stderrChunks, stderrBytes).toString("utf8");
         resolve({ ok: exit === 0, code: exit, stdout, stderr: timedOut ? `${stderr}\ncommand timed out; acknowledgement unknown` : stderr });
       });
     });
@@ -275,8 +303,23 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
       return runCommand([herdrBin, "pane", "list"]);
     },
     createTab(options) {
-      return runCommand([herdrBin, "tab", "create", "--label", options.label, "--cwd", options.cwd,
-        ...(options.workspaceId ? ["--workspace", options.workspaceId] : []), "--no-focus"]);
+      return runCommand([
+        herdrBin,
+        "tab",
+        "create",
+        "--label",
+        options.label,
+        "--cwd",
+        options.cwd,
+        ...(options.workspaceId ? ["--workspace", options.workspaceId] : []),
+        "--env",
+        "CLAUDECODE=",
+        "--env",
+        "CLAUDE_CODE_SESSION_ID=",
+        "--env",
+        "CODEX_THREAD_ID=",
+        "--no-focus",
+      ]);
     },
     startAgent(input) {
       return runCommand([
@@ -309,6 +352,20 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
           argv.push("--wait", ...buildStateArgs(["idle", "done", "blocked", "unknown"], input.timeoutMs));
           return runCommand(argv);
         }
+        if (input.until && input.until.length > 0) {
+          const allowed = new Set<HerdrAgentState>(input.until);
+          argv.push("--wait", ...buildStateArgs(input.until, input.timeoutMs));
+          return runCommand(argv).then((result) => {
+            if (!result.ok) return result;
+            const state = readHerdrObservedState(result);
+            if (state && state !== "pending" && state !== "timeout" && allowed.has(state)) return result;
+            return {
+              ...result,
+              ok: false,
+              stderr: result.stderr || (state === null ? "completion_state_unrecognized" : `completion_state_${state}`),
+            };
+          });
+        }
         argv.push("--wait", ...completionStateArgs(input.until, input.timeoutMs));
         return runCommand(argv).then(waitResult);
       }
@@ -328,17 +385,41 @@ export function createHerdrClient(runCommand: RunCommand = createProcessCommandA
     closePane(paneId) {
       return runCommand([herdrBin, "pane", "close", paneId]);
     },
+    getPane(paneId) {
+      return runCommand([herdrBin, "pane", "get", paneId]);
+    },
+    paneProcessInfo(paneId) {
+      return runCommand([herdrBin, "pane", "process-info", ...(paneId ? ["--pane", paneId] : ["--current"])]);
+    },
     reportSpawn(paneId, tokens) {
       return runCommand([herdrBin, "pane", "report-metadata", paneId, "--source", "herdr-jev",
         "--ttl-ms", "86400000", ...Object.entries(tokens).flatMap(([key, value]) => ["--token", `${key}=${value}`])]);
     },
-    readAgent(target, lines = 40, source = "visible") {
+    readAgent(target, lines = 40, source = "visible", format) {
       if (!Number.isInteger(lines) || lines < 1 || lines > 100000) throw new Error("Invalid terminal line limit");
-      return runCommand([herdrBin, "agent", "read", target, "--source", source, "--lines", String(lines)]);
+      return runCommand([
+        herdrBin,
+        "agent",
+        "read",
+        target,
+        "--source",
+        source,
+        "--lines",
+        String(lines),
+        ...(format ? ["--format", format === "plain" ? "text" : "ansi"] : []),
+      ]);
     },
-    readPane(paneId, lines = 40) {
+    readPane(paneId, lines = 40, format) {
       if (!Number.isInteger(lines) || lines < 1 || lines > 100000) throw new Error("Invalid terminal line limit");
-      return runCommand([herdrBin, "pane", "read", paneId, "--lines", String(lines)]);
+      return runCommand([
+        herdrBin,
+        "pane",
+        "read",
+        paneId,
+        "--lines",
+        String(lines),
+        ...(format ? ["--format", format === "plain" ? "text" : "ansi"] : []),
+      ]);
     },
     getAgent(target) {
       return runCommand([herdrBin, "agent", "get", target]);
