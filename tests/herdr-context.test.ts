@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveHerdrContext } from "../src/herdr/context.js";
+import { resolveHerdrContext, verifyCallerPaneAncestry } from "../src/herdr/context.js";
 
 test("native agy caller kinds resolve to the registered AntiGravity harness", async () => {
   const context = await resolveHerdrContext({}, { env: { HERDR_ENV: "1", HERDR_PANE_ID: "agy-source" },
@@ -189,4 +189,78 @@ test("throws and includes all tried ids when all candidates fail", async () => {
 test("assistant.sh unsets stale HERDR_JEV_SOURCE_PANE_ID before running assistant", () => {
   const script = readFileSync(join(import.meta.dir, "../herdr-plugin/assistant.sh"), "utf8");
   expect(script).toContain("unset HERDR_JEV_SOURCE_PANE_ID");
+});
+
+test("fails closed when 2+ panes match client and cwd in agent list fallback", async () => {
+  const cwd = process.cwd();
+  await expect(resolveHerdrContext({ client: "codex" }, {
+    env: {
+      HERDR_ENV: "1",
+      HERDR_JEV_SOURCE_PANE_ID: "stale-pane",
+    },
+    runCommand: async (args) => {
+      if (args[1] === "pane" && args[2] === "current") return { ok: false, code: 1, stdout: "", stderr: "no current pane" };
+      if (args[1] === "agent" && args[2] === "list") {
+        return {
+          ok: true,
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            result: {
+              agents: [
+                { pane_id: "pane-a", agent: "codex", cwd },
+                { pane_id: "pane-b", agent: "codex", cwd },
+              ],
+            },
+          }),
+        };
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "not found" };
+    },
+  })).rejects.toThrow(/Ambiguous source pane for codex.*pane-a, pane-b/);
+});
+
+test("verifyCallerPaneAncestry checks shell_pid ancestry, skips on unsupported, and fails closed on transport or invalid JSON", async () => {
+  const matched = await verifyCallerPaneAncestry(
+    "pane-1",
+    async () => ({ ok: true, code: 0, stdout: JSON.stringify({ result: { process_info: { shell_pid: 4200 } } }), stderr: "" }),
+    { ancestorPids: [9999, 4200, 1] },
+  );
+  expect(matched).toEqual({ verified: true, skipped: false, shellPid: 4200 });
+
+  const mismatched = await verifyCallerPaneAncestry(
+    "pane-1",
+    async () => ({ ok: true, code: 0, stdout: JSON.stringify({ result: { process_info: { shell_pid: 4200 } } }), stderr: "" }),
+    { ancestorPids: [9999, 8888, 1] },
+  );
+  expect(mismatched).toEqual({ verified: false, skipped: false, shellPid: 4200, reason: "ancestry_mismatch" });
+
+  const unsupported = await verifyCallerPaneAncestry(
+    "pane-1",
+    async () => ({ ok: false, code: 1, stdout: JSON.stringify({ error: { code: "unknown_command" } }), stderr: "" }),
+  );
+  expect(unsupported).toEqual({ verified: true, skipped: true, reason: "unknown_command" });
+
+  const transportErr = await verifyCallerPaneAncestry(
+    "pane-1",
+    async () => ({ ok: false, code: 1, stdout: "", stderr: "ECONNREFUSED" }),
+  );
+  expect(transportErr).toEqual({ verified: false, skipped: false, reason: "process_info_failed" });
+
+  const malformed = await verifyCallerPaneAncestry(
+    "pane-1",
+    async () => ({ ok: true, code: 0, stdout: "{broken", stderr: "" }),
+  );
+  expect(malformed).toEqual({ verified: false, skipped: false, reason: "invalid_process_info" });
+
+  await expect(resolveHerdrContext({}, {
+    env: { HERDR_ENV: "1", HERDR_PANE_ID: "inherited-pane" },
+    runCommand: async (args) => {
+      if (args[1] === "pane" && args[2] === "current") return { ok: false, code: 1, stdout: "", stderr: "no current pane" };
+      if (args[1] === "pane" && args[2] === "process-info") {
+        return { ok: true, code: 0, stdout: JSON.stringify({ result: { process_info: { shell_pid: 99999999 } } }), stderr: "" };
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "not found" };
+    },
+  })).rejects.toThrow("Cannot resolve source pane");
 });

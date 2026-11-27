@@ -29,20 +29,32 @@ function runReferencesPane(
   return false;
 }
 
+function normalizeCwd(cwd: string): string {
+  return cwd.replace(/\/+$/, "") || "/";
+}
+
 function runMatchesCwd(projection: Record<string, any>, paneCwd?: string | null): boolean {
   if (!paneCwd || typeof paneCwd !== "string") return false;
   const cwd = projection.cwd ?? projection.run?.cwd;
-  return typeof cwd === "string" && cwd === paneCwd;
+  return typeof cwd === "string" && cwd.length > 0 && normalizeCwd(cwd) === normalizeCwd(paneCwd);
 }
 
 export function matchRunForPane(
   runs: readonly RunHistoryEntry[],
   pane: { pane: string; handle?: string | null; agent?: string | null; cwd?: string | null },
+  options?: { siblingCwds?: readonly (string | null | undefined)[] },
 ): RunHistoryEntry | undefined {
   const sorted = [...runs].sort((a, b) => b.timestampMs - a.timestampMs || b.mtimeMs - a.mtimeMs);
   const directMatch = sorted.find((r) => runReferencesPane(r.projection, pane.pane, pane.handle, pane.agent));
   if (directMatch) return directMatch;
   if (pane.cwd) {
+    if (options?.siblingCwds) {
+      const normalized = normalizeCwd(pane.cwd);
+      const matchingPanes = options.siblingCwds.filter(
+        (cwd) => typeof cwd === "string" && cwd.length > 0 && normalizeCwd(cwd) === normalized,
+      ).length;
+      if (matchingPanes >= 2) return undefined;
+    }
     return sorted.find((r) => runMatchesCwd(r.projection, pane.cwd));
   }
   return undefined;
@@ -77,6 +89,10 @@ export async function readOverview(
     : listRunHistory(typeof runsOrStateDir === "string" ? runsOrStateDir : undefined);
   const workspaces = new Map<string, string>(snapshot.workspaces.map((w: any) => [w.workspace_id, w.label]));
   const branches = new Map<string, Promise<string | null>>();
+  const siblingCwds: Array<string | null> = snapshot.agents.map((a: any) => {
+    const c = a.foreground_cwd || a.cwd;
+    return typeof c === "string" ? c : null;
+  });
   const agents = await Promise.all(snapshot.agents.map(async (agent: any) => {
     const cwd = agent.foreground_cwd || agent.cwd;
     if (typeof cwd === "string" && !branches.has(cwd)) {
@@ -93,7 +109,7 @@ export async function readOverview(
       handle,
       agent: agent.agent || null,
       cwd: typeof cwd === "string" ? cwd : null,
-    });
+    }, { siblingCwds });
     const report = progressForAgent(agent, now);
     const state = agent.agent_status ?? "unknown";
     return {

@@ -320,6 +320,7 @@ export async function buildDailyReport(
   };
 
   const groupsMap = new Map<string, DailyProjectGroup>();
+  const siblingCwds: Array<string | null> = overviewRows.map((r: any) => (typeof r?.cwd === "string" ? r.cwd : null));
 
   for (const row of overviewRows) {
     const rawProject = row.project || "unknown";
@@ -338,7 +339,7 @@ export async function buildDailyReport(
       handle,
       agent,
       cwd,
-    });
+    }, { siblingCwds });
     const runSummary = matchedRun ? runStateSummary(matchedRun.projection) : null;
 
     let lastLine: string | null = null;
